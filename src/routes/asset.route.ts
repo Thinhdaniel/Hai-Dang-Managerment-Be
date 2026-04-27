@@ -53,6 +53,6 @@ router.patch(
     validator(updateAssetSchema),
     assetController.updateAsset
 );
-router.delete('/:id', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), validateObjectId, assetController.deleteAsset);
+router.delete('/:id', authorize(USER_ROLE.ADMIN), validateObjectId, assetController.deleteAsset);
 
 export default router;

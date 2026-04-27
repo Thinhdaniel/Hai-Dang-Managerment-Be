@@ -27,6 +27,6 @@ router.patch(
     validator(updatePlantSchema),
     plantController.updatePlant
 );
-router.delete('/:id', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), validateObjectId, plantController.deletePlant);
+router.delete('/:id', authorize(USER_ROLE.ADMIN), validateObjectId, plantController.deletePlant);
 
 export default router;

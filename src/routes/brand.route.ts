@@ -33,6 +33,6 @@ router.patch(
     validator(updateBrandSchema),
     brandController.updateBrand
 );
-router.delete('/:id', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), validateObjectId, brandController.deleteBrand);
+router.delete('/:id', authorize(USER_ROLE.ADMIN), validateObjectId, brandController.deleteBrand);
 
 export default router;
