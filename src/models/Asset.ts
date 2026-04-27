@@ -1,0 +1,119 @@
+import mongoose from 'mongoose';
+import { ASSET_STATUS } from '@/constant/assetStatus';
+
+const AssetSchema = new mongoose.Schema(
+    {
+        name: {
+            type: String,
+            required: true,
+            trim: true,
+        },
+        machineCode: {
+            type: String,
+            required: true,
+            unique: true,
+            trim: true,
+        },
+        publicId: {
+            type: String,
+            unique: true,
+            sparse: true,
+            trim: true,
+            uppercase: true,
+        },
+        serial: {
+            type: String,
+            trim: true,
+        },
+        type: {
+            type: String,
+            required: true,
+            trim: true,
+        },
+        model: {
+            type: String,
+            required: true,
+            trim: true,
+            default: function (this: { type?: string }) {
+                return this.type;
+            },
+        },
+        note: {
+            type: String,
+            trim: true,
+        },
+        status: {
+            type: String,
+            enum: Object.values(ASSET_STATUS),
+            default: ASSET_STATUS.ACTIVE,
+        },
+        statusNote: {
+            type: String,
+            trim: true,
+        },
+        brandId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Brand',
+            required: true,
+        },
+        plantId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Plant',
+            required: true,
+        },
+        area: {
+            type: String,
+            trim: true,
+        },
+        purchaseDate: {
+            type: Date,
+        },
+        purchasePrice: {
+            type: Number,
+            min: 0,
+        },
+        specifications: {
+            type: mongoose.Schema.Types.Mixed,
+            default: {},
+        },
+        imageUrl: {
+            type: String,
+            trim: true,
+        },
+        lastMaintenanceDate: {
+            type: Date,
+        },
+        nextMaintenanceDate: {
+            type: Date,
+        },
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        updatedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        isDeleted: {
+            type: Boolean,
+            default: false,
+        },
+        deletedAt: {
+            type: Date,
+        },
+    },
+    {
+        timestamps: true,
+        versionKey: false,
+    }
+);
+
+AssetSchema.index({ brandId: 1 });
+AssetSchema.index({ plantId: 1 });
+AssetSchema.index({ status: 1 });
+AssetSchema.index({ model: 1 });
+AssetSchema.index({ serial: 1 }, { sparse: true });
+
+const Asset = mongoose.model('Asset', AssetSchema);
+
+export default Asset;

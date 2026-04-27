@@ -1,0 +1,1270 @@
+{
+  "info": {
+    "_postman_id": "f7f3d281-ec45-4af5-9280-0c3ea26d6f0d",
+    "name": "Device Management Garment Seed",
+    "description": "Seed and test requests for device management in garment manufacturing context.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000/api"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "plant_bd_id",
+      "value": ""
+    },
+    {
+      "key": "plant_hcm_id",
+      "value": ""
+    },
+    {
+      "key": "plant_kho_id",
+      "value": ""
+    },
+    {
+      "key": "brand_juki_id",
+      "value": ""
+    },
+    {
+      "key": "brand_brother_id",
+      "value": ""
+    },
+    {
+      "key": "brand_jack_id",
+      "value": ""
+    },
+    {
+      "key": "brand_siruba_id",
+      "value": ""
+    },
+    {
+      "key": "brand_pegasus_id",
+      "value": ""
+    },
+    {
+      "key": "user_quan_doc_bd_id",
+      "value": ""
+    },
+    {
+      "key": "user_ky_thuat_hcm_id",
+      "value": ""
+    },
+    {
+      "key": "user_nhan_vien_kho_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm001_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm002_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm003_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm004_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm005_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm006_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm007_id",
+      "value": ""
+    },
+    {
+      "key": "asset_mm008_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register Admin",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullname\": \"Admin Quan Ly May Mac\",\n  \"username\": \"admin.garment\",\n  \"email\": \"admin.garment@example.com\",\n  \"password\": \"123456\",\n  \"phone\": \"0909000001\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.access_token) {",
+                  "  pm.collectionVariables.set('token', json.access_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin.garment@example.com\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plants",
+      "item": [
+        {
+          "name": "Create Plant - Binh Duong",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('plant_bd_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Nha may Binh Duong\",\n  \"code\": \"BD01\",\n  \"address\": \"KCN VSIP 1, Thuan An, Binh Duong\",\n  \"phone\": \"02743888801\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/plants",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "plants"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Plant - HCM",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('plant_hcm_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Nha may HCM\",\n  \"code\": \"HCM01\",\n  \"address\": \"Le Minh Xuan, Binh Chanh, TP HCM\",\n  \"phone\": \"02838888002\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/plants",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "plants"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Plant - Warehouse",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('plant_kho_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Kho tong phu lieu va may du phong\",\n  \"code\": \"KHO01\",\n  \"address\": \"Di An, Binh Duong\",\n  \"phone\": \"02743888803\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/plants",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "plants"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Brands",
+      "item": [
+        {
+          "name": "Create Brand - Juki",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('brand_juki_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Juki\",\n  \"description\": \"Thuong hieu may may cong nghiep Nhat Ban, noi tieng voi may 1 kim va may dinh bo\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/brands",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "brands"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Brand - Brother",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('brand_brother_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Brother\",\n  \"description\": \"Thuong hieu may may cong nghiep su dung nhieu trong chuyen may ao so mi va quan tay\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/brands",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "brands"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Brand - Jack",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('brand_jack_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Jack\",\n  \"description\": \"Dong may may dien tu pho bien cho nha may may mac san luong lon\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/brands",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "brands"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Brand - Siruba",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('brand_siruba_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Siruba\",\n  \"description\": \"Manh ve may kansai, may vat so va cac dong may dung trong nganh may\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/brands",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "brands"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Brand - Pegasus",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('brand_pegasus_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pegasus\",\n  \"description\": \"Thuong hieu chuyen may vat so toc do cao va may may chuyen dung\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/brands",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "brands"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Create User - Manager BD",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('user_quan_doc_bd_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tran Van Quan\",\n  \"email\": \"quan.bd@example.com\",\n  \"password\": \"123456\",\n  \"phone\": \"0909111001\",\n  \"role\": \"manager\",\n  \"plantId\": \"{{plant_bd_id}}\",\n  \"isActive\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create User - Technician HCM",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('user_ky_thuat_hcm_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Nguyen Van Ky\",\n  \"email\": \"ky.hcm@example.com\",\n  \"password\": \"123456\",\n  \"phone\": \"0909222002\",\n  \"role\": \"staff\",\n  \"plantId\": \"{{plant_hcm_id}}\",\n  \"isActive\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create User - Warehouse Staff",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('user_nhan_vien_kho_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Le Thi Kho\",\n  \"email\": \"kho.tong@example.com\",\n  \"password\": \"123456\",\n  \"phone\": \"0909333003\",\n  \"role\": \"staff\",\n  \"plantId\": \"{{plant_kho_id}}\",\n  \"isActive\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Assets",
+      "item": [
+        {
+          "name": "Create Asset - MM001 Juki DDL-8000A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm001_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"May 1 kim dien tu Juki DDL-8000A\",\n  \"machineCode\": \"MM001\",\n  \"serial\": \"JUKI-DDL8000A-240001\",\n  \"type\": \"May 1 kim dien tu\",\n  \"brandId\": \"{{brand_juki_id}}\",\n  \"plantId\": \"{{plant_bd_id}}\",\n  \"area\": \"Xuong May 1 - Chuyen A\",\n  \"status\": \"active\",\n  \"purchaseDate\": \"2024-01-15\",\n  \"purchasePrice\": 18500000,\n  \"specifications\": {\n    \"tocDoMay\": \"5000 mui/phut\",\n    \"doNangChanVit\": \"15 mm\",\n    \"dongCo\": \"Servo tiet kiem dien\",\n    \"ungDung\": \"May ao thun, ao so mi\"\n  },\n  \"note\": \"May dang hoat dong on dinh tren chuyen may ao polo\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Asset - MM002 Jack E4S",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm002_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"May vat so 4 chi Jack E4S\",\n  \"machineCode\": \"MM002\",\n  \"serial\": \"JACK-E4S-240002\",\n  \"type\": \"May vat so 4 chi\",\n  \"brandId\": \"{{brand_jack_id}}\",\n  \"plantId\": \"{{plant_bd_id}}\",\n  \"area\": \"Xuong May 1 - Khu vat so\",\n  \"status\": \"maintenance\",\n  \"purchaseDate\": \"2024-02-10\",\n  \"purchasePrice\": 12800000,\n  \"specifications\": {\n    \"tocDoMay\": \"5500 mui/phut\",\n    \"soChi\": \"4 chi\",\n    \"ungDung\": \"Vat so ao thun, do tre em\"\n  },\n  \"note\": \"Dang cho thay dao va can chinh bo kep chi\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Asset - MM003 Siruba F007K",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm003_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"May kansai Siruba F007K\",\n  \"machineCode\": \"MM003\",\n  \"serial\": \"SIRUBA-F007K-240003\",\n  \"type\": \"May kansai\",\n  \"brandId\": \"{{brand_siruba_id}}\",\n  \"plantId\": \"{{plant_hcm_id}}\",\n  \"area\": \"Xuong Thun - Chuyen 3\",\n  \"status\": \"active\",\n  \"purchaseDate\": \"2023-11-22\",\n  \"purchasePrice\": 16200000,\n  \"specifications\": {\n    \"soKim\": \"3 kim\",\n    \"tocDoMay\": \"4200 mui/phut\",\n    \"ungDung\": \"Len lai, may vien lai ao thun\"\n  },\n  \"note\": \"Su dung de len lai than ao thun cao cap\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Asset - MM004 Brother LH-3528A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm004_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"May 2 kim co dinh Brother LH-3528A\",\n  \"machineCode\": \"MM004\",\n  \"serial\": \"BROTHER-LH3528A-240004\",\n  \"type\": \"May 2 kim co dinh\",\n  \"brandId\": \"{{brand_brother_id}}\",\n  \"plantId\": \"{{plant_hcm_id}}\",\n  \"area\": \"Xuong Quan Tay - Cum may so 2\",\n  \"status\": \"borrowing\",\n  \"purchaseDate\": \"2024-03-05\",\n  \"purchasePrice\": 21900000,\n  \"specifications\": {\n    \"kimMay\": \"2 kim\",\n    \"ungDung\": \"May duong song song tren quan tay va ao jacket\"\n  },\n  \"note\": \"Dang duoc muon boi bo phan mau de may mau fitting\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Asset - MM005 Juki LK-1900B",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm005_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"May dinh bo Juki LK-1900B\",\n  \"machineCode\": \"MM005\",\n  \"serial\": \"JUKI-LK1900B-240005\",\n  \"type\": \"May dinh bo\",\n  \"brandId\": \"{{brand_juki_id}}\",\n  \"plantId\": \"{{plant_bd_id}}\",\n  \"area\": \"Khu may chi tiet nho\",\n  \"status\": \"active\",\n  \"purchaseDate\": \"2024-01-28\",\n  \"purchasePrice\": 28600000,\n  \"specifications\": {\n    \"ungDung\": \"Dinh bo, bartack tai vi tri tui va dai quan\",\n    \"chuongTrinhMay\": \"Lap trinh mau dinh bo\"\n  },\n  \"note\": \"May cho line quan kaki\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Asset - MM006 Brother HE-800C",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm006_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"May thua khuy dien tu Brother HE-800C\",\n  \"machineCode\": \"MM006\",\n  \"serial\": \"BROTHER-HE800C-240006\",\n  \"type\": \"May thua khuy\",\n  \"brandId\": \"{{brand_brother_id}}\",\n  \"plantId\": \"{{plant_kho_id}}\",\n  \"area\": \"Khu may du phong\",\n  \"status\": \"storage\",\n  \"purchaseDate\": \"2023-12-18\",\n  \"purchasePrice\": 33400000,\n  \"specifications\": {\n    \"ungDung\": \"Thua khuy ao so mi, dong phuc\",\n    \"kichThuocKhuy\": \"6-38 mm\"\n  },\n  \"note\": \"May du phong dang luu kho\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Asset - MM007 KM RS-100",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm007_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"May cat vai dung KM RS-100\",\n  \"machineCode\": \"MM007\",\n  \"serial\": \"KM-RS100-240007\",\n  \"type\": \"May cat vai dung\",\n  \"brandId\": \"{{brand_pegasus_id}}\",\n  \"plantId\": \"{{plant_kho_id}}\",\n  \"area\": \"Khu cat vai du phong\",\n  \"status\": \"broken\",\n  \"purchaseDate\": \"2022-08-12\",\n  \"purchasePrice\": 9700000,\n  \"specifications\": {\n    \"ungDung\": \"Cat vai so luong nho\",\n    \"daoCat\": \"8 inch\"\n  },\n  \"note\": \"Hong cong tac an toan, tam dung su dung\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Asset - MM008 Iron Table",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.id) {",
+                  "  pm.collectionVariables.set('asset_mm008_id', json.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ban ui hoi cong nghiep Silver Star\",\n  \"machineCode\": \"MM008\",\n  \"serial\": \"SSTAR-IRON-240008\",\n  \"type\": \"Ban ui hoi cong nghiep\",\n  \"brandId\": \"{{brand_jack_id}}\",\n  \"plantId\": \"{{plant_hcm_id}}\",\n  \"area\": \"Khu hoan thien\",\n  \"status\": \"active\",\n  \"purchaseDate\": \"2024-04-02\",\n  \"purchasePrice\": 6800000,\n  \"specifications\": {\n    \"ungDung\": \"Ui phang thanh pham truoc dong goi\",\n    \"nguonHoi\": \"Noi hoi trung tam\"\n  },\n  \"note\": \"Thiet bi ho tro cong doan hoan thien\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Assets",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/assets?page=1&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Asset Detail - MM001",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/assets/{{asset_mm001_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets",
+                "{{asset_mm001_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Asset - MM001",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"area\": \"Xuong May 1 - Chuyen A - Vi tri 05\",\n  \"note\": \"Da cap nhat vi tri chi tiet de test giao dien quan ly may\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets/{{asset_mm001_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets",
+                "{{asset_mm001_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Asset Status - MM001",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\",\n  \"note\": \"May da duoc xac nhan hoat dong binh thuong\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/assets/{{asset_mm001_id}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets",
+                "{{asset_mm001_id}}",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Export Assets CSV",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/assets/export",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assets",
+                "export"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Maintenances",
+      "item": [
+        {
+          "name": "Create Maintenance - MM002",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assetId\": \"{{asset_mm002_id}}\",\n  \"type\": \"emergency\",\n  \"description\": \"Thay dao cat chi va can chinh cum moc cho may vat so 4 chi\",\n  \"startDate\": \"2026-04-20\",\n  \"technician\": \"Nguyen Van Ky\",\n  \"cost\": 850000,\n  \"note\": \"May bi bo mui va dut chi lien tuc\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/maintenances",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "maintenances"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Maintenance - MM001",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assetId\": \"{{asset_mm001_id}}\",\n  \"type\": \"periodic\",\n  \"description\": \"Bao tri dinh ky, ve sinh bo chap, thay dau boi tron\",\n  \"startDate\": \"2026-04-15\",\n  \"endDate\": \"2026-04-15\",\n  \"technician\": \"Nguyen Van Ky\",\n  \"cost\": 250000,\n  \"note\": \"Hoan tat trong ngay\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/maintenances",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "maintenances"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Maintenance By Asset - MM002",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/maintenances/asset/{{asset_mm002_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "maintenances",
+                "asset",
+                "{{asset_mm002_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transfers",
+      "item": [
+        {
+          "name": "Create Transfer - MM006",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assetId\": \"{{asset_mm006_id}}\",\n  \"fromPlantId\": \"{{plant_kho_id}}\",\n  \"toPlantId\": \"{{plant_bd_id}}\",\n  \"reason\": \"Dieu chuyen may thua khuy du phong cho line ao so mi xuat khau\",\n  \"transferDate\": \"2026-04-10\",\n  \"note\": \"Can giao truoc ngay 12/04\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transfers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "transfers"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Transfer - MM003",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assetId\": \"{{asset_mm003_id}}\",\n  \"fromPlantId\": \"{{plant_hcm_id}}\",\n  \"toPlantId\": \"{{plant_bd_id}}\",\n  \"reason\": \"Ho tro line ao thun tai Binh Duong trong dot cao diem\",\n  \"transferDate\": \"2026-04-22\",\n  \"note\": \"Dieu chuyen tam thoi 2 tuan\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/transfers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "transfers"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Transfers By Asset - MM003",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/transfers/asset/{{asset_mm003_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "transfers",
+                "asset",
+                "{{asset_mm003_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Borrowings",
+      "item": [
+        {
+          "name": "Create Borrowing - MM004",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assetId\": \"{{asset_mm004_id}}\",\n  \"borrowerId\": \"{{user_ky_thuat_hcm_id}}\",\n  \"borrowDate\": \"2026-04-21\",\n  \"dueDate\": \"2026-04-25\",\n  \"purpose\": \"Muon may 2 kim de may mau jacket cho khach duyet\",\n  \"note\": \"Muon trong 4 ngay, uu tien tra dung han\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/borrowings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "borrowings"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Borrowing - MM008",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assetId\": \"{{asset_mm008_id}}\",\n  \"borrowerId\": \"{{user_nhan_vien_kho_id}}\",\n  \"borrowDate\": \"2026-04-22\",\n  \"dueDate\": \"2026-04-23\",\n  \"purpose\": \"Muon ban ui hoi de ho tro buoi chup mau va hoan thien mau trinh khach\",\n  \"note\": \"Thiet bi nho, co the tra trong ngay\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/borrowings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "borrowings"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Borrowings By Asset - MM004",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/borrowings/asset/{{asset_mm004_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "borrowings",
+                "asset",
+                "{{asset_mm004_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
