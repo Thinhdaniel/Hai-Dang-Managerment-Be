@@ -8,6 +8,8 @@ export const allowedOrigins = Array.from(
             'http://localhost',
             'http://localhost:80',
             'http://34.229.217.0',
+            'https://hai-dang-managerment-be.onrender.com',
+            'https://hai-dang-managerment-olg04nk85-hieutvph46786s-projects.vercel.app',
             config.app.clientUrl,
         ].filter(Boolean)
     )
