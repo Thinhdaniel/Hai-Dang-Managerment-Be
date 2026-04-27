@@ -10,7 +10,7 @@ export const allowedOrigins = Array.from(
             'http://34.229.217.0',
             'https://hai-dang-managerment-be.onrender.com',
             'https://hai-dang-managerment-olg04nk85-hieutvph46786s-projects.vercel.app',
-            'https://hai-dang-managerment-fe.vercel.app/',
+            'https://hai-dang-managerment-fe.vercel.app',
             config.app.clientUrl,
         ].filter(Boolean)
     )
