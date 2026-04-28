@@ -27,7 +27,7 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
     });
 
     // ── Authentication middleware ──────────────────────────────────────────
-    io.use(async (socket: Socket, next) => {
+    io.use(async (socket: Socket, next: (err?: Error) => void) => {
         try {
             const token = socket.handshake.auth?.token as string | undefined;
 
@@ -79,7 +79,7 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
 
         console.log(`[Socket.io] Client connected: ${socket.id} (user: ${userId})`);
 
-        socket.on('disconnect', (reason) => {
+        socket.on('disconnect', (reason: string) => {
             console.log(`[Socket.io] Client disconnected: ${socket.id} — ${reason}`);
         });
     });
