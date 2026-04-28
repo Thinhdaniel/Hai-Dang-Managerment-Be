@@ -5,7 +5,7 @@ import { transferRepository } from '@/repositories/transfer.repository';
 import { getPagination } from '@/utils/pagination';
 import { serializeTransfer } from '@/utils/serializers';
 import { sendSerializedItem, sendSerializedList, sendSerializedPage } from './service.helpers';
-import { notifyAdmins } from './notification.helper';
+import { notifyAdmins, getActorName } from './notification.helper';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -113,6 +113,7 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
 
     // Send notification to admins about new transfer request
     const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `transfer-${createdItem._id}`,
         userId: '',
@@ -120,7 +121,7 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
         actionType: 'transfer',
         actionId: String(createdItem._id),
         title: 'Yêu cầu điều chuyển mới',
-        message: `${assetName} cần được điều chuyển từ ${createdItem.fromArea} đến ${createdItem.toArea}`,
+        message: `${actorName} đã tạo yêu cầu điều chuyển ${assetName} từ ${createdItem.fromArea} đến ${createdItem.toArea}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });
@@ -154,6 +155,7 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
 
     // Send notification about approved transfer
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `transfer-approved-${item._id}`,
         userId: '',
@@ -161,7 +163,7 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
         actionType: 'transfer',
         actionId: String(item._id),
         title: 'Điều chuyển đã được duyệt',
-        message: `${assetName} đã được duyệt điều chuyển`,
+        message: `${actorName} đã duyệt điều chuyển ${assetName}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });
@@ -189,6 +191,7 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
 
     // Send notification about rejected transfer
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `transfer-rejected-${item._id}`,
         userId: '',
@@ -196,7 +199,7 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
         actionType: 'transfer',
         actionId: String(item._id),
         title: 'Điều chuyển bị từ chối',
-        message: `${assetName} đã bị từ chối điều chuyển: ${item.rejectReason || 'Không có lý do'}`,
+        message: `${actorName} đã từ chối điều chuyển ${assetName}: ${item.rejectReason || 'Không có lý do'}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });
@@ -235,6 +238,7 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
 
     // Send notification about completed transfer
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `transfer-completed-${item._id}`,
         userId: '',
@@ -242,7 +246,7 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
         actionType: 'transfer',
         actionId: String(item._id),
         title: 'Điều chuyển hoàn tất',
-        message: `${assetName} đã hoàn tất điều chuyển đến ${item.toArea}`,
+        message: `${actorName} đã hoàn tất điều chuyển ${assetName} đến ${item.toArea}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });

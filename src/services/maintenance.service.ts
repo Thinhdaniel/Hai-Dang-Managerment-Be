@@ -13,7 +13,7 @@ import {
     sendSerializedPage,
     sendSuccess,
 } from './service.helpers';
-import { notifyAdmins } from './notification.helper';
+import { notifyAdmins, getActorName } from './notification.helper';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -115,6 +115,7 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
 
     // Send notification to admins about new maintenance
     const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `maintenance-${createdItem._id}`,
         userId: '',
@@ -122,7 +123,7 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
         actionType: 'maintenance',
         actionId: String(createdItem._id),
         title: 'Bảo trì mới',
-        message: `${assetName} đã được tạo phiếu bảo trì mới`,
+        message: `${actorName} đã tạo phiếu bảo trì mới cho ${assetName}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });
@@ -186,6 +187,7 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
 
     // Send notification about completed maintenance
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `maintenance-completed-${item._id}`,
         userId: '',
@@ -193,7 +195,7 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
         actionType: 'maintenance',
         actionId: String(item._id),
         title: 'Bảo trì hoàn tất',
-        message: `${assetName} đã hoàn tất bảo trì`,
+        message: `${actorName} đã hoàn tất bảo trì ${assetName}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });

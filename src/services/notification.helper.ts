@@ -4,6 +4,21 @@ import Maintenance from '@/models/Maintenance';
 import Notification from '@/models/Notification';
 
 /**
+ * Get actor display name by userId
+ * Returns fullname if found, fallback to 'Hệ thống'
+ */
+export const getActorName = async (userId?: string | null): Promise<string> => {
+    if (!userId) return 'Hệ thống';
+    try {
+        const user = await User.findById(userId).select('fullname username').lean();
+        if (!user) return 'Người dùng';
+        return (user.fullname as string) || (user.username as string) || 'Người dùng';
+    } catch {
+        return 'Người dùng';
+    }
+};
+
+/**
  * Send notification to all admins/managers
  */
 export const notifyAdmins = async (event: string, data: any) => {

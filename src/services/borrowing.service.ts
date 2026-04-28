@@ -5,7 +5,7 @@ import { borrowingRepository } from '@/repositories/borrowing.repository';
 import { getPagination } from '@/utils/pagination';
 import { serializeBorrowing } from '@/utils/serializers';
 import { sendSerializedItem, sendSerializedList, sendSerializedPage } from './service.helpers';
-import { notifyAdmins } from './notification.helper';
+import { notifyAdmins, getActorName } from './notification.helper';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -125,6 +125,7 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
 
     // Send notification to admins about new borrowing
     const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `borrowing-${createdItem._id}`,
         userId: '',
@@ -132,7 +133,7 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
         actionType: 'borrowing',
         actionId: String(createdItem._id),
         title: 'Giao dịch mới',
-        message: `${assetName} đã được tạo giao dịch ${createdItem.type === 'internal' ? 'nội bộ' : 'cho thuê'}`,
+        message: `${actorName} đã tạo giao dịch ${createdItem.type === 'internal' ? 'nội bộ' : 'cho thuê'} cho ${assetName}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });
@@ -174,6 +175,7 @@ export const returnBorrowing = async (req: Request, res: Response, next: NextFun
 
     // Send notification to admins about returned device
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         _id: `return-${item._id}`,
         userId: '',
@@ -181,7 +183,7 @@ export const returnBorrowing = async (req: Request, res: Response, next: NextFun
         actionType: 'borrowing',
         actionId: String(item._id),
         title: 'Thiết bị đã được trả',
-        message: `${assetName} đã được trả về từ giao dịch`,
+        message: `${actorName} đã xác nhận trả ${assetName} về kho`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });
