@@ -204,7 +204,8 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
 
     if (user) {
         const { token, tokenHash, expiresAt } = createPasswordResetToken();
-        const resetUrl = `${config.app.clientUrl.replace(/\/$/, '')}/reset-password?token=${encodeURIComponent(token)}`;
+        const baseResetUrl = config.app.resetPasswordUrl || `${config.app.clientUrl.replace(/\/$/, '')}/reset-password`;
+        const resetUrl = `${baseResetUrl}?token=${encodeURIComponent(token)}`;
 
         user.passwordResetToken = tokenHash;
         user.passwordResetExpiresAt = expiresAt;

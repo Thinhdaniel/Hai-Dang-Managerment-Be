@@ -8,6 +8,7 @@ const envVarsSchema = z.object({
     PORT: z.coerce.number().default(8000),
     APP_HOST: z.string().default('0.0.0.0'),
     CLIENT_URL: z.string().default('http://localhost:5173'),
+    RESET_PASSWORD_URL: z.string().optional().describe('Custom URL for password reset page (e.g., https://yourdomain.com/reset-password)'),
     ALLOWED_ORIGINS: z.string().optional().describe('Comma-separated list of allowed CORS origins'),
     MONGODB_URL_DEV: z.string().describe('Local Mongo DB'),
     AUTH_BYPASS: z
@@ -67,6 +68,7 @@ const config = {
     hostname: envVars.APP_HOST,
     app: {
         clientUrl: envVars.CLIENT_URL,
+        resetPasswordUrl: envVars.RESET_PASSWORD_URL,
         allowedOrigins: envVars.ALLOWED_ORIGINS ? envVars.ALLOWED_ORIGINS.split(',').map(s => s.trim()) : [],
     },
     mongoose: {
