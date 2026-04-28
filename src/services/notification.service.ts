@@ -30,31 +30,38 @@ export const getNotifications = async (req: Request, res: Response, next: NextFu
             .limit(10),
     ]);
 
+    // Format notifications to match frontend's Notification interface
     const notifications = [
         ...activeTransactions.map((item) => ({
-            id: `borrowing-${item._id}`,
-            type: 'borrowing' as const,
-            title: 'Giao dich thiet bi dang hoat dong',
-            message: `${(item.assetId as any)?.name ?? 'Thiet bi'} dang trong giao dich ${item.type}`,
-            assetId: String((item.assetId as any)?._id ?? item.assetId),
+            _id: `borrowing-${item._id}`,
+            userId: '',
+            type: 'info' as const,
+            actionType: 'borrowing' as const,
+            actionId: String(item._id),
+            title: 'Giao dịch thiết bị đang hoạt động',
+            message: `${(item.assetId as any)?.name ?? 'Thiết bị'} đang trong giao dịch ${item.type}`,
             isRead: false,
             createdAt: new Date(item.updatedAt).toISOString(),
         })),
         ...overdueMaintenances.map((item) => ({
-            id: `maintenance-${item._id}`,
-            type: 'maintenance' as const,
-            title: 'Bao tri qua han',
-            message: `${(item.assetId as any)?.name ?? 'Thiet bi'} co phieu bao tri qua han`,
-            assetId: String((item.assetId as any)?._id ?? item.assetId),
+            _id: `maintenance-${item._id}`,
+            userId: '',
+            type: 'warning' as const,
+            actionType: 'maintenance' as const,
+            actionId: String(item._id),
+            title: 'Bảo trì quá hạn',
+            message: `${(item.assetId as any)?.name ?? 'Thiết bị'} có phiếu bảo trì quá hạn`,
             isRead: false,
             createdAt: new Date(item.updatedAt).toISOString(),
         })),
         ...pendingTransfers.map((item) => ({
-            id: `transfer-${item._id}`,
-            type: 'transfer' as const,
-            title: 'Lenh dieu chuyen cho duyet',
-            message: `${(item.assetId as any)?.name ?? 'Thiet bi'} dang cho duyet dieu chuyen`,
-            assetId: String((item.assetId as any)?._id ?? item.assetId),
+            _id: `transfer-${item._id}`,
+            userId: '',
+            type: 'warning' as const,
+            actionType: 'transfer' as const,
+            actionId: String(item._id),
+            title: 'Lệnh điều chuyển chờ duyệt',
+            message: `${(item.assetId as any)?.name ?? 'Thiết bị'} đang chờ duyệt điều chuyển`,
             isRead: false,
             createdAt: new Date(item.updatedAt).toISOString(),
         })),
@@ -62,7 +69,11 @@ export const getNotifications = async (req: Request, res: Response, next: NextFu
 
     return res.status(StatusCodes.OK).json(
         customResponse({
-            data: notifications,
+            data: {
+                notifications,
+                total: notifications.length,
+                unreadCount: notifications.filter(n => !n.isRead).length,
+            },
             message: 'Lay thong bao thanh cong',
             status: StatusCodes.OK,
             success: true,

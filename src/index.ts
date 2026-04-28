@@ -1,15 +1,30 @@
+import http from 'http';
 import app from './app';
 import connectDB from './config/database.config';
 import config from './config/env.config';
+import { checkAndNotifyOverdueMaintenance } from './services/notification.helper';
+import { initSocketServer } from './lib/socket';
 
 const PORT = config.port || 8080;
 const HOSTNAME = config.hostname;
 
-let server: any;
+const server = http.createServer(app);
+
+// Initialize Socket.io BEFORE listening
+initSocketServer(server);
+
 connectDB().then(async () => {
-    server = app.listen(PORT, `${HOSTNAME}`, async () => {
+    server.listen(PORT, HOSTNAME, () => {
         console.log(`Listening to port ${PORT}`);
     });
+
+    // Check overdue maintenance every hour
+    setInterval(async () => {
+        await checkAndNotifyOverdueMaintenance();
+    }, 60 * 60 * 1000); // 1 hour
+
+    // Also run immediately on startup
+    await checkAndNotifyOverdueMaintenance();
 });
 
 const exitHandler = () => {

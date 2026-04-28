@@ -5,6 +5,7 @@ import { borrowingRepository } from '@/repositories/borrowing.repository';
 import { getPagination } from '@/utils/pagination';
 import { serializeBorrowing } from '@/utils/serializers';
 import { sendSerializedItem, sendSerializedList, sendSerializedPage } from './service.helpers';
+import { notifyAdmins } from './notification.helper';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -122,6 +123,20 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
 
     if (!createdItem) throw new NotFoundError('Khong tim thay giao dich thiet bi');
 
+    // Send notification to admins about new borrowing
+    const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
+    await notifyAdmins('notify:new', {
+        _id: `borrowing-${createdItem._id}`,
+        userId: '',
+        type: 'info',
+        actionType: 'borrowing',
+        actionId: String(createdItem._id),
+        title: 'Giao dịch mới',
+        message: `${assetName} đã được tạo giao dịch ${createdItem.type === 'internal' ? 'nội bộ' : 'cho thuê'}`,
+        isRead: false,
+        createdAt: new Date().toISOString(),
+    });
+
     return sendSerializedItem(
         res,
         createdItem,
@@ -155,6 +170,20 @@ export const returnBorrowing = async (req: Request, res: Response, next: NextFun
                 ? ASSET_STATUS.ACTIVE
                 : item.assetStatusBefore,
         updatedBy: req.userId,
+    });
+
+    // Send notification to admins about returned device
+    const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    await notifyAdmins('notify:new', {
+        _id: `return-${item._id}`,
+        userId: '',
+        type: 'success',
+        actionType: 'borrowing',
+        actionId: String(item._id),
+        title: 'Thiết bị đã được trả',
+        message: `${assetName} đã được trả về từ giao dịch`,
+        isRead: false,
+        createdAt: new Date().toISOString(),
     });
 
     return sendSerializedItem(res, item, serializeBorrowing, 'Xac nhan tra thiet bi thanh cong');
