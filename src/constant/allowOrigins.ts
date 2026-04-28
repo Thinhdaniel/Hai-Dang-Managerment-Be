@@ -12,6 +12,7 @@ export const allowedOrigins = Array.from(
             'https://hai-dang-managerment-olg04nk85-hieutvph46786s-projects.vercel.app',
             'https://hai-dang-managerment-fe.vercel.app',
             config.app.clientUrl,
+            ...(config.app.allowedOrigins || []),
         ].filter(Boolean)
     )
 );
