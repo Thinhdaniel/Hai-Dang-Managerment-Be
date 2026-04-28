@@ -1,11 +1,12 @@
 import { emitToUser } from '@/lib/socket';
 import User from '@/models/User';
 import Maintenance from '@/models/Maintenance';
+import Notification from '@/models/Notification';
 
 /**
  * Send notification to all admins/managers
  */
-export const notifyAdmins = async (event: string, data: unknown) => {
+export const notifyAdmins = async (event: string, data: any) => {
     try {
         // Get all admin and manager users
         const admins = await User.find({
@@ -16,7 +17,22 @@ export const notifyAdmins = async (event: string, data: unknown) => {
 
         // Emit to each admin
         for (const admin of admins) {
-            emitToUser(String(admin._id), event, data);
+            let notificationPayload = data;
+
+            if (event === 'notify:new') {
+                const doc = await Notification.create({
+                    userId: admin._id,
+                    title: data.title,
+                    message: data.message,
+                    type: data.type || 'info',
+                    actionType: data.actionType || 'system',
+                    actionId: data.actionId,
+                    isRead: false,
+                });
+                notificationPayload = doc.toObject();
+            }
+
+            emitToUser(String(admin._id), event, notificationPayload);
         }
 
         console.log(`[Notification] Sent to ${admins.length} admins`);
@@ -28,9 +44,24 @@ export const notifyAdmins = async (event: string, data: unknown) => {
 /**
  * Send notification to a specific user
  */
-export const notifyUser = (userId: string, event: string, data: unknown) => {
+export const notifyUser = async (userId: string, event: string, data: any) => {
     try {
-        emitToUser(userId, event, data);
+        let notificationPayload = data;
+
+        if (event === 'notify:new') {
+            const doc = await Notification.create({
+                userId: userId,
+                title: data.title,
+                message: data.message,
+                type: data.type || 'info',
+                actionType: data.actionType || 'system',
+                actionId: data.actionId,
+                isRead: false,
+            });
+            notificationPayload = doc.toObject();
+        }
+
+        emitToUser(userId, event, notificationPayload);
     } catch (error) {
         console.error('[Notification] Error notifying user:', error);
     }
@@ -55,15 +86,11 @@ export const checkAndNotifyOverdueMaintenance = async () => {
             const assetName = (maintenance.assetId as any)?.name || 'Thiết bị';
             
             await notifyAdmins('notify:new', {
-                _id: `maintenance-overdue-${maintenance._id}`,
-                userId: '',
                 type: 'error',
                 actionType: 'maintenance',
                 actionId: String(maintenance._id),
                 title: 'Bảo trì quá hạn',
                 message: `${assetName} có phiếu bảo trì đã quá hạn`,
-                isRead: false,
-                createdAt: new Date().toISOString(),
             });
 
             // Update status to overdue

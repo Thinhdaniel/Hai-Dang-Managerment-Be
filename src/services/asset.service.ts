@@ -6,6 +6,7 @@ import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import { generateUniqueMachinePublicId } from '@/utils/publicId';
 import { buildSearchRegex } from '@/utils/search';
 import { serializeAsset, serializePublicAsset } from '@/utils/serializers';
+import Transfer from '@/models/Transfer';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import customResponse from '@/utils/response';
@@ -81,9 +82,23 @@ export const getAllAssets = async (req: Request, res: Response, next: NextFuncti
         assetRepository.countDocuments(filter),
     ]);
 
+    const assetIds = assets.map((a) => a._id);
+    const openTransfers = await Transfer.find({
+        assetId: { $in: assetIds },
+        isDeleted: { $ne: true },
+        status: { $in: ['pending', 'approved'] },
+    }).distinct('assetId');
+
+    const openTransferIds = new Set(openTransfers.map((id) => String(id)));
+
+    const serializedAssets = assets.map((a) => ({
+        ...serializeAsset(a),
+        hasOpenTransfer: openTransferIds.has(String(a._id)),
+    }));
+
     return res.status(StatusCodes.OK).json(
         customResponse({
-            data: buildPaginatedResponse(assets.map(serializeAsset), total, page, limit),
+            data: buildPaginatedResponse(serializedAssets, total, page, limit),
             message: 'Lay danh sach thiet bi thanh cong',
             status: StatusCodes.OK,
             success: true,
@@ -136,9 +151,18 @@ export const getAssetById = async (req: Request, res: Response, next: NextFuncti
 
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
 
+    const openTransfer = await Transfer.findOne({
+        assetId: asset._id,
+        isDeleted: { $ne: true },
+        status: { $in: ['pending', 'approved'] },
+    });
+
     return res.status(StatusCodes.OK).json(
         customResponse({
-            data: serializeAsset(asset),
+            data: {
+                ...serializeAsset(asset),
+                hasOpenTransfer: !!openTransfer,
+            },
             message: 'Lay thong tin thiet bi thanh cong',
             status: StatusCodes.OK,
             success: true,

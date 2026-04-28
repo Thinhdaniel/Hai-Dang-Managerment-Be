@@ -1,78 +1,28 @@
-import Borrowing from '@/models/Borrowing';
-import Maintenance from '@/models/Maintenance';
-import Transfer from '@/models/Transfer';
+import Notification from '@/models/Notification';
 import customResponse from '@/utils/response';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
 export const getNotifications = async (req: Request, res: Response, next: NextFunction) => {
-    const [activeTransactions, overdueMaintenances, pendingTransfers] = await Promise.all([
-        Borrowing.find({
-            isDeleted: { $ne: true },
-            status: 'active',
-        })
-            .populate('assetId')
-            .sort('-updatedAt')
-            .limit(10),
-        Maintenance.find({
-            isDeleted: { $ne: true },
-            status: 'overdue',
-        })
-            .populate('assetId')
-            .sort('-updatedAt')
-            .limit(10),
-        Transfer.find({
-            isDeleted: { $ne: true },
-            status: 'pending',
-        })
-            .populate('assetId')
-            .sort('-updatedAt')
-            .limit(10),
-    ]);
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const userId = req.userId;
 
-    // Format notifications to match frontend's Notification interface
-    const notifications = [
-        ...activeTransactions.map((item) => ({
-            _id: `borrowing-${item._id}`,
-            userId: '',
-            type: 'info' as const,
-            actionType: 'borrowing' as const,
-            actionId: String(item._id),
-            title: 'Giao dịch thiết bị đang hoạt động',
-            message: `${(item.assetId as any)?.name ?? 'Thiết bị'} đang trong giao dịch ${item.type}`,
-            isRead: false,
-            createdAt: new Date(item.updatedAt).toISOString(),
-        })),
-        ...overdueMaintenances.map((item) => ({
-            _id: `maintenance-${item._id}`,
-            userId: '',
-            type: 'warning' as const,
-            actionType: 'maintenance' as const,
-            actionId: String(item._id),
-            title: 'Bảo trì quá hạn',
-            message: `${(item.assetId as any)?.name ?? 'Thiết bị'} có phiếu bảo trì quá hạn`,
-            isRead: false,
-            createdAt: new Date(item.updatedAt).toISOString(),
-        })),
-        ...pendingTransfers.map((item) => ({
-            _id: `transfer-${item._id}`,
-            userId: '',
-            type: 'warning' as const,
-            actionType: 'transfer' as const,
-            actionId: String(item._id),
-            title: 'Lệnh điều chuyển chờ duyệt',
-            message: `${(item.assetId as any)?.name ?? 'Thiết bị'} đang chờ duyệt điều chuyển`,
-            isRead: false,
-            createdAt: new Date(item.updatedAt).toISOString(),
-        })),
-    ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const [notifications, unreadCount, total] = await Promise.all([
+        Notification.find({ userId })
+            .sort({ createdAt: -1 })
+            .skip(offset)
+            .limit(limit),
+        Notification.countDocuments({ userId, isRead: false }),
+        Notification.countDocuments({ userId }),
+    ]);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: {
                 notifications,
-                total: notifications.length,
-                unreadCount: notifications.filter(n => !n.isRead).length,
+                total,
+                unreadCount,
             },
             message: 'Lay thong bao thanh cong',
             status: StatusCodes.OK,
@@ -82,6 +32,14 @@ export const getNotifications = async (req: Request, res: Response, next: NextFu
 };
 
 export const markNotificationAsRead = async (req: Request, res: Response, next: NextFunction) => {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    await Notification.findOneAndUpdate(
+        { _id: id, userId },
+        { isRead: true, readAt: new Date() }
+    );
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: null,
@@ -93,6 +51,13 @@ export const markNotificationAsRead = async (req: Request, res: Response, next: 
 };
 
 export const markAllNotificationsAsRead = async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.userId;
+
+    await Notification.updateMany(
+        { userId, isRead: false },
+        { isRead: true, readAt: new Date() }
+    );
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: null,
