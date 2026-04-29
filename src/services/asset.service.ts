@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
 import { assetRepository } from '@/repositories/asset.repository';
@@ -109,41 +110,62 @@ export const getAllAssets = async (req: Request, res: Response, next: NextFuncti
 export const exportAssets = async (req: Request, res: Response, next: NextFunction) => {
     const assets = await assetRepository.findMany(buildFilter(req.query), { sort: '-createdAt' });
     const rows = assets.map(serializeAsset);
-    const headers = [
-        'Ten may',
-        'Ma may',
-        'Serial',
-        'Loai may',
-        'Model may',
-        'Trang thai',
-        'Nhan hieu',
-        'Co so',
-        'Ngay mua',
-        'Gia tri',
-    ];
-    const csvRows = [
-        headers.join(','),
-        ...rows.map((row) =>
-            [
-                row.name,
-                row.machineCode,
-                row.serial,
-                row.type,
-                row.model,
-                row.status,
-                row.brand?.name ?? '',
-                row.plant?.name ?? '',
-                row.purchaseDate ?? '',
-                row.purchasePrice ?? '',
-            ]
-                .map((value) => `"${String(value ?? '').replaceAll('"', '""')}"`)
-                .join(',')
-        ),
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Device Management System';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Thiết bị');
+
+    // Define columns
+    sheet.columns = [
+        { header: 'Tên máy',    key: 'name',          width: 30 },
+        { header: 'Mã máy',     key: 'machineCode',   width: 18 },
+        { header: 'Serial',     key: 'serial',        width: 20 },
+        { header: 'Loại máy',   key: 'type',          width: 20 },
+        { header: 'Model máy',  key: 'model',         width: 20 },
+        { header: 'Trạng thái', key: 'status',        width: 16 },
+        { header: 'Nhãn hiệu',  key: 'brand',         width: 20 },
+        { header: 'Cơ sở',      key: 'plant',         width: 20 },
+        { header: 'Ngày mua',   key: 'purchaseDate',  width: 15 },
+        { header: 'Giá trị',    key: 'purchasePrice', width: 15 },
     ];
 
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="assets.csv"');
-    return res.status(StatusCodes.OK).send(`\uFEFF${csvRows.join('\n')}`);
+    // Style header row
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true, size: 11 };
+    headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFD9E1F2' },
+    };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+    headerRow.height = 20;
+
+    // Add data rows
+    rows.forEach((row) => {
+        sheet.addRow({
+            name:          row.name ?? '',
+            machineCode:   row.machineCode ?? '',
+            serial:        row.serial ?? '',
+            type:          row.type ?? '',
+            model:         row.model ?? '',
+            status:        row.status ?? '',
+            brand:         row.brand?.name ?? '',
+            plant:         row.plant?.name ?? '',
+            purchaseDate:  row.purchaseDate ?? '',
+            purchasePrice: row.purchasePrice ?? '',
+        });
+    });
+
+    // Freeze header row
+    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="assets.xlsx"');
+    return res.status(StatusCodes.OK).send(buffer);
 };
 
 export const getAssetById = async (req: Request, res: Response, next: NextFunction) => {
