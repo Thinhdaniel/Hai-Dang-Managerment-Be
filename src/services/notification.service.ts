@@ -17,6 +17,8 @@ export const getNotifications = async (req: Request, res: Response, next: NextFu
         Notification.countDocuments({ userId }),
     ]);
 
+    console.log(`[Notification API] userId=${userId}, found=${notifications.length}, total=${total}`);
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: {
