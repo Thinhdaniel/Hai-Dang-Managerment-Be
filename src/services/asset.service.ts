@@ -308,6 +308,19 @@ export const getAssetModels = async (req: Request, res: Response, next: NextFunc
     );
 };
 
+export const getAssetTypes = async (req: Request, res: Response, next: NextFunction) => {
+    const types = await assetRepository.getDistinctTypes();
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: types,
+            message: 'Lay danh sach loai may thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
 export const previewAssetImportFile = async (req: Request, res: Response, next: NextFunction) => {
     if (!req.file?.buffer) {
         throw new BadRequestError('Vui long tai len file Excel de xem truoc');

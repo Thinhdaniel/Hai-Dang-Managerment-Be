@@ -18,6 +18,10 @@ export const getAssetModels = asyncHandler(async (req: Request, res: Response, n
     return await assetService.getAssetModels(req, res, next);
 });
 
+export const getAssetTypes = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await assetService.getAssetTypes(req, res, next);
+});
+
 export const getAssetById = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await assetService.getAssetById(req, res, next);
 });

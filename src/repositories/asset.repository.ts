@@ -180,4 +180,27 @@ export const assetRepository = {
 
         return rows.map((row) => row._id);
     },
+
+    async getDistinctTypes() {
+        const rows = await Asset.aggregate<{ _id: string }>([
+            {
+                $match: {
+                    isDeleted: { $ne: true },
+                    type: { $type: 'string', $ne: '' },
+                },
+            },
+            {
+                $group: {
+                    _id: '$type',
+                },
+            },
+            {
+                $sort: {
+                    _id: 1,
+                },
+            },
+        ]);
+
+        return rows.map((row) => row._id);
+    },
 };

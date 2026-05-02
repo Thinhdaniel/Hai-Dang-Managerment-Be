@@ -19,6 +19,7 @@ router.post(
     assetController.createAsset
 );
 router.get('/models', assetController.getAssetModels);
+router.get('/types', assetController.getAssetTypes);
 router.post(
     '/import/preview',
     authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
