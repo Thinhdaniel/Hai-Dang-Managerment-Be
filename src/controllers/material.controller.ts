@@ -43,3 +43,12 @@ export const getMaterialPriceComparisonReport = asyncHandler(
         return await materialService.getMaterialPriceComparisonReport(req, res, next);
     }
 );
+
+
+export const getTopMaterials = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await materialService.getTopMaterials(req, res, next);
+});
+
+export const exportMaterialReportExcel = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await materialService.exportMaterialReportExcel(req, res, next);
+});

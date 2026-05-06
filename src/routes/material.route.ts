@@ -31,6 +31,16 @@ router.get(
     authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
     materialController.getMaterialPriceComparisonReport
 );
+router.get(
+    '/reports/top-materials',
+    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    materialController.getTopMaterials
+);
+router.get(
+    '/reports/export-excel',
+    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    materialController.exportMaterialReportExcel
+);
 router.get('/low-stock', materialController.getLowStockMaterials);
 router.post('/', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), validator(createMaterialSchema), materialController.createMaterial);
 router.get('/', materialController.getAllMaterials);
