@@ -149,6 +149,29 @@ export const assetRepository = {
         };
     },
 
+    async getDistinctNames() {
+        const rows = await Asset.aggregate<{ _id: string }>([
+            {
+                $match: {
+                    isDeleted: { $ne: true },
+                    name: { $exists: true, $ne: '' },
+                },
+            },
+            {
+                $group: {
+                    _id: '$name',
+                },
+            },
+            {
+                $sort: {
+                    _id: 1,
+                },
+            },
+        ]);
+
+        return rows.map((row) => row._id).filter(Boolean);
+    },
+
     async getDistinctModels() {
         const rows = await Asset.aggregate<{ _id: string }>([
             {

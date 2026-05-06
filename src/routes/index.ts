@@ -11,6 +11,13 @@ import transferRoutes from './transfer.route';
 import borrowingRoutes from './borrowing.route';
 import notificationRoutes from './notification.route';
 import publicRoutes from './public.route';
+import materialRoutes from './material.route';
+import materialSupplierRoutes from './material-supplier.route';
+import purchaseRequestRoutes from './purchase-request.route';
+import purchaseOrderRoutes from './purchase-order.route';
+import inventoryRoutes from './inventory.route';
+import distributionRoutes from './distribution.route';
+import supplyRequestRoutes from './supply-request.route';
 
 const router = Router();
 
@@ -25,5 +32,12 @@ router.use('/transfers', transferRoutes);
 router.use('/borrowings', borrowingRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/public', publicRoutes);
+router.use('/materials', materialRoutes);
+router.use('/material-suppliers', materialSupplierRoutes);
+router.use('/purchase-requests', purchaseRequestRoutes);
+router.use('/purchase-orders', purchaseOrderRoutes);
+router.use('/inventory', inventoryRoutes);
+router.use('/distributions', distributionRoutes);
+router.use('/supply-requests', supplyRequestRoutes);
 
 export default router;

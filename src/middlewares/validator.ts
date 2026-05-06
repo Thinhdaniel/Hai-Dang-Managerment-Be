@@ -4,15 +4,16 @@ import { ZodSchema } from 'zod';
 
 const validator = (schema: ZodSchema) => {
     return (req: Request, res: Response, next: NextFunction) => {
-        const result = schema.safeParse(req.body);
+        // Normalize body: nếu undefined (PATCH không body) thì parse {} tránh Zod v4 reject
+        const body = req.body !== undefined && req.body !== null ? req.body : {};
+        const result = schema.safeParse(body);
         if (!result.success) {
-            const errors = Object.entries(result.error.format())
-                .filter(([field]) => field !== '_errors')
-                .map(([field, issue]) => ({
-                    message: Array.isArray(issue) ? issue[0] : (issue as any)?._errors?.[0] || 'Lỗi không xác định',
-                    field,
-                }));
-            throw new BadRequestFormError('Đã có lỗi xảy ra!', errors);
+            // Dùng result.error.issues (Zod v4 stable API) thay vì format()
+            const errors = (result.error.issues ?? []).map((issue) => ({
+                message: issue.message || 'Lỗi không xác định',
+                field: issue.path?.join('.') || '_errors',
+            }));
+            throw new BadRequestFormError('Đã có lỗi xảy ra!', errors.length > 0 ? errors : [{ message: 'Dữ liệu không hợp lệ', field: '_errors' }]);
         }
         req.body = result.data;
         next();

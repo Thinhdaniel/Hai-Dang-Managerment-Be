@@ -14,6 +14,10 @@ export const exportAssets = asyncHandler(async (req: Request, res: Response, nex
     return await assetService.exportAssets(req, res, next);
 });
 
+export const getAssetNames = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await assetService.getAssetNames(req, res, next);
+});
+
 export const getAssetModels = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await assetService.getAssetModels(req, res, next);
 });

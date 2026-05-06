@@ -26,6 +26,7 @@ const buildFilter = (query: Request['query']) => {
 
     if (query.status) filter.status = query.status;
     if (query.plantId) filter.plantId = query.plantId;
+    if (query.name) filter.name = query.name;
     if (query.model) {
         andConditions.push({
             $or: [
@@ -289,6 +290,19 @@ export const deleteAsset = async (req: Request, res: Response, next: NextFunctio
         customResponse({
             data: null,
             message: 'Xoa thiet bi thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const getAssetNames = async (req: Request, res: Response, next: NextFunction) => {
+    const names = await assetRepository.getDistinctNames();
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: names,
+            message: 'Danh sách tên máy',
             status: StatusCodes.OK,
             success: true,
         })

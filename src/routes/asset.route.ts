@@ -18,6 +18,7 @@ router.post(
     validator(createAssetSchema),
     assetController.createAsset
 );
+router.get('/names', assetController.getAssetNames);
 router.get('/models', assetController.getAssetModels);
 router.get('/types', assetController.getAssetTypes);
 router.post(
