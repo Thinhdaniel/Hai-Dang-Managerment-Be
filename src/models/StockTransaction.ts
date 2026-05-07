@@ -10,7 +10,6 @@ const StockTransactionSchema = new mongoose.Schema(
         materialId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Material',
-            required: true,
         },
         materialName: {
             type: String,
@@ -35,7 +34,7 @@ const StockTransactionSchema = new mongoose.Schema(
         },
         relatedType: {
             type: String,
-            enum: ['purchase_order', 'distribution', 'manual'],
+            enum: ['purchase_order', 'distribution', 'manual', 'express_dispatch'],
             default: 'manual',
         },
         performedBy: {

@@ -1,7 +1,8 @@
 import { ASSET_STATUS } from '@/constant/assetStatus';
-import { NotFoundError } from '@/errors/customError';
+import { BadRequestError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
 import Maintenance from '@/models/Maintenance';
+import Transfer from '@/models/Transfer';
 import { getPagination } from '@/utils/pagination';
 import { serializeMaintenance } from '@/utils/serializers';
 import {
@@ -96,6 +97,15 @@ export const getMaintenanceById = async (req: Request, res: Response, next: Next
 };
 
 export const createMaintenance = async (req: Request, res: Response, next: NextFunction) => {
+    const approvedTransfer = await Transfer.findOne({
+        assetId: req.body.assetId,
+        status: 'approved',
+        isDeleted: { $ne: true },
+    });
+    if (approvedTransfer) {
+        throw new BadRequestError('Thiet bi dang trong qua trinh dieu chuyen, khong the tao phieu bao tri');
+    }
+
     const item = await Maintenance.create({
         ...req.body,
         createdBy: req.userId,

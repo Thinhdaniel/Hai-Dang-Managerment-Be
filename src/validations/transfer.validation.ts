@@ -13,3 +13,11 @@ export const createTransferSchema = z.object({
 export const rejectTransferSchema = z.object({
     reason: zRequiredString('Ly do tu choi'),
 });
+
+export const cancelTransferSchema = z.object({
+    reason: zRequiredString('Ly do huy'),
+});
+
+export const completeTransferSchema = z.object({
+    receivedBy: zOptionalString(),
+});

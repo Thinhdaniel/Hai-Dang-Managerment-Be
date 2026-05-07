@@ -27,7 +27,7 @@ const TransferSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['pending', 'approved', 'completed', 'rejected'],
+            enum: ['pending', 'approved', 'completed', 'rejected', 'cancelled'],
             default: 'pending',
         },
         reason: {
@@ -52,6 +52,21 @@ const TransferSchema = new mongoose.Schema(
         },
         completedAt: {
             type: Date,
+        },
+        receivedBy: {
+            type: String,
+            trim: true,
+        },
+        cancelledBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        cancelledAt: {
+            type: Date,
+        },
+        cancelReason: {
+            type: String,
+            trim: true,
         },
         note: {
             type: String,

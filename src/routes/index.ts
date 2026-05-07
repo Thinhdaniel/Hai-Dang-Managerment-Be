@@ -18,6 +18,7 @@ import purchaseOrderRoutes from './purchase-order.route';
 import inventoryRoutes from './inventory.route';
 import distributionRoutes from './distribution.route';
 import supplyRequestRoutes from './supply-request.route';
+import expressDispatchRoutes from './express-dispatch.route';
 
 const router = Router();
 
@@ -39,5 +40,6 @@ router.use('/purchase-orders', purchaseOrderRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/distributions', distributionRoutes);
 router.use('/supply-requests', supplyRequestRoutes);
+router.use('/express-dispatch', expressDispatchRoutes);
 
 export default router;

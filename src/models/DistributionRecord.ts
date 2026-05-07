@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const DistributionRecordItemSchema = new mongoose.Schema(
     {
-        materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material', required: true },
+        materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
         materialName: { type: String, trim: true },
         unit: { type: String, trim: true },
         quantity: { type: Number, required: true, min: 0 }, // backward compat

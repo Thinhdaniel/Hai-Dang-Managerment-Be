@@ -1,6 +1,7 @@
 import { ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
+import Transfer from '@/models/Transfer';
 import { borrowingRepository } from '@/repositories/borrowing.repository';
 import { getPagination } from '@/utils/pagination';
 import { serializeBorrowing } from '@/utils/serializers';
@@ -97,6 +98,15 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
 
     if (activeTransaction) {
         throw new DuplicateError('Thiet bi dang co giao dich muon / thue chua hoan tat');
+    }
+
+    const approvedTransfer = await Transfer.findOne({
+        assetId: req.body.assetId,
+        status: 'approved',
+        isDeleted: { $ne: true },
+    });
+    if (approvedTransfer) {
+        throw new BadRequestError('Thiet bi dang trong qua trinh dieu chuyen, khong the tao giao dich');
     }
 
     const item = await borrowingRepository.create({

@@ -29,3 +29,7 @@ export const rejectTransfer = asyncHandler(async (req: Request, res: Response, n
 export const completeTransfer = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await transferService.completeTransfer(req, res, next);
 });
+
+export const cancelTransfer = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await transferService.cancelTransfer(req, res, next);
+});

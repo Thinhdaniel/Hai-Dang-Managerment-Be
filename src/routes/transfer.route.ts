@@ -4,7 +4,7 @@ import { authorize } from '@/middlewares/authorizationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import { transferController } from '@/controllers';
-import { createTransferSchema, rejectTransferSchema } from '@/validations/transfer.validation';
+import { createTransferSchema, rejectTransferSchema, cancelTransferSchema, completeTransferSchema } from '@/validations/transfer.validation';
 import { USER_ROLE } from '@/constant/allowedRoles';
 
 const router = Router();
@@ -32,7 +32,14 @@ router.patch(
     '/:id/complete',
     authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
     validateObjectId,
+    validator(completeTransferSchema),
     transferController.completeTransfer
+);
+router.patch(
+    '/:id/cancel',
+    validateObjectId,
+    validator(cancelTransferSchema),
+    transferController.cancelTransfer
 );
 
 export default router;

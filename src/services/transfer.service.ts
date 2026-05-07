@@ -1,11 +1,12 @@
 import { ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
+import TransferHistory from '@/models/TransferHistory';
 import { transferRepository } from '@/repositories/transfer.repository';
 import { getPagination } from '@/utils/pagination';
 import { serializeTransfer } from '@/utils/serializers';
 import { sendSerializedItem, sendSerializedList, sendSerializedPage } from './service.helpers';
-import { notifyAdmins, getActorName } from './notification.helper';
+import { notifyAdmins, notifyUser, getActorName } from './notification.helper';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -115,8 +116,6 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
     const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
-        _id: `transfer-${createdItem._id}`,
-        userId: '',
         type: 'warning',
         actionType: 'transfer',
         actionId: String(createdItem._id),
@@ -157,8 +156,6 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
-        _id: `transfer-approved-${item._id}`,
-        userId: '',
         type: 'success',
         actionType: 'transfer',
         actionId: String(item._id),
@@ -168,6 +165,20 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
         createdAt: new Date().toISOString(),
     });
 
+    // Notify người tạo lệnh
+    const createdById = String((item as any).createdBy);
+    if (createdById && createdById !== req.userId) {
+        await notifyUser(createdById, 'notify:new', {
+            type: 'success',
+            actionType: 'transfer',
+            actionId: String(item._id),
+            title: 'Lệnh điều chuyển đã được duyệt',
+            message: `${actorName} đã duyệt lệnh điều chuyển ${assetName}`,
+            isRead: false,
+            createdAt: new Date().toISOString(),
+        });
+    }
+
     return sendSerializedItem(res, item, serializeTransfer, 'Duyet dieu chuyen thanh cong');
 };
 
@@ -176,8 +187,8 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
     const currentTransfer = await transferRepository.findById(transferId);
 
     if (!currentTransfer) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
-    if (currentTransfer.status !== 'pending') {
-        throw new BadRequestError('Chi co the tu choi lenh dieu chuyen dang cho xu ly');
+    if (!['pending', 'approved'].includes(currentTransfer.status)) {
+        throw new BadRequestError('Chi co the tu choi lenh dieu chuyen dang cho xu ly hoac da duyet');
     }
 
     const item = await transferRepository.updateById(transferId, {
@@ -189,12 +200,10 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
 
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
 
-    // Send notification about rejected transfer
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
+
     await notifyAdmins('notify:new', {
-        _id: `transfer-rejected-${item._id}`,
-        userId: '',
         type: 'error',
         actionType: 'transfer',
         actionId: String(item._id),
@@ -203,6 +212,20 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
         isRead: false,
         createdAt: new Date().toISOString(),
     });
+
+    // Notify người tạo lệnh
+    const createdById = String((item as any).createdBy);
+    if (createdById && createdById !== req.userId) {
+        await notifyUser(createdById, 'notify:new', {
+            type: 'error',
+            actionType: 'transfer',
+            actionId: String(item._id),
+            title: 'Lệnh điều chuyển bị từ chối',
+            message: `${actorName} đã từ chối lệnh điều chuyển ${assetName}: ${item.rejectReason || 'Không có lý do'}`,
+            isRead: false,
+            createdAt: new Date().toISOString(),
+        });
+    }
 
     return sendSerializedItem(res, item, serializeTransfer, 'Tu choi dieu chuyen thanh cong');
 };
@@ -225,6 +248,7 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
         status: 'completed',
         completedBy: req.userId,
         completedAt: new Date(),
+        receivedBy: req.body.receivedBy?.trim() || undefined,
     });
 
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
@@ -236,20 +260,87 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
         updatedBy: req.userId,
     });
 
-    // Send notification about completed transfer
+    // Ghi TransferHistory
+    const fromPlantName = (item.fromPlantId as any)?.name || String(item.fromPlantId);
+    const toPlantName = (item.toPlantId as any)?.name || String(item.toPlantId);
+    await TransferHistory.create({
+        assetId: toDocumentId(item.assetId),
+        fromPlantId: toDocumentId(item.fromPlantId),
+        fromPlant: fromPlantName,
+        toPlantId: toDocumentId(item.toPlantId),
+        toPlant: toPlantName,
+        note: item.note || undefined,
+        createdBy: req.userId,
+    });
+
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
+
     await notifyAdmins('notify:new', {
-        _id: `transfer-completed-${item._id}`,
-        userId: '',
         type: 'success',
         actionType: 'transfer',
         actionId: String(item._id),
         title: 'Điều chuyển hoàn tất',
-        message: `${actorName} đã hoàn tất điều chuyển ${assetName} đến ${item.toArea}`,
+        message: `${actorName} đã hoàn tất điều chuyển ${assetName} đến ${item.toArea || toPlantName}`,
         isRead: false,
         createdAt: new Date().toISOString(),
     });
 
+    // Notify người tạo lệnh
+    const createdById = String((item as any).createdBy);
+    if (createdById && createdById !== req.userId) {
+        await notifyUser(createdById, 'notify:new', {
+            type: 'success',
+            actionType: 'transfer',
+            actionId: String(item._id),
+            title: 'Lệnh điều chuyển hoàn tất',
+            message: `${assetName} đã được điều chuyển thành công đến ${item.toArea || toPlantName}`,
+            isRead: false,
+            createdAt: new Date().toISOString(),
+        });
+    }
+
     return sendSerializedItem(res, item, serializeTransfer, 'Hoan thanh dieu chuyen thanh cong');
+};
+
+export const cancelTransfer = async (req: Request, res: Response, next: NextFunction) => {
+    const transferId = getParamValue(req.params.id);
+    const currentTransfer = await transferRepository.findById(transferId);
+
+    if (!currentTransfer) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
+    if (currentTransfer.status !== 'pending') {
+        throw new BadRequestError('Chi co the huy lenh dieu chuyen dang cho xu ly');
+    }
+
+    // Chỉ người tạo hoặc admin/manager mới được hủy
+    const createdById = String((currentTransfer as any).createdBy);
+    const isCreator = createdById === req.userId;
+    const isManager = ['admin', 'manager', 'director'].includes((req as any).userRole || '');
+    if (!isCreator && !isManager) {
+        throw new BadRequestError('Ban khong co quyen huy lenh dieu chuyen nay');
+    }
+
+    const item = await transferRepository.updateById(transferId, {
+        status: 'cancelled',
+        cancelledBy: req.userId,
+        cancelledAt: new Date(),
+        cancelReason: req.body.reason,
+    });
+
+    if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
+
+    const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const actorName = await getActorName(req.userId);
+
+    await notifyAdmins('notify:new', {
+        type: 'warning',
+        actionType: 'transfer',
+        actionId: String(item._id),
+        title: 'Lệnh điều chuyển bị hủy',
+        message: `${actorName} đã hủy lệnh điều chuyển ${assetName}: ${req.body.reason}`,
+        isRead: false,
+        createdAt: new Date().toISOString(),
+    });
+
+    return sendSerializedItem(res, item, serializeTransfer, 'Huy dieu chuyen thanh cong');
 };
