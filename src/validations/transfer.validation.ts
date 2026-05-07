@@ -19,5 +19,6 @@ export const cancelTransferSchema = z.object({
 });
 
 export const completeTransferSchema = z.object({
-    receivedBy: zOptionalString(),
+    receivedBy: zRequiredString('Nguoi nhan ban giao'),
+    handoverImages: z.array(z.string().url()).max(3).optional(),
 });

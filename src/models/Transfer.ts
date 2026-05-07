@@ -57,6 +57,10 @@ const TransferSchema = new mongoose.Schema(
             type: String,
             trim: true,
         },
+        handoverImages: {
+            type: [String],
+            default: [],
+        },
         cancelledBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',

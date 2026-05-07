@@ -249,6 +249,7 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
         completedBy: req.userId,
         completedAt: new Date(),
         receivedBy: req.body.receivedBy?.trim() || undefined,
+        handoverImages: req.body.handoverImages || [],
     });
 
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
@@ -264,14 +265,14 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
     const fromPlantName = (item.fromPlantId as any)?.name || String(item.fromPlantId);
     const toPlantName = (item.toPlantId as any)?.name || String(item.toPlantId);
     await TransferHistory.create({
-        assetId: toDocumentId(item.assetId),
+        machineId: toDocumentId(item.assetId),
         fromPlantId: toDocumentId(item.fromPlantId),
         fromPlant: fromPlantName,
         toPlantId: toDocumentId(item.toPlantId),
         toPlant: toPlantName,
         note: item.note || undefined,
         createdBy: req.userId,
-    });
+    } as any);
 
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);

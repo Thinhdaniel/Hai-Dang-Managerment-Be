@@ -199,6 +199,7 @@ export const serializeTransfer = (input: any) => {
         note: transfer?.note,
         rejectReason: transfer?.rejectReason,
         receivedBy: transfer?.receivedBy,
+        handoverImages: transfer?.handoverImages ?? [],
         cancelledBy: toId(transfer?.cancelledBy),
         cancelledAt: toIso(transfer?.cancelledAt),
         cancelReason: transfer?.cancelReason,
