@@ -339,47 +339,63 @@ export const getMaterialCostByPeriodReport = async (req: Request, res: Response,
     const year = Number(req.query.year) || new Date().getFullYear();
     const period = req.query.period === 'quarter' ? 'quarter' : 'month';
 
-    const purchaseOrders = await getPurchaseOrdersByPlant(plantId);
+    const [purchaseOrders, ReturnRecord] = await Promise.all([
+        getPurchaseOrdersByPlant(plantId),
+        import('@/models/ReturnRecord').then((m) => m.default),
+    ]);
+
+    // Map poId → totalRefundWithVat
+    const returnAgg = await ReturnRecord.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        { $group: { _id: '$purchaseOrderId', totalRefund: { $sum: '$totalRefundWithVat' } } },
+    ]);
+    const refundMap = new Map(returnAgg.map((r: any) => [String(r._id), r.totalRefund as number]));
 
     const groupedData = purchaseOrders.reduce(
         (result: Record<string, number>, order: any) => {
             const orderDate = getOrderEffectiveDate(order);
-
-            if (orderDate.getFullYear() !== year) {
-                return result;
-            }
+            if (orderDate.getFullYear() !== year) return result;
 
             const key =
                 period === 'quarter'
                     ? `${year}-Q${Math.floor(orderDate.getMonth() / 3) + 1}`
                     : `${year}-${String(orderDate.getMonth() + 1).padStart(2, '0')}`;
 
-            result[key] = Number(((result[key] ?? 0) + (order.totalAmount ?? 0)).toFixed(2));
+            const net = (order.totalAmount ?? 0) - (refundMap.get(String(order._id)) ?? 0);
+            result[key] = Number(((result[key] ?? 0) + Math.max(0, net)).toFixed(2));
             return result;
         },
         {}
     );
 
     const data = Object.entries(groupedData)
-        .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
-        .map(([label, totalAmount]) => ({
-            period: label,
-            totalAmount,
-        }));
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([label, totalAmount]) => ({ period: label, totalAmount }));
 
     return res.status(StatusCodes.OK).json(
-        customResponse({
-            data,
-            message: 'Lay bao cao chi phi theo ky thanh cong',
-            status: StatusCodes.OK,
-            success: true,
-        })
+        customResponse({ data, message: 'Lay bao cao chi phi theo ky thanh cong', status: StatusCodes.OK, success: true })
     );
 };
 
 export const getMaterialReportBySupplier = async (req: Request, res: Response, next: NextFunction) => {
     const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
-    const purchaseOrders = await getPurchaseOrdersByPlant(plantId);
+    const [purchaseOrders, ReturnRecord] = await Promise.all([
+        getPurchaseOrdersByPlant(plantId),
+        import('@/models/ReturnRecord').then((m) => m.default),
+    ]);
+
+    // Refund theo supplierId ở item level (chính xác khi PO có nhiều NCC)
+    const returnAgg = await ReturnRecord.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        { $unwind: '$items' },
+        {
+            $group: {
+                _id: '$items.supplierId',
+                totalRefund: { $sum: '$items.refundWithVat' },
+            },
+        },
+    ]);
+    const refundBySupplier = new Map(returnAgg.map((r: any) => [String(r._id), r.totalRefund as number]));
 
     const groupedData: Record<string, { supplierId?: string; supplierName: string; totalAmount: number; orderCount: Set<string> }> = {};
 
@@ -388,11 +404,9 @@ export const getMaterialReportBySupplier = async (req: Request, res: Response, n
             const supplierId = toId(item.supplierId);
             const supplierName = item.supplierName || 'Chua gan nha cung cap';
             const key = supplierId || supplierName;
-
             if (!groupedData[key]) {
                 groupedData[key] = { supplierId, supplierName, totalAmount: 0, orderCount: new Set() };
             }
-
             groupedData[key].totalAmount += item.totalWithVat ?? item.totalPrice ?? 0;
             groupedData[key].orderCount.add(String(order._id));
         });
@@ -402,27 +416,30 @@ export const getMaterialReportBySupplier = async (req: Request, res: Response, n
         .map(({ supplierId, supplierName, totalAmount, orderCount }) => ({
             supplierId,
             supplierName,
-            totalAmount: Number(totalAmount.toFixed(2)),
+            totalAmount: Number(Math.max(0, totalAmount - (supplierId ? (refundBySupplier.get(supplierId) ?? 0) : 0)).toFixed(2)),
             orderCount: orderCount.size,
         }))
         .sort((a, b) => b.totalAmount - a.totalAmount);
 
     return res.status(StatusCodes.OK).json(
-        customResponse({
-            data,
-            message: 'Lay bao cao chi phi theo nha cung cap thanh cong',
-            status: StatusCodes.OK,
-            success: true,
-        })
+        customResponse({ data, message: 'Lay bao cao chi phi theo nha cung cap thanh cong', status: StatusCodes.OK, success: true })
     );
 };
 
 export const getMaterialPriceComparisonReport = async (req: Request, res: Response, next: NextFunction) => {
     const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
-    const purchaseOrders = await getPurchaseOrdersByPlant(plantId);
+    const [purchaseOrders, ReturnRecord] = await Promise.all([
+        getPurchaseOrdersByPlant(plantId),
+        import('@/models/ReturnRecord').then((m) => m.default),
+    ]);
+
+    const returnAgg = await ReturnRecord.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        { $group: { _id: '$purchaseOrderId', totalRefund: { $sum: '$totalRefundWithVat' } } },
+    ]);
+    const refundMap = new Map(returnAgg.map((r: any) => [String(r._id), r.totalRefund as number]));
 
     const data = purchaseOrders.map((order: any) => {
-        // Dự tính = quantityRequested * unitPrice (có VAT) trên từng item của PO
         const estimatedTotal = (order.items ?? []).reduce((sum: number, item: any) => {
             const qty = Number(item.quantityRequested ?? 0);
             const price = Number(item.unitPrice ?? 0);
@@ -430,18 +447,21 @@ export const getMaterialPriceComparisonReport = async (req: Request, res: Respon
             const base = Number((qty * price).toFixed(2));
             return sum + Number((base * (1 + vatRate / 100)).toFixed(2));
         }, 0);
-        // Thực tế = tổng đã đặt (có VAT)
         const actualTotal = Number(order.totalWithVat ?? order.totalAmount ?? 0);
+        const refundTotal = refundMap.get(String(order._id)) ?? 0;
+        const netActual = Number(Math.max(0, actualTotal - refundTotal).toFixed(2));
 
         return {
             orderId: String(order._id),
             orderCode: order.orderCode,
             supplierId: toId(order.supplierId),
             supplierName: order.supplierName || order.supplierId?.name || 'Chua gan nha cung cap',
-            requestCodes: (order.purchaseRequestIds ?? []).map((request: any) => request.requestCode),
+            requestCodes: (order.purchaseRequestIds ?? []).map((r: any) => r.requestCode),
             estimatedTotal: Number(estimatedTotal.toFixed(2)),
-            actualTotal: Number(actualTotal.toFixed(2)),
-            difference: Number((actualTotal - estimatedTotal).toFixed(2)),
+            actualTotal,
+            refundTotal: Number(refundTotal.toFixed(2)),
+            netActual,
+            difference: Number((netActual - estimatedTotal).toFixed(2)),
             orderedAt: order.orderedAt ? new Date(order.orderedAt).toISOString() : undefined,
             receivedAt: order.receivedAt ? new Date(order.receivedAt).toISOString() : undefined,
             status: order.status,

@@ -1,4 +1,4 @@
-﻿import { BadRequestError, NotFoundError, UnAuthorizedError } from '@/errors/customError';
+import { BadRequestError, NotFoundError, UnAuthorizedError } from '@/errors/customError';
 import PurchaseOrder from '@/models/PurchaseOrder';
 import PurchaseRequest from '@/models/PurchaseRequest';
 import Supplier from '@/models/Supplier';
@@ -46,6 +46,7 @@ const buildFreeFormItems = (rawItems: any[]) => {
             unit: item.unit?.trim() || '',
             proposedBy: item.proposedBy?.trim() || '',
             purpose: item.purpose?.trim() || '',
+            plantId: item.plantId || undefined,
             quantityRequested: Number(item.quantityRequested ?? 0),
             quantityOrdered: qty || undefined,
             unitPrice: price || undefined,
@@ -144,13 +145,14 @@ const resolvePurchaseRequestPlantId = async (req: Request, plantId?: string) => 
 };
 
 const buildApprovalItems = async (request: any, overrideItems?: any[]) => {
-    // Vá»›i free-form items (khÃ´ng cÃ³ materialId), chá»‰ cáº§n giá»¯ nguyÃªn items hiá»‡n táº¡i
-    // vÃ  cáº­p nháº­t quantityApproved náº¿u cÃ³ override
+    // Với free-form items (không có materialId), chỉ cần giữ nguyên items hiện tại
+    // và cập nhật quantityApproved nếu có override
     const items = (request.items ?? []).map((item: any, idx: number) => {
+        const plainItem = typeof item.toObject === 'function' ? item.toObject() : item;
         const override = overrideItems?.[idx];
         return {
-            ...item,
-            quantityApproved: override?.quantityApproved ?? item.quantityRequested,
+            ...plainItem,
+            quantityApproved: override?.quantityApproved ?? plainItem.quantityRequested,
         };
     });
 

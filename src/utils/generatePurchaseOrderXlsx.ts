@@ -65,7 +65,7 @@ async function addSheet(
     // ROW 4: Tiêu đề
     ws.mergeCells(`A4:${lastCol}4`);
     const r4 = ws.getCell('A4');
-    r4.value = isSummary ? 'ĐƠN ĐẶT HÀNG — TỔNG HỢP' : 'ĐƠN ĐẶT HÀNG';
+    r4.value = isSummary ? 'PHIẾU NHẬP HÀNG — TỔNG HỢP' : 'PHIẾU NHẬP HÀNG';
     r4.font = font(true, 16);
     r4.alignment = center;
     ws.getRow(4).height = 30;
@@ -106,7 +106,10 @@ async function addSheet(
         ? (po.createdBy?.fullname ?? po.createdBy?.name ?? '')
         : '';
     setInfo(10, 'Người lập:', createdByName);
-    if (po.note) setInfo(11, 'Ghi chú:', po.note);
+    const orderedAt = po.orderedAt ? dayjs(po.orderedAt).format('DD/MM/YYYY') : '—';
+    const receivedAt = po.receivedAt ? dayjs(po.receivedAt).format('DD/MM/YYYY') : '—';
+    setInfo(11, 'Ngày lên đơn / Ngày nhận:', `${orderedAt}  /  ${receivedAt}`);
+    if (po.note) setInfo(12, 'Ghi chú:', po.note);
 
     // ROW 13: Header bảng
     const headers = isSummary
@@ -175,7 +178,8 @@ async function addSheet(
     totalLabel.alignment = center;
     totalLabel.border = allBorders;
 
-    const totalStartCol = isSummary ? 10 : 9;
+    const totalStartCol = isSummary ? 11 : 10;
+    // Thành tiền, Tiền VAT, Tổng tiền — bỏ qua cột VAT% ở giữa
     [[totalStartCol, sumTotalPrice], [totalStartCol + 2, sumVat], [totalStartCol + 3, sumWithVat]].forEach(([col, val]) => {
         const cell = ws.getCell(curRow, col as number);
         cell.value = val;

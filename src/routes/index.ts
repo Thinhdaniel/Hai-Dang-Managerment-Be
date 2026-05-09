@@ -19,6 +19,7 @@ import inventoryRoutes from './inventory.route';
 import distributionRoutes from './distribution.route';
 import supplyRequestRoutes from './supply-request.route';
 import expressDispatchRoutes from './express-dispatch.route';
+import returnRecordRoutes from './return-record.route';
 
 const router = Router();
 
@@ -41,5 +42,6 @@ router.use('/inventory', inventoryRoutes);
 router.use('/distributions', distributionRoutes);
 router.use('/supply-requests', supplyRequestRoutes);
 router.use('/express-dispatch', expressDispatchRoutes);
+router.use('/return-records', returnRecordRoutes);
 
 export default router;

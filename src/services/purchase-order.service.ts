@@ -76,7 +76,7 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     const requests = await PurchaseRequest.find({
         _id: { $in: purchaseRequestIds },
         isDeleted: { $ne: true },
-    }).lean();
+    }).populate('plantId', 'name').lean();
 
     if (requests.length !== purchaseRequestIds.length) {
         throw new BadRequestError('Mot so phieu de xuat khong ton tai');
@@ -99,10 +99,24 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
         throw new BadRequestError('Mot so phieu de xuat da duoc su dung trong don dat hang khac');
     }
 
+    // Gom items — populate plantId để lấy plantName
+    const isValidId = (v: any) => v && v !== 'undefined' && v !== 'null' && String(v).length === 24;
+    const allPlantIds = [...new Set([
+        ...requests.map((r: any) => String(r.plantId?._id ?? r.plantId ?? '')).filter(isValidId),
+        ...requests.flatMap((r: any) => (r.items ?? []).map((i: any) => String(i.plantId ?? '')).filter(isValidId)),
+    ])];
+    const Plant = (await import('@/models/Plant')).default;
+    const plantDocs = await Plant.find({ _id: { $in: allPlantIds } }).select('name').lean();
+    const plantNameMap = new Map(plantDocs.map((p: any) => [String(p._id), p.name as string]));
+
     // Gá»™p items
     const items: any[] = [];
     for (const req_ of requests as any[]) {
+        const prPlantId = String(req_.plantId?._id ?? req_.plantId ?? '');
+        const prPlantName = plantNameMap.get(prPlantId) || '';
         for (const item of req_.items ?? []) {
+            const itemPlantId = isValidId(item.plantId) ? String(item.plantId) : '';
+            const itemPlantName = itemPlantId ? (plantNameMap.get(itemPlantId) || prPlantName) : prPlantName;
             items.push(calcItem({
                 purchaseRequestId: req_._id,
                 purchaseRequestCode: req_.requestCode,
@@ -115,7 +129,7 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
                 vatRate: item.vatRate != null ? (item.vatRate > 1 ? item.vatRate : item.vatRate * 100) : 0,
                 supplierId: item.supplierId || undefined,
                 supplierName: item.supplierName || '',
-                plantName: req_.plant?.name || '',
+                plantName: itemPlantName,
                 proposedBy: item.proposedBy || '',
                 purpose: item.purpose || '',
                 note: item.note || '',
@@ -368,8 +382,34 @@ export const exportPurchaseOrderXlsx = async (req: Request, res: Response, next:
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
 
     const data = serializePurchaseOrder(order);
+
+    // Enrich plantName từ PR nếu item chưa có (dữ liệu cũ)
+    const prIds = [...new Set((order as any).items?.map((i: any) => String(i.purchaseRequestId)).filter(Boolean) ?? [])];
+    if (prIds.length) {
+        const prs = await PurchaseRequest.find({ _id: { $in: prIds } })
+            .populate('plantId', 'name')
+            .populate('items.plantId', 'name')
+            .lean();
+        // Map prId → { prPlantName, itemPlantMap: Map<materialName, plantName> }
+        const prInfoMap = new Map(prs.map((pr: any) => {
+            const prPlantName = (pr.plantId as any)?.name || '';
+            const itemPlantMap = new Map((pr.items ?? []).map((item: any) => [
+                item.materialName,
+                (item.plantId as any)?.name || prPlantName,
+            ]));
+            return [String(pr._id), { prPlantName, itemPlantMap }];
+        }));
+
+        data.items = (data.items ?? []).map((item: any) => {
+            if (item.plantName) return item;
+            const info = prInfoMap.get(String(item.purchaseRequestId));
+            const plantName = info?.itemPlantMap.get(item.materialName) || info?.prPlantName || '';
+            return { ...item, plantName };
+        });
+    }
+
     const buffer = await generatePurchaseOrderXlsx(data);
-    const filename = `${data.orderCode ?? req.params.id}.xlsx`;
+    const filename = `PhieuNhapHang_${data.orderCode ?? req.params.id}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(Buffer.from(buffer));

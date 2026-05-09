@@ -7,6 +7,7 @@ const requestItemSchema = z.object({
     unit: z.string().trim().optional(),
     proposedBy: z.string().trim().min(1, { message: 'Nguoi de xuat khong duoc de trong' }),
     purpose: z.string().trim().min(1, { message: 'Noi dung su dung khong duoc de trong' }),
+    plantId: zObjectId('Co so').optional(),
     quantityRequested: z.number().gt(0, { message: 'So luong de xuat phai lon hon 0' }),
     quantityOrdered: z.number().min(0).optional(),
     unitPrice: z.number().min(0).optional(),

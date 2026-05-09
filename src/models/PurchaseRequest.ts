@@ -11,6 +11,8 @@ const PurchaseRequestItemSchema = new mongoose.Schema(
         // ── Spec mới ──────────────────────────────────────────────
         proposedBy: { type: String, trim: true },
         purpose: { type: String, trim: true },
+        plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant' },
+        plantName: { type: String, trim: true },
         quantityRequested: { type: Number, required: true, min: 0 },
         quantityApproved: { type: Number, min: 0 },
         quantityOrdered: { type: Number, min: 0 },
