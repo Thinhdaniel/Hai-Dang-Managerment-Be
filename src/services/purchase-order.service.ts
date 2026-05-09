@@ -6,6 +6,7 @@ import PurchaseRequest from '@/models/PurchaseRequest';
 import StockTransaction from '@/models/StockTransaction';
 import { purchaseOrderRepository } from '@/repositories/purchase-order.repository';
 import { generateDocumentCode, toId } from '@/services/material-workflow.helpers';
+import { notifyAdmins, getActorName } from '@/services/notification.helper';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -153,6 +154,16 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     }
 
     const created = await purchaseOrderRepository.findById(createdId);
+
+    const actorName = await getActorName(req.userId);
+    await notifyAdmins('notify:new', {
+        type: 'info',
+        actionType: 'purchase_order',
+        actionId: createdId,
+        title: 'Đơn đặt hàng mới',
+        message: `${actorName} đã tạo đơn đặt hàng ${(created as any)?.orderCode || ''}`,
+    });
+
     return res.status(StatusCodes.CREATED).json(customResponse({
         data: serializePurchaseOrder(created),
         message: 'Tao don dat hang thanh cong',
@@ -306,6 +317,16 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
     }
 
     const updated = await purchaseOrderRepository.findById(String(req.params.id));
+
+    const actorName = await getActorName(req.userId);
+    await notifyAdmins('notify:new', {
+        type: 'success',
+        actionType: 'purchase_order',
+        actionId: String(req.params.id),
+        title: 'Đã nhận hàng',
+        message: `${actorName} đã xác nhận nhận hàng cho đơn ${(updated as any)?.orderCode || ''}`,
+    });
+
     return res.status(StatusCodes.OK).json(customResponse({
         data: serializePurchaseOrder(updated),
         message: 'Nhan hang thanh cong, ton kho da cap nhat',
@@ -351,5 +372,5 @@ export const exportPurchaseOrderXlsx = async (req: Request, res: Response, next:
     const filename = `${data.orderCode ?? req.params.id}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+    res.send(Buffer.from(buffer));
 };

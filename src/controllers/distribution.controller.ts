@@ -17,6 +17,9 @@ export const distributeDistributionRecord = asyncHandler(async (req: Request, re
 export const confirmDistributionRecord = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await distributionService.confirmDistributionRecord(req, res, next);
 });
+export const updateDistributionRecord = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await distributionService.updateDistributionRecord(req, res, next);
+});
 export const exportDistributionXlsx = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await distributionService.exportDistributionXlsx(req, res, next);
 });

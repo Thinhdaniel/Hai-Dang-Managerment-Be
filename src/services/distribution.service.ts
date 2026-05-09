@@ -16,6 +16,7 @@ import {
     isManagerRole,
     toId,
 } from '@/services/material-workflow.helpers';
+import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
 import { buildDistributionItems, getMaterialsMap } from '@/services/material-domain.helpers';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
@@ -209,6 +210,16 @@ export const createDistributionRecord = async (req: Request, res: Response, next
     await PurchaseRequest.updateOne({ _id: sr._id }, { $set: { status: 'in_progress' } });
 
     const created = await distributionRepository.findById(String((record as any)._id));
+
+    const actorName = await getActorName(req.userId);
+    await notifyUser(toId(sr.requestedBy)!, 'notify:new', {
+        type: 'info',
+        actionType: 'distribution',
+        actionId: String((record as any)._id),
+        title: 'Phiếu cấp phát đã được tạo',
+        message: `${actorName} đã tạo phiếu cấp phát ${(created as any)?.distributionCode || ''} cho phiếu đề xuất ${(sr as any).requestCode || ''}`,
+    });
+
     return res.status(StatusCodes.CREATED).json(
         customResponse({
             data: serializeDistributionRecord(created),
@@ -296,6 +307,22 @@ export const distributeRecord = async (req: Request, res: Response, next: NextFu
     }
 
     const updated = await distributionRepository.findById(String(req.params.id));
+
+    const actorName = await getActorName(req.userId);
+    // Notify người tạo SR (CS nhận) biết hàng đã được xuất kho
+    const srDoc = updated && (updated as any).supplyRequestId
+        ? await PurchaseRequest.findById((updated as any).supplyRequestId).select('requestedBy requestCode').lean()
+        : null;
+    if (srDoc) {
+        await notifyUser(toId(srDoc.requestedBy)!, 'notify:new', {
+            type: 'success',
+            actionType: 'distribution',
+            actionId: String(req.params.id),
+            title: 'Vật tư đã được xuất kho',
+            message: `${actorName} đã xuất kho phiếu cấp phát ${(updated as any)?.distributionCode || ''}. Vui lòng xác nhận nhận hàng.`,
+        });
+    }
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializeDistributionRecord(updated),
@@ -344,10 +371,78 @@ export const confirmDistributionRecord = async (req: Request, res: Response, nex
     }
 
     const updated = await distributionRepository.findById(String(req.params.id));
+
+    const actorName = await getActorName(req.userId);
+    await notifyAdmins('notify:new', {
+        type: 'success',
+        actionType: 'distribution',
+        actionId: String(req.params.id),
+        title: 'Xác nhận nhận hàng',
+        message: `${actorName} đã xác nhận nhận hàng phiếu cấp phát ${(updated as any)?.distributionCode || ''}`,
+    });
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializeDistributionRecord(updated),
             message: 'Xac nhan nhan hang thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const updateDistributionRecord = async (req: Request, res: Response, next: NextFunction) => {
+    const record = await distributionRepository.findById(String(req.params.id));
+    if (!record) throw new NotFoundError('Khong tim thay phieu cap phat');
+
+    ensureDistributionAccess(req, record);
+
+    const { items, note } = req.body;
+
+    const updateData: Record<string, any> = {};
+
+    if (note !== undefined) {
+        updateData.note = note?.trim() || undefined;
+    }
+
+    if (Array.isArray(items) && items.length > 0) {
+        const currentItems: any[] = (record as any).items ?? [];
+
+        const updatedItems = currentItems.map((item: any, idx: number) => {
+            const patch = items.find((i: any) => i.index === idx) ?? items[idx];
+            if (!patch) return item;
+
+            const qty = Number(item.quantity ?? 0);
+            const unitPrice = patch.unitPrice !== undefined ? Number(patch.unitPrice) : Number(item.unitPrice ?? 0);
+            const vatRate = patch.vatRate !== undefined ? Number(patch.vatRate) : Number(item.vatRate ?? 0);
+            const totalPrice = Number((qty * unitPrice).toFixed(2));
+            const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
+            const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
+
+            return {
+                ...item.toObject ? item.toObject() : item,
+                unitPrice,
+                vatRate,
+                totalPrice,
+                vatAmount,
+                totalWithVat,
+                note: patch.note !== undefined ? patch.note?.trim() || undefined : item.note,
+            };
+        });
+
+        updateData.items = updatedItems;
+        updateData.totalAmount = Number(updatedItems.reduce((s: number, i: any) => s + (i.totalPrice ?? 0), 0).toFixed(2));
+        updateData.totalVatAmount = Number(updatedItems.reduce((s: number, i: any) => s + (i.vatAmount ?? 0), 0).toFixed(2));
+        updateData.totalWithVat = Number(updatedItems.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0).toFixed(2));
+    }
+
+    await (DistributionRecord as any).updateOne({ _id: (record as any)._id }, { $set: updateData });
+
+    const updated = await distributionRepository.findById(String(req.params.id));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializeDistributionRecord(updated),
+            message: 'Cap nhat phieu cap phat thanh cong',
             status: StatusCodes.OK,
             success: true,
         })

@@ -381,58 +381,31 @@ export const getMaterialReportBySupplier = async (req: Request, res: Response, n
     const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
     const purchaseOrders = await getPurchaseOrdersByPlant(plantId);
 
-    const groupedData = purchaseOrders.reduce(
-        (result: Record<string, { supplierId?: string; supplierName: string; totalAmount: number; orderCount: number }>, order: any) => {
-            const supplierId = toId(order.supplierId);
-            const supplierName = order.supplierName || order.supplierId?.name || 'Chua gan nha cung cap';
+    const groupedData: Record<string, { supplierId?: string; supplierName: string; totalAmount: number; orderCount: Set<string> }> = {};
+
+    purchaseOrders.forEach((order: any) => {
+        (order.items ?? []).forEach((item: any) => {
+            const supplierId = toId(item.supplierId);
+            const supplierName = item.supplierName || 'Chua gan nha cung cap';
             const key = supplierId || supplierName;
 
-            if (!result[key]) {
-                result[key] = { supplierId, supplierName, totalAmount: 0, orderCount: 0 };
+            if (!groupedData[key]) {
+                groupedData[key] = { supplierId, supplierName, totalAmount: 0, orderCount: new Set() };
             }
 
-            result[key].totalAmount = Number((result[key].totalAmount + (order.totalAmount ?? 0)).toFixed(2));
-            result[key].orderCount += 1;
-
-            return result;
-        },
-        {}
-    );
-
-    // Thêm dữ liệu từ PurchaseRequest items có supplierId
-    const prMatchFilter: Record<string, any> = { isDeleted: { $ne: true }, 'items.supplierId': { $exists: true } };
-    if (plantId) prMatchFilter.plantId = new mongoose.Types.ObjectId(plantId);
-
-    const prAgg = await PurchaseRequest.aggregate([
-        { $match: prMatchFilter },
-        { $unwind: '$items' },
-        { $match: { 'items.supplierId': { $exists: true, $ne: null } } },
-        {
-            $group: {
-                _id: '$items.supplierId',
-                supplierName: { $first: '$items.supplierName' },
-                totalAmount: { $sum: { $ifNull: ['$items.totalWithVat', 0] } },
-                orderCount: { $addToSet: '$_id' },
-            },
-        },
-        { $sort: { totalAmount: -1 } },
-    ]);
-
-    prAgg.forEach((row: any) => {
-        const key = String(row._id);
-        if (!groupedData[key]) {
-            groupedData[key] = {
-                supplierId: key,
-                supplierName: row.supplierName || key,
-                totalAmount: 0,
-                orderCount: 0,
-            };
-        }
-        groupedData[key].totalAmount = Number((groupedData[key].totalAmount + row.totalAmount).toFixed(2));
-        groupedData[key].orderCount += row.orderCount.length;
+            groupedData[key].totalAmount += item.totalWithVat ?? item.totalPrice ?? 0;
+            groupedData[key].orderCount.add(String(order._id));
+        });
     });
 
-    const data = Object.values(groupedData).sort((a, b) => b.totalAmount - a.totalAmount);
+    const data = Object.values(groupedData)
+        .map(({ supplierId, supplierName, totalAmount, orderCount }) => ({
+            supplierId,
+            supplierName,
+            totalAmount: Number(totalAmount.toFixed(2)),
+            orderCount: orderCount.size,
+        }))
+        .sort((a, b) => b.totalAmount - a.totalAmount);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
@@ -449,11 +422,16 @@ export const getMaterialPriceComparisonReport = async (req: Request, res: Respon
     const purchaseOrders = await getPurchaseOrdersByPlant(plantId);
 
     const data = purchaseOrders.map((order: any) => {
-        const estimatedTotal = (order.purchaseRequestIds ?? []).reduce(
-            (sum: number, request: any) => sum + (request.totalEstimated ?? 0),
-            0
-        );
-        const actualTotal = Number(order.totalAmount ?? 0);
+        // Dự tính = quantityRequested * unitPrice (có VAT) trên từng item của PO
+        const estimatedTotal = (order.items ?? []).reduce((sum: number, item: any) => {
+            const qty = Number(item.quantityRequested ?? 0);
+            const price = Number(item.unitPrice ?? 0);
+            const vatRate = Number(item.vatRate ?? 0);
+            const base = Number((qty * price).toFixed(2));
+            return sum + Number((base * (1 + vatRate / 100)).toFixed(2));
+        }, 0);
+        // Thực tế = tổng đã đặt (có VAT)
+        const actualTotal = Number(order.totalWithVat ?? order.totalAmount ?? 0);
 
         return {
             orderId: String(order._id),
@@ -554,6 +532,444 @@ export const getTopMaterials = async (req: Request, res: Response, next: NextFun
         customResponse({
             data,
             message: 'Lay top vat tu tieu thu thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const exportMaterialCatalogExcel = async (req: Request, res: Response, next: NextFunction) => {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Danh mục vật tư');
+
+    ws.columns = [
+        { header: 'Mã vật tư', key: 'code', width: 18 },
+        { header: 'Tên vật tư', key: 'name', width: 35 },
+        { header: 'Nhóm / Category', key: 'category', width: 22 },
+        { header: 'Đơn vị tính', key: 'unit', width: 14 },
+        { header: 'Ngưỡng tối thiểu', key: 'minStockLevel', width: 18 },
+        { header: 'Mô tả', key: 'description', width: 40 },
+        { header: 'Trạng thái', key: 'isActive', width: 14 },
+    ];
+
+    // Style header row
+    ws.getRow(1).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A3A5C' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+    ws.getRow(1).height = 22;
+
+    const materials = await materialRepository.findMany(
+        { isDeleted: { $ne: true } },
+        { sort: 'name', limit: 10000 }
+    );
+
+    materials.forEach((m: any) => {
+        ws.addRow({
+            code: m.code || '',
+            name: m.name,
+            category: m.category || '',
+            unit: m.unit,
+            minStockLevel: m.minStockLevel ?? 0,
+            description: m.description || '',
+            isActive: m.isActive !== false ? 'Hoạt động' : 'Ngừng',
+        });
+    });
+
+    const buffer = await wb.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="danh-muc-vat-tu.xlsx"');
+    return res.send(Buffer.from(buffer));
+};
+
+export const downloadMaterialImportTemplate = async (req: Request, res: Response, next: NextFunction) => {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Mẫu nhập vật tư');
+
+    ws.columns = [
+        { header: 'Mã vật tư (*)', key: 'code', width: 18 },
+        { header: 'Tên vật tư (*)', key: 'name', width: 35 },
+        { header: 'Nhóm / Category', key: 'category', width: 22 },
+        { header: 'Đơn vị tính (*)', key: 'unit', width: 14 },
+        { header: 'Ngưỡng tối thiểu', key: 'minStockLevel', width: 18 },
+        { header: 'Mô tả', key: 'description', width: 40 },
+    ];
+
+    ws.getRow(1).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A3A5C' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+    ws.getRow(1).height = 22;
+
+    // Sample rows
+    [
+        { code: 'VT001', name: 'Chỉ may trắng', category: 'Kim chỉ', unit: 'Cuộn', minStockLevel: 50, description: '' },
+        { code: 'VT002', name: 'Dầu máy may', category: 'Dầu nhớt', unit: 'Lít', minStockLevel: 10, description: 'Dầu bôi trơn' },
+    ].forEach((row) => ws.addRow(row));
+
+    // Note sheet
+    const noteWs = wb.addWorksheet('Hướng dẫn');
+    noteWs.getColumn(1).width = 80;
+    [
+        ['HƯỚNG DẪN NHẬP LIỆU'],
+        [''],
+        ['(*) = Bắt buộc'],
+        ['- Mã vật tư: Duy nhất trong hệ thống, không trùng lặp'],
+        ['- Tên vật tư: Bắt buộc'],
+        ['- Đơn vị tính: Bắt buộc (VD: Cái, Cuộn, Lít, Kg, Hộp...)'],
+        ['- Ngưỡng tối thiểu: Số nguyên >= 0, mặc định 0'],
+        ['- Nếu mã đã tồn tại: hệ thống sẽ CẬP NHẬT thông tin vật tư đó'],
+        ['- Nếu mã chưa tồn tại: hệ thống sẽ TẠO MỚI'],
+    ].forEach(([text]) => {
+        const row = noteWs.addRow([text]);
+        if (text?.startsWith('HƯỚNG')) row.getCell(1).font = { bold: true, size: 13 };
+    });
+
+    const buffer = await wb.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="mau-nhap-vat-tu.xlsx"');
+    return res.send(Buffer.from(buffer));
+};
+
+export const importMaterialExcel = async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.file) throw new BadRequestError('Vui lòng chọn file Excel');
+
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(req.file.buffer) as any);
+    const ws = wb.worksheets[0];
+    if (!ws) throw new BadRequestError('File Excel không hợp lệ');
+
+    type RowResult = { row: number; code: string; name: string; action: 'created' | 'updated' | 'error'; reason?: string };
+    const results: RowResult[] = [];
+    const dataRows: Array<{ rowNum: number; code: string; name: string; category: string; unit: string; minStockLevel: number; description: string }> = [];
+
+    ws.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        const code = String(row.getCell(1).value ?? '').trim();
+        const name = String(row.getCell(2).value ?? '').trim();
+        const category = String(row.getCell(3).value ?? '').trim();
+        const unit = String(row.getCell(4).value ?? '').trim();
+        const minStockLevel = Number(row.getCell(5).value ?? 0);
+        const description = String(row.getCell(6).value ?? '').trim();
+        if (!code && !name) return;
+        dataRows.push({ rowNum, code, name, category, unit, minStockLevel, description });
+    });
+
+    for (const { rowNum, code, name, category, unit, minStockLevel, description } of dataRows) {
+        if (!name) {
+            results.push({ row: rowNum, code, name, action: 'error', reason: 'Tên vật tư không được để trống' });
+            continue;
+        }
+        if (!unit) {
+            results.push({ row: rowNum, code, name, action: 'error', reason: 'Đơn vị tính không được để trống' });
+            continue;
+        }
+        if (isNaN(minStockLevel) || minStockLevel < 0) {
+            results.push({ row: rowNum, code, name, action: 'error', reason: 'Ngưỡng tối thiểu phải >= 0' });
+            continue;
+        }
+
+        try {
+            const existing = code
+                ? await Material.findOne({ code, isDeleted: { $ne: true } }).select('_id').lean()
+                : null;
+
+            if (existing) {
+                await materialRepository.updateById(String(existing._id), {
+                    name, category: category || undefined, unit,
+                    minStockLevel: minStockLevel || 0,
+                    description: description || undefined,
+                    updatedBy: req.userId,
+                });
+                results.push({ row: rowNum, code, name, action: 'updated' });
+            } else {
+                // Check duplicate name if no code
+                if (!code) {
+                    const dupName = await Material.findOne({ name, isDeleted: { $ne: true } }).select('_id').lean();
+                    if (dupName) {
+                        results.push({ row: rowNum, code, name, action: 'error', reason: 'Tên vật tư đã tồn tại (không có mã để phân biệt)' });
+                        continue;
+                    }
+                }
+                await materialRepository.create({
+                    code: code || undefined,
+                    name, category: category || undefined, unit,
+                    minStockLevel: minStockLevel || 0,
+                    description: description || undefined,
+                    isActive: true,
+                    createdBy: req.userId,
+                    updatedBy: req.userId,
+                });
+                results.push({ row: rowNum, code, name, action: 'created' });
+            }
+        } catch (err: any) {
+            results.push({ row: rowNum, code, name, action: 'error', reason: err?.message || 'Lỗi không xác định' });
+        }
+    }
+
+    const created = results.filter((r) => r.action === 'created').length;
+    const updated = results.filter((r) => r.action === 'updated').length;
+    const errors = results.filter((r) => r.action === 'error').length;
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: { created, updated, errors, total: dataRows.length, rows: results },
+            message: `Import hoàn tất: ${created} tạo mới, ${updated} cập nhật, ${errors} lỗi`,
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+// ─── MATERIAL IMPORT HELPERS ─────────────────────────────────────────────────
+
+type MaterialImportRow = {
+    rowNumber: number;
+    isValid: boolean;
+    values: { code: string; name: string; category: string; unit: string; minStockLevel: number; description: string };
+    errors: string[];
+    action?: 'create' | 'update';
+    payload?: Record<string, any>;
+};
+
+const parseMaterialImportRows = async (fileBuffer: Buffer): Promise<MaterialImportRow[]> => {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(fileBuffer as any);
+    const ws = wb.worksheets[0];
+    if (!ws) throw new BadRequestError('File Excel không hợp lệ');
+
+    const rows: MaterialImportRow[] = [];
+
+    ws.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        const code = String(row.getCell(1).value ?? '').trim();
+        const name = String(row.getCell(2).value ?? '').trim();
+        const category = String(row.getCell(3).value ?? '').trim();
+        const unit = String(row.getCell(4).value ?? '').trim();
+        const minStockLevel = Number(row.getCell(5).value ?? 0);
+        const description = String(row.getCell(6).value ?? '').trim();
+        if (!code && !name) return;
+
+        const errors: string[] = [];
+        if (!name) errors.push('Tên vật tư không được để trống');
+        if (!unit) errors.push('Đơn vị tính không được để trống');
+        if (isNaN(minStockLevel) || minStockLevel < 0) errors.push('Ngưỡng tối thiểu phải >= 0');
+
+        rows.push({
+            rowNumber: rowNum,
+            isValid: errors.length === 0,
+            values: { code, name, category, unit, minStockLevel: isNaN(minStockLevel) ? 0 : minStockLevel, description },
+            errors,
+            payload: errors.length === 0 ? { code: code || undefined, name, category: category || undefined, unit, minStockLevel: minStockLevel || 0, description: description || undefined } : undefined,
+        });
+    });
+
+    if (!rows.length) throw new BadRequestError('File không có dòng dữ liệu');
+
+    // Kiểm tra trùng mã trong file
+    const codeCount = new Map<string, number>();
+    rows.forEach((r) => { if (r.values.code) codeCount.set(r.values.code, (codeCount.get(r.values.code) ?? 0) + 1); });
+    rows.forEach((r) => {
+        if (r.values.code && (codeCount.get(r.values.code) ?? 0) > 1) {
+            r.errors.push('Mã vật tư bị trùng trong file');
+            r.isValid = false;
+            r.payload = undefined;
+        }
+    });
+
+    // Kiểm tra mã đã tồn tại trong DB → action = update
+    const codes = rows.filter((r) => r.payload?.code).map((r) => r.payload!.code);
+    const existingMap = new Map<string, string>();
+    if (codes.length) {
+        const existing = await Material.find({ code: { $in: codes }, isDeleted: { $ne: true } }).select('_id code').lean();
+        existing.forEach((m: any) => existingMap.set(m.code, String(m._id)));
+    }
+
+    rows.forEach((r) => {
+        if (!r.payload) return;
+        if (r.payload.code && existingMap.has(r.payload.code)) {
+            r.action = 'update';
+            r.payload._existingId = existingMap.get(r.payload.code);
+        } else {
+            r.action = 'create';
+        }
+    });
+
+    // Kiểm tra trùng tên trong DB cho rows không có mã (sẽ tạo mới)
+    const namesToCheck = rows.filter((r) => r.action === 'create' && !r.payload?.code && r.payload?.name).map((r) => r.payload!.name);
+    if (namesToCheck.length) {
+        const dupNames = await Material.find({ name: { $in: namesToCheck }, isDeleted: { $ne: true } }).select('name').lean();
+        const dupNameSet = new Set(dupNames.map((m: any) => m.name));
+        rows.forEach((r) => {
+            if (r.action === 'create' && !r.payload?.code && r.payload?.name && dupNameSet.has(r.payload.name)) {
+                r.errors.push('Tên vật tư đã tồn tại (không có mã để phân biệt)');
+                r.isValid = false;
+                r.action = undefined;
+                r.payload = undefined;
+            }
+        });
+    }
+
+    // Kiểm tra trùng tên trong chính file (rows không có mã)
+    const nameInFileCount = new Map<string, number>();
+    rows.forEach((r) => { if (!r.values.code && r.values.name) nameInFileCount.set(r.values.name, (nameInFileCount.get(r.values.name) ?? 0) + 1); });
+    rows.forEach((r) => {
+        if (!r.values.code && r.values.name && (nameInFileCount.get(r.values.name) ?? 0) > 1) {
+            r.errors.push('Tên vật tư bị trùng trong file (không có mã)');
+            r.isValid = false;
+            r.action = undefined;
+            r.payload = undefined;
+        }
+    });
+
+    return rows;
+};
+
+export const previewMaterialImport = async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.file) throw new BadRequestError('Vui lòng chọn file Excel');
+
+    const rows = await parseMaterialImportRows(req.file.buffer);
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: {
+                summary: {
+                    totalRows: rows.length,
+                    validRows: rows.filter((r) => r.isValid).length,
+                    invalidRows: rows.filter((r) => !r.isValid).length,
+                    toCreate: rows.filter((r) => r.action === 'create').length,
+                    toUpdate: rows.filter((r) => r.action === 'update').length,
+                },
+                rows: rows.map(({ payload, ...r }) => r),
+            },
+            message: 'Xem trước import vật tư thành công',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const confirmMaterialImport = async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.file) throw new BadRequestError('Vui lòng chọn file Excel');
+
+    const rows = await parseMaterialImportRows(req.file.buffer);
+    let created = 0, updated = 0, errors = 0;
+
+    for (const row of rows) {
+        if (!row.payload || !row.isValid) { errors++; continue; }
+        try {
+            if (row.action === 'update' && row.payload._existingId) {
+                const { _existingId, ...data } = row.payload;
+                await materialRepository.updateById(_existingId, { ...data, updatedBy: req.userId });
+                updated++;
+            } else {
+                await materialRepository.create({ ...row.payload, isActive: true, createdBy: req.userId, updatedBy: req.userId });
+                created++;
+            }
+        } catch {
+            errors++;
+        }
+    }
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: { created, updated, errors, total: rows.length },
+            message: `Import hoàn tất: ${created} tạo mới, ${updated} cập nhật, ${errors} lỗi`,
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const getDistributionCostReport = async (req: Request, res: Response, next: NextFunction) => {
+    const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
+    const startDate = req.query.startDate ? new Date(String(req.query.startDate)) : undefined;
+    const endDate = req.query.endDate ? (() => { const d = new Date(String(req.query.endDate)); d.setHours(23, 59, 59, 999); return d; })() : undefined;
+
+    const matchStage: Record<string, any> = {
+        isDeleted: { $ne: true },
+        status: { $in: ['distributed', 'confirmed'] },
+    };
+    if (plantId) matchStage.toPlantId = new mongoose.Types.ObjectId(plantId);
+    if (startDate || endDate) {
+        // dùng createdAt vì distributedAt có thể null trên một số record cũ
+        matchStage.createdAt = {};
+        if (startDate) matchStage.createdAt.$gte = startDate;
+        if (endDate) matchStage.createdAt.$lte = endDate;
+    }
+
+    const DistributionRecord = (await import('@/models/DistributionRecord')).default;
+
+    const byPlant = await DistributionRecord.aggregate([
+        { $match: matchStage },
+        { $unwind: '$items' },
+        {
+            $group: {
+                _id: '$toPlantId',
+                totalWithVat: { $sum: { $ifNull: ['$items.totalWithVat', 0] } },
+                totalAmount: { $sum: { $ifNull: ['$items.totalPrice', 0] } },
+                count: { $addToSet: '$_id' },
+            },
+        },
+        {
+            $lookup: {
+                from: 'plants',
+                localField: '_id',
+                foreignField: '_id',
+                as: 'plant',
+            },
+        },
+        { $unwind: { path: '$plant', preserveNullAndEmptyArrays: true } },
+        { $sort: { totalWithVat: -1 } },
+    ]);
+
+    const byPeriod = await DistributionRecord.aggregate([
+        { $match: matchStage },
+        { $unwind: '$items' },
+        {
+            $group: {
+                _id: {
+                    year: { $year: '$createdAt' },
+                    month: { $month: '$createdAt' },
+                    docId: '$_id',
+                    ...(plantId ? { plantId: '$toPlantId' } : {}),
+                },
+                totalWithVat: { $sum: { $ifNull: ['$items.totalWithVat', 0] } },
+            },
+        },
+        {
+            $group: {
+                _id: { year: '$_id.year', month: '$_id.month', ...(plantId ? { plantId: '$_id.plantId' } : {}) },
+                totalWithVat: { $sum: '$totalWithVat' },
+                count: { $sum: 1 },
+            },
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
+    ]);
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: {
+                byPlant: byPlant.map((r: any) => ({
+                    plantId: String(r._id),
+                    plantName: r.plant?.name || 'Không xác định',
+                    totalWithVat: Number(r.totalWithVat.toFixed(2)),
+                    totalAmount: Number(r.totalAmount.toFixed(2)),
+                    count: r.count.length,
+                })),
+                byPeriod: byPeriod.map((r: any) => ({
+                    period: `${r._id.year}-${String(r._id.month).padStart(2, '0')}`,
+                    totalWithVat: Number(r.totalWithVat.toFixed(2)),
+                    count: r.count,
+                })),
+            },
+            message: 'Lay bao cao chi phi cap phat thanh cong',
             status: StatusCodes.OK,
             success: true,
         })
@@ -693,5 +1109,5 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
     const filename = `BaoCaoVatTu_${(startDate || '').replace(/-/g, '')}_${(endDate || '').replace(/-/g, '')}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    return res.send(buffer);
+    return res.send(Buffer.from(buffer));
 };

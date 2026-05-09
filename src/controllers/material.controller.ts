@@ -49,6 +49,26 @@ export const getTopMaterials = asyncHandler(async (req: Request, res: Response, 
     return await materialService.getTopMaterials(req, res, next);
 });
 
+export const exportMaterialCatalogExcel = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await materialService.exportMaterialCatalogExcel(req, res, next);
+});
+
+export const downloadMaterialImportTemplate = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await materialService.downloadMaterialImportTemplate(req, res, next);
+});
+
+export const previewMaterialImport = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await materialService.previewMaterialImport(req, res, next);
+});
+
+export const confirmMaterialImport = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await materialService.confirmMaterialImport(req, res, next);
+});
+
 export const exportMaterialReportExcel = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await materialService.exportMaterialReportExcel(req, res, next);
+});
+
+export const getDistributionCostReport = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await materialService.getDistributionCostReport(req, res, next);
 });

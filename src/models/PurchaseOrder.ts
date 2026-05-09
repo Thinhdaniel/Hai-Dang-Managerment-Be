@@ -45,6 +45,8 @@ const PurchaseOrderSchema = new mongoose.Schema(
         receivedAt: { type: Date },
         cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         cancelledReason: { type: String, trim: true },
+        supplierId: { type: mongoose.Schema.Types.ObjectId, ref: 'Supplier' },
+        supplierName: { type: String, trim: true },
         note: { type: String, trim: true },
         isDeleted: { type: Boolean, default: false },
         deletedAt: { type: Date },

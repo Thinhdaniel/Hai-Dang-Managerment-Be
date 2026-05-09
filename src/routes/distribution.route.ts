@@ -20,5 +20,6 @@ router.patch('/:id/confirm', validateObjectId, validator(confirmDistributionSche
 
 // Dynamic /:id routes last
 router.get('/:id', validateObjectId, distributionController.getDistributionRecordById);
+router.patch('/:id', requireCS1Manager, validateObjectId, distributionController.updateDistributionRecord);
 
 export default router;

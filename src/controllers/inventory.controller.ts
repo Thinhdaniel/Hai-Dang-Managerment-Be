@@ -30,6 +30,10 @@ export const importExcel = asyncHandler(async (req: Request, res: Response, next
     return await inventoryService.importExcel(req, res, next);
 });
 
+export const previewInventoryImport = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await inventoryService.previewInventoryImport(req, res, next);
+});
+
 export const downloadTemplate = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await inventoryService.downloadTemplate(req, res, next);
 });

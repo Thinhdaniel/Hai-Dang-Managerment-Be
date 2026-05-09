@@ -19,6 +19,7 @@ import {
     getMaterialsMap,
     getSuppliersMap,
 } from '@/services/material-domain.helpers';
+import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -67,6 +68,7 @@ const buildFreeFormItems = (rawItems: any[]) => {
 const buildPurchaseRequestFilter = (query: Request['query'], req: Request) => {
     const filter: Record<string, any> = {
         isDeleted: { $ne: true },
+        requestType: { $ne: 'supply_request' },
     };
 
     const regex = buildSearchRegex(query.search, { flexibleWhitespace: true });
@@ -233,6 +235,15 @@ export const createPurchaseRequest = async (req: Request, res: Response, next: N
 
     const createdRequest = await purchaseRequestRepository.findById(String(request._id));
 
+    const actorName = await getActorName(req.userId);
+    await notifyAdmins('notify:new', {
+        type: 'info',
+        actionType: 'purchase_request',
+        actionId: String(request._id),
+        title: 'Phiếu đề xuất mua vật tư mới',
+        message: `${actorName} đã tạo phiếu đề xuất ${(createdRequest as any)?.requestCode || ''}`,
+    });
+
     return res.status(StatusCodes.CREATED).json(
         customResponse({
             data: serializePurchaseRequest(createdRequest),
@@ -334,6 +345,15 @@ export const approvePurchaseRequest = async (req: Request, res: Response, next: 
         note: req.body.note !== undefined ? req.body.note?.trim() || undefined : request.note,
     });
 
+    const actorName = await getActorName(req.userId);
+    await notifyUser(toId(request.requestedBy)!, 'notify:new', {
+        type: 'success',
+        actionType: 'purchase_request',
+        actionId: String(req.params.id),
+        title: 'Phiếu đề xuất được duyệt',
+        message: `${actorName} đã duyệt phiếu ${(request as any).requestCode || ''}`,
+    });
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializePurchaseRequest(approvedRequest),
@@ -360,6 +380,15 @@ export const rejectPurchaseRequest = async (req: Request, res: Response, next: N
         approvedBy: req.userId,
         approvedAt: new Date(),
         rejectedReason: req.body.reason?.trim(),
+    });
+
+    const actorName = await getActorName(req.userId);
+    await notifyUser(toId(request.requestedBy)!, 'notify:new', {
+        type: 'error',
+        actionType: 'purchase_request',
+        actionId: String(req.params.id),
+        title: 'Phiếu đề xuất bị từ chối',
+        message: `${actorName} đã từ chối phiếu ${(request as any).requestCode || ''}${req.body.reason ? ': ' + req.body.reason : ''}`,
     });
 
     return res.status(StatusCodes.OK).json(
@@ -532,5 +561,5 @@ export const exportPurchaseRequestXlsx = async (req: Request, res: Response, nex
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+    res.send(Buffer.from(buffer));
 };

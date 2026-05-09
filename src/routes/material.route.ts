@@ -3,11 +3,13 @@ import { authenticate } from '@/middlewares/authenticationMiddleware';
 import { authorize } from '@/middlewares/authorizationMiddleware';
 import validator from '@/middlewares/validator';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
+import { excelUpload } from '@/middlewares/multerMiddleware';
 import { USER_ROLE } from '@/constant/allowedRoles';
 import * as materialController from '@/controllers/material.controller';
 import { createMaterialSchema, updateMaterialSchema } from '@/validations/material.validation';
 
 const router = Router();
+const upload = excelUpload;
 
 router.use(authenticate);
 
@@ -37,11 +39,20 @@ router.get(
     materialController.getTopMaterials
 );
 router.get(
+    '/reports/distribution-cost',
+    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    materialController.getDistributionCostReport
+);
+router.get(
     '/reports/export-excel',
     authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
     materialController.exportMaterialReportExcel
 );
 router.get('/low-stock', materialController.getLowStockMaterials);
+router.get('/export-excel', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), materialController.exportMaterialCatalogExcel);
+router.get('/import-template', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), materialController.downloadMaterialImportTemplate);
+router.post('/import/preview', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), upload.single('file'), materialController.previewMaterialImport);
+router.post('/import/confirm', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), upload.single('file'), materialController.confirmMaterialImport);
 router.post('/', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), validator(createMaterialSchema), materialController.createMaterial);
 router.get('/', materialController.getAllMaterials);
 router.get('/:id', validateObjectId, materialController.getMaterialById);

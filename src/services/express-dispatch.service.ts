@@ -91,9 +91,16 @@ export const expressDispatch = async (req: Request, res: Response, next: NextFun
         // 1. Tạo PurchaseOrder (received)
         const orderCode = await generateDocumentCode({ model: PurchaseOrder, field: 'orderCode', prefix: 'PO', session });
 
+        // Nếu tất cả items cùng 1 supplier → gán lên order level
+        const uniqueSupplierIds = [...new Set(processedItems.map((i) => String(i.supplierId)))];
+        const orderSupplierId = uniqueSupplierIds.length === 1 ? processedItems[0].supplierId : undefined;
+        const orderSupplierName = uniqueSupplierIds.length === 1 ? processedItems[0].supplierName : undefined;
+
         const [order] = await PurchaseOrder.create([{
             orderCode,
             status: 'received',
+            supplierId: orderSupplierId,
+            supplierName: orderSupplierName,
             items: processedItems.map((i) => ({
                 materialName: i.materialName.trim(),
                 unit: i.unit.trim(),
@@ -130,7 +137,7 @@ export const expressDispatch = async (req: Request, res: Response, next: NextFun
                 performedBy: req.userId,
                 note: `[Xuat khan cap] Nhap vao CS1${note?.trim() ? ' - ' + note.trim() : ''}`,
             })),
-            { session }
+            { session, ordered: true }
         );
 
         // 3. Tạo DistributionRecord (distributed)
@@ -176,7 +183,7 @@ export const expressDispatch = async (req: Request, res: Response, next: NextFun
                 performedBy: req.userId,
                 note: `[Xuat khan cap] Xuat khoi CS1${note?.trim() ? ' - ' + note.trim() : ''}`,
             })),
-            { session }
+            { session, ordered: true }
         );
 
         await session.commitTransaction();

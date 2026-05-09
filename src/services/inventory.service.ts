@@ -464,6 +464,97 @@ export const initializeStock = async (req: Request, res: Response, next: NextFun
     );
 };
 
+// ─── PREVIEW IMPORT EXCEL ────────────────────────────────────────────────────
+
+export const previewInventoryImport = async (req: Request, res: Response, next: NextFunction) => {
+    const { plantId } = req.body as { plantId: string };
+
+    if (!plantId || String(plantId) !== MAIN_PLANT_ID) {
+        throw new BadRequestError('Chi CS1 moi co the import ton kho');
+    }
+
+    if (!req.file) {
+        throw new BadRequestError('Vui long chon file Excel');
+    }
+
+    const plant = await ensurePlantExists(plantId);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(req.file.buffer) as any);
+    const ws = wb.worksheets[0];
+    if (!ws) throw new BadRequestError('File Excel khong hop le');
+
+    type PreviewRow = {
+        row: number;
+        materialCode: string;
+        materialName?: string;
+        currentStock?: number;
+        newStock: number;
+        note: string;
+        isValid: boolean;
+        reason?: string;
+    };
+
+    const dataRows: Array<{ rowNum: number; materialCode: string; qty: number; note: string }> = [];
+    ws.eachRow((row, rowNum) => {
+        if (rowNum <= 6) return;
+        const materialCode = String(row.getCell(2).value ?? '').trim().toUpperCase();
+        if (!materialCode) return;
+        const qty = Number(row.getCell(5).value ?? 0);
+        const note = String(row.getCell(6).value ?? '').trim();
+        dataRows.push({ rowNum, materialCode, qty, note });
+    });
+
+    const codes = dataRows.map((r) => r.materialCode);
+    const materials = await Material.find({
+        code: { $in: codes.map((c) => new RegExp(`^${c}$`, 'i')) },
+        isDeleted: { $ne: true },
+    }).select('_id code name').lean();
+    const materialMap = new Map(materials.map((m: any) => [m.code.toUpperCase(), m]));
+
+    const stocks = await (InventoryStock as any).find({
+        materialId: { $in: materials.map((m: any) => m._id) },
+        plantId: plant._id,
+        isDeleted: { $ne: true },
+    }).lean();
+    const stockMap = new Map(stocks.map((s: any) => [String(s.materialId), Number(s.currentStock ?? 0)]));
+
+    const rows: PreviewRow[] = dataRows.map(({ rowNum, materialCode, qty, note }) => {
+        if (isNaN(qty) || qty < 0) {
+            return { row: rowNum, materialCode, newStock: qty, note, isValid: false, reason: 'So luong phai >= 0' };
+        }
+        const material = materialMap.get(materialCode);
+        if (!material) {
+            return { row: rowNum, materialCode, newStock: qty, note, isValid: false, reason: 'Khong tim thay vat tu' };
+        }
+        const currentStock = stockMap.get(String(material._id)) ?? 0;
+        return {
+            row: rowNum,
+            materialCode,
+            materialName: (material as any).name as string,
+            currentStock: currentStock as number,
+            newStock: qty,
+            note,
+            isValid: true as const,
+        };
+    });
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: {
+                summary: {
+                    totalRows: rows.length,
+                    validRows: rows.filter((r) => r.isValid).length,
+                    invalidRows: rows.filter((r) => !r.isValid).length,
+                },
+                rows,
+            },
+            message: 'Xem truoc import ton kho thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
 // ─── IMPORT EXCEL ────────────────────────────────────────────────────────────
 
 export const importExcel = async (req: Request, res: Response, next: NextFunction) => {
@@ -584,7 +675,7 @@ export const downloadTemplate = async (req: Request, res: Response, next: NextFu
     const buffer = await generateImportTemplate();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="mau-nhap-ton-kho.xlsx"');
-    res.send(buffer);
+    res.send(Buffer.from(buffer));
 };
 
 // ─── EXPORT EXCEL ────────────────────────────────────────────────────────────
@@ -639,7 +730,7 @@ export const exportExcel = async (req: Request, res: Response, next: NextFunctio
         const buffer = await generateHistoryReport(rows, plantName, startDate, endDate);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename="lich-su-nhap-xuat.xlsx"');
-        return res.send(buffer);
+        return res.send(Buffer.from(buffer));
     }
 
     // type === 'stock'
@@ -670,5 +761,5 @@ export const exportExcel = async (req: Request, res: Response, next: NextFunctio
     const buffer = await generateStockReport(rows, plantName);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="bao-cao-ton-kho.xlsx"');
-    return res.send(buffer);
+    return res.send(Buffer.from(buffer));
 };

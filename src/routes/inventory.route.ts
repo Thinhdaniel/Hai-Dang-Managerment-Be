@@ -15,6 +15,12 @@ router.use(authenticate);
 // ── New routes (must be before /:materialId) ──────────────────────────────
 router.get('/import-template', inventoryController.downloadTemplate);
 router.post(
+    '/import-preview',
+    authorize(USER_ROLE.ADMIN),
+    excelUpload.single('file'),
+    inventoryController.previewInventoryImport
+);
+router.post(
     '/import-excel',
     authorize(USER_ROLE.ADMIN),
     excelUpload.single('file'),

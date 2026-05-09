@@ -13,6 +13,7 @@ import {
     toId,
 } from '@/services/material-workflow.helpers';
 import { buildDistributionItems, getMaterialsMap } from '@/services/material-domain.helpers';
+import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -163,6 +164,15 @@ export const createSupplyRequest = async (req: Request, res: Response, next: Nex
 
     const created = await purchaseRequestRepository.findById(String(request._id));
 
+    const actorName = await getActorName(req.userId);
+    await notifyAdmins('notify:new', {
+        type: 'info',
+        actionType: 'supply_request',
+        actionId: String(request._id),
+        title: 'Phiếu đề xuất cấp vật tư mới',
+        message: `${actorName} đã tạo phiếu đề xuất cấp vật tư ${(created as any)?.requestCode || ''}`,
+    });
+
     return res.status(StatusCodes.CREATED).json(
         customResponse({
             data: serializePurchaseRequest(created),
@@ -249,6 +259,15 @@ export const rejectSupplyRequest = async (req: Request, res: Response, next: Nex
         rejectedReason: req.body.reason?.trim(),
     });
 
+    const actorName = await getActorName(req.userId);
+    await notifyUser(toId(request.requestedBy)!, 'notify:new', {
+        type: 'error',
+        actionType: 'supply_request',
+        actionId: String(req.params.id),
+        title: 'Phiếu đề xuất cấp vật tư bị từ chối',
+        message: `${actorName} đã từ chối phiếu ${(request as any).requestCode || ''}${req.body.reason ? ': ' + req.body.reason : ''}`,
+    });
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializePurchaseRequest(updated),
@@ -273,7 +292,7 @@ export const exportSupplyRequestXlsx = async (req: Request, res: Response, next:
     const filename = `Phieu_De_Xuat_Cap_Vat_Tu_${data.requestCode ?? req.params.id}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+    res.send(Buffer.from(buffer));
 };
 
 
@@ -314,6 +333,15 @@ export const approveSupplyRequest = async (req: Request, res: Response, next: Ne
         approvedBy: req.userId,
         approvedAt: new Date(),
         items: updatedItems,
+    });
+
+    const actorName = await getActorName(req.userId);
+    await notifyUser(toId(request.requestedBy)!, 'notify:new', {
+        type: 'success',
+        actionType: 'supply_request',
+        actionId: String(req.params.id),
+        title: 'Phiếu đề xuất cấp vật tư được duyệt',
+        message: `${actorName} đã duyệt phiếu ${(request as any).requestCode || ''}`,
     });
 
     return res.status(StatusCodes.OK).json(
