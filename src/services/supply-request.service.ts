@@ -307,23 +307,16 @@ export const approveSupplyRequest = async (req: Request, res: Response, next: Ne
         throw new BadRequestError('Chi co the duyet phieu dang cho duyet');
     }
 
-    // Map materialId + quantityApproved vào từng item theo thứ tự
-    const approvalItems: Array<{ materialId: string; quantityApproved: number }> = req.body.items ?? [];
+    const approvalItems: Array<{ materialId?: string; quantityApproved: number }> = req.body.items ?? [];
     if (!approvalItems.length) {
         throw new BadRequestError('Phai cung cap thong tin duyet cho it nhat 1 vat tu');
     }
 
-    const materialIds = approvalItems.map((i) => i.materialId);
-    const materialsMap = await getMaterialsMap(materialIds);
-
     const updatedItems = (request.items as any[]).map((item: any, idx: number) => {
         const approval = approvalItems[idx];
         if (!approval) return item;
-        const mat = materialsMap.get(String(approval.materialId));
-        if (!mat) throw new BadRequestError(`Khong tim thay vat tu: ${approval.materialId}`);
         return {
             ...item.toObject ? item.toObject() : item,
-            materialId: mat._id,
             quantityApproved: Number(approval.quantityApproved),
         };
     });

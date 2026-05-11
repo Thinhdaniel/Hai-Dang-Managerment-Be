@@ -22,7 +22,7 @@ export const updateSupplyRequestSchema = z.object({
 
 export const approveSupplyRequestSchema = z.object({
     items: z.array(z.object({
-        materialId: zObjectId('Vat tu'),
+        materialId: zObjectId('Vat tu').optional(),
         quantityApproved: z.number().gt(0, { message: 'So luong duyet phai lon hon 0' }),
     })).min(1, { message: 'Phai co it nhat 1 vat tu duoc duyet' }),
 });

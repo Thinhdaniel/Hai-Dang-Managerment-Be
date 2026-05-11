@@ -117,3 +117,13 @@ export const requireCS1Director = (req: Request, res: Response, next: NextFuncti
     }
     return next();
 };
+
+/** admin | manager | director thuoc bat ky co so nao */
+export const requirePlantManager = (req: Request, res: Response, next: NextFunction) => {
+    const plantId = resolveUserPlantId(req);
+    const hasRole = [USER_ROLE.ADMIN, USER_ROLE.MANAGER, USER_ROLE.DIRECTOR].includes(req.role as USER_ROLE);
+    if (!plantId || !hasRole) {
+        return next(new UnAuthorizedError('Chi quan ly co so moi co quyen thuc hien'));
+    }
+    return next();
+};

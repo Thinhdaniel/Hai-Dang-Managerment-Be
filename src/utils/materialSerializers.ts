@@ -334,6 +334,7 @@ export const serializeDistributionRecord = (input: any) => {
     return {
         id: toId(distribution),
         distributionCode: distribution?.distributionCode,
+        distributionType: distribution?.distributionType ?? 'facility_transfer',
         fromPlantId: fromPlant?.id ?? toId(distribution?.fromPlantId),
         fromPlant,
         toPlantId: toPlant?.id ?? toId(distribution?.toPlantId),
@@ -348,6 +349,9 @@ export const serializeDistributionRecord = (input: any) => {
         distributedAt: toIso(distribution?.distributedAt),
         confirmedBy: confirmedBy ?? toId(distribution?.confirmedBy),
         confirmedAt: toIso(distribution?.confirmedAt),
+        requesterName: distribution?.requesterName,
+        targetDepartment: distribution?.targetDepartment,
+        targetLine: distribution?.targetLine,
         note: distribution?.note,
         createdAt: toIso(distribution?.createdAt),
         updatedAt: toIso(distribution?.updatedAt),

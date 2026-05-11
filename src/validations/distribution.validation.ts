@@ -1,4 +1,4 @@
-import { zObjectId, zOptionalString } from '@/lib/validation';
+import { zObjectId, zOptionalString, zRequiredString } from '@/lib/validation';
 import { z } from 'zod';
 
 const distributionItemSchema = z.object({
@@ -25,6 +25,33 @@ export const createDistributionRecordSchema = z.object({
     note: zOptionalString(),
 });
 
+export const createInternalDistributionRecordSchema = z.object({
+    distributedAt: zOptionalString(),
+    requesterName: zRequiredString('Ten nguoi xin cap'),
+    targetDepartment: zOptionalString(),
+    targetLine: zOptionalString(),
+    items: z.array(distributionItemSchema).min(1, { message: 'Phai co it nhat 1 vat tu' }),
+    note: zOptionalString(),
+});
+
 export const confirmDistributionSchema = z.object({
+    note: zOptionalString(),
+});
+
+export const createInternalDraftSchema = z.object({
+    targetDepartment: zOptionalString(),
+    targetLine: zOptionalString(),
+    requesterName: zRequiredString('Ten nguoi xin cap'),
+    note: zOptionalString(),
+    distributedAt: zOptionalString(),
+    status: z.enum(['draft', 'confirmed']).optional(),
+    items: z.array(distributionItemSchema).min(1, { message: 'Phai co it nhat 1 vat tu' }),
+});
+
+export const appendInternalItemsSchema = z.object({
+    items: z.array(distributionItemSchema).min(1, { message: 'Phai co it nhat 1 vat tu' }),
+});
+
+export const finalizeInternalDraftSchema = z.object({
     note: zOptionalString(),
 });

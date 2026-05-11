@@ -1,9 +1,16 @@
 import { Router } from 'express';
-import { authenticate, requireCS1Manager } from '@/middlewares/authenticationMiddleware';
+import { authenticate, requireCS1Manager, requirePlantManager } from '@/middlewares/authenticationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import * as distributionController from '@/controllers/distribution.controller';
-import { confirmDistributionSchema, createDistributionRecordSchema } from '@/validations/distribution.validation';
+import {
+    confirmDistributionSchema,
+    createDistributionRecordSchema,
+    createInternalDistributionRecordSchema,
+    createInternalDraftSchema,
+    appendInternalItemsSchema,
+    finalizeInternalDraftSchema,
+} from '@/validations/distribution.validation';
 
 const router = Router();
 
@@ -12,6 +19,9 @@ router.use(authenticate);
 // Static routes first
 router.get('/', distributionController.getAllDistributionRecords);
 router.post('/', requireCS1Manager, validator(createDistributionRecordSchema), distributionController.createDistributionRecord);
+router.post('/internal', requirePlantManager, validator(createInternalDraftSchema), distributionController.createInternalDistributionRecord);
+router.post('/:id/internal/items', requirePlantManager, validateObjectId, validator(appendInternalItemsSchema), distributionController.appendInternalItems);
+router.patch('/:id/internal/finalize', requirePlantManager, validateObjectId, validator(finalizeInternalDraftSchema), distributionController.finalizeInternalDraft);
 
 // Sub-resource routes before /:id
 router.get('/:id/export-xlsx', validateObjectId, distributionController.exportDistributionXlsx);

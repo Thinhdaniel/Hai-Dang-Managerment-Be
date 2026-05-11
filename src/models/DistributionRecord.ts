@@ -26,6 +26,11 @@ const DistributionRecordSchema = new mongoose.Schema(
             type: String,
             trim: true,
         },
+        distributionType: {
+            type: String,
+            enum: ['facility_transfer', 'internal_issue'],
+            default: 'facility_transfer',
+        },
         fromPlantId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Plant',
@@ -49,7 +54,7 @@ const DistributionRecordSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['pending', 'processing', 'distributed', 'confirmed'],
+            enum: ['draft', 'pending', 'processing', 'distributed', 'confirmed'],
             default: 'pending',
         },
         distributedBy: {
@@ -66,6 +71,9 @@ const DistributionRecordSchema = new mongoose.Schema(
         confirmedAt: {
             type: Date,
         },
+        requesterName: { type: String, trim: true },
+        targetDepartment: { type: String, trim: true },
+        targetLine: { type: String, trim: true },
         note: { type: String, trim: true },
         totalAmount: { type: Number, min: 0 },
         totalVatAmount: { type: Number, min: 0 },

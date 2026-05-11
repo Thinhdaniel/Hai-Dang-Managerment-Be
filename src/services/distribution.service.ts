@@ -27,50 +27,62 @@ import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
 const buildDistributionFilter = (query: Request['query'], req: Request) => {
-    const filter: Record<string, any> = {
-        isDeleted: { $ne: true },
-    };
+    const conditions: Record<string, any>[] = [{ isDeleted: { $ne: true } }];
 
     const regex = buildSearchRegex(query.search, { flexibleWhitespace: true });
 
     if (regex) {
-        filter.$or = [{ distributionCode: regex }, { note: regex }, { 'items.materialName': regex }];
+        conditions.push({
+            $or: [
+                { distributionCode: regex },
+                { note: regex },
+                { requesterName: regex },
+                { targetDepartment: regex },
+                { targetLine: regex },
+                { 'items.materialName': regex },
+            ],
+        });
     }
 
     if (query.status) {
-        filter.status = query.status;
+        conditions.push({ status: query.status });
     }
 
     if (query.fromPlantId) {
-        filter.fromPlantId = query.fromPlantId;
+        conditions.push({ fromPlantId: query.fromPlantId });
     }
 
     if (query.toPlantId) {
-        filter.toPlantId = query.toPlantId;
+        conditions.push({ toPlantId: query.toPlantId });
+    }
+
+    if (query.distributionType) {
+        conditions.push({ distributionType: query.distributionType });
     }
 
     if (query.startDate || query.endDate) {
-        filter.createdAt = {};
+        const createdAt: Record<string, any> = {};
         if (query.startDate) {
-            filter.createdAt.$gte = new Date(String(query.startDate));
+            createdAt.$gte = new Date(String(query.startDate));
         }
         if (query.endDate) {
             const endDate = new Date(String(query.endDate));
             endDate.setHours(23, 59, 59, 999);
-            filter.createdAt.$lte = endDate;
+            createdAt.$lte = endDate;
         }
+        conditions.push({ createdAt });
     }
 
     if (query.supplyRequestId) {
-        filter.supplyRequestId = query.supplyRequestId;
+        conditions.push({ supplyRequestId: query.supplyRequestId });
     }
 
     if (!isManagerRole(req.role)) {
         const userPlantId = getUserPlantId(req);
-        filter.$or = [{ fromPlantId: userPlantId }, { toPlantId: userPlantId }];
+        conditions.push({ $or: [{ fromPlantId: userPlantId }, { toPlantId: userPlantId }] });
     }
 
-    return filter;
+    return conditions.length === 1 ? conditions[0] : { $and: conditions };
 };
 
 const ensureDistributionAccess = (req: Request, distribution: any) => {
@@ -228,6 +240,246 @@ export const createDistributionRecord = async (req: Request, res: Response, next
             success: true,
         })
     );
+};
+
+export const createInternalDistributionRecord = async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const fromPlantId = getUserPlantId(req);
+        if (!fromPlantId) throw new BadRequestError('Nguoi dung chua duoc gan co so');
+
+        const isDraft = req.body.status === 'draft';
+
+        const distributionCode = await generateDocumentCode({
+            model: DistributionRecord,
+            field: 'distributionCode',
+            prefix: 'CPNB',
+            session,
+        });
+
+        const materialIds: string[] = Array.from(
+            new Set((req.body.items ?? []).map((item: any) => String(item.materialId)).filter(Boolean))
+        );
+        const materialsMap = await getMaterialsMap(materialIds, session);
+
+        const builtItems = (req.body.items ?? []).map((item: any, idx: number) => {
+            const material = materialsMap.get(String(item.materialId));
+            if (!material) throw new BadRequestError(`Khong tim thay vat tu dong ${idx + 1}`);
+
+            const qty = Number(item.quantity ?? 0);
+            if (qty <= 0) throw new BadRequestError(`Item ${idx + 1}: so luong cap phat phai lon hon 0`);
+
+            const unitPrice = Number(item.unitPrice ?? 0);
+            const vatRate = Number(item.vatRate ?? 0);
+            const totalPrice = Number((qty * unitPrice).toFixed(2));
+            const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
+            const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
+
+            return {
+                materialId: material._id,
+                materialName: material.name,
+                unit: item.unit?.trim() || material.unit,
+                quantityRequested: Number(item.quantityRequested ?? qty),
+                quantity: qty,
+                unitPrice,
+                totalPrice,
+                vatRate,
+                vatAmount,
+                totalWithVat,
+                adjustReason: item.adjustReason?.trim() || undefined,
+                note: item.note?.trim() || undefined,
+            };
+        });
+
+        const distributedAt = req.body.distributedAt ? new Date(req.body.distributedAt) : new Date();
+        const totalAmount = Number(builtItems.reduce((sum: number, item: any) => sum + (item.totalPrice ?? 0), 0).toFixed(2));
+        const totalVatAmount = Number(builtItems.reduce((sum: number, item: any) => sum + (item.vatAmount ?? 0), 0).toFixed(2));
+        const totalWithVat = Number(builtItems.reduce((sum: number, item: any) => sum + (item.totalWithVat ?? 0), 0).toFixed(2));
+
+        const recordData: any = {
+            distributionCode,
+            distributionType: 'internal_issue',
+            fromPlantId,
+            toPlantId: fromPlantId,
+            status: isDraft ? 'draft' : 'confirmed',
+            requesterName: req.body.requesterName?.trim(),
+            targetDepartment: req.body.targetDepartment?.trim() || undefined,
+            targetLine: req.body.targetLine?.trim() || undefined,
+            items: builtItems,
+            totalAmount,
+            totalVatAmount,
+            totalWithVat,
+            distributedBy: req.userId,
+            distributedAt,
+            note: req.body.note?.trim() || undefined,
+        };
+
+        if (!isDraft) {
+            recordData.confirmedBy = req.userId;
+            recordData.confirmedAt = distributedAt;
+        }
+
+        const record = await distributionRepository.create(recordData, session);
+
+        if (!isDraft) {
+            for (const item of builtItems) {
+                await applyStockMovement({
+                    materialId: String(item.materialId),
+                    materialName: item.materialName,
+                    plantId: fromPlantId,
+                    quantity: -Number(item.quantity ?? 0),
+                    type: 'export',
+                    relatedId: String((record as any)._id),
+                    relatedType: 'distribution',
+                    performedBy: req.userId,
+                    note: `Cap phat noi bo ${distributionCode}`,
+                    session,
+                });
+            }
+        }
+
+        await session.commitTransaction();
+
+        const created = await distributionRepository.findById(String((record as any)._id));
+
+        return res.status(StatusCodes.CREATED).json(
+            customResponse({
+                data: serializeDistributionRecord(created),
+                message: isDraft ? 'Tao phieu cap phat noi bo (nhap) thanh cong' : 'Tao phieu cap phat noi bo thanh cong',
+                status: StatusCodes.CREATED,
+                success: true,
+            })
+        );
+    } catch (error) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        await session.endSession();
+    }
+};
+
+/** Thêm vật tư vào phiếu nội bộ đang draft */
+export const appendInternalItems = async (req: Request, res: Response, next: NextFunction) => {
+    const record = await distributionRepository.findById(String(req.params.id));
+    if (!record) throw new NotFoundError('Khong tim thay phieu cap phat');
+    if ((record as any).distributionType !== 'internal_issue') throw new BadRequestError('Chi ap dung cho phieu cap phat noi bo');
+    if ((record as any).status !== 'draft') throw new BadRequestError('Chi co the them vat tu vao phieu dang nhap');
+
+    const fromPlantId = getUserPlantId(req);
+    if (!isManagerRole(req.role) && toId((record as any).distributedBy) !== req.userId) {
+        throw new UnAuthorizedError('Ban khong co quyen chinh sua phieu nay');
+    }
+
+    const materialIds = (req.body.items ?? []).map((i: any) => String(i.materialId));
+    const materialsMap = await getMaterialsMap(materialIds);
+
+    const newItems = (req.body.items ?? []).map((item: any, idx: number) => {
+        const material = materialsMap.get(String(item.materialId));
+        if (!material) throw new BadRequestError(`Khong tim thay vat tu dong ${idx + 1}`);
+
+        const qty = Number(item.quantity ?? 0);
+        if (qty <= 0) throw new BadRequestError(`Item ${idx + 1}: so luong phai lon hon 0`);
+
+        const unitPrice = Number(item.unitPrice ?? 0);
+        const vatRate = Number(item.vatRate ?? 0);
+        const totalPrice = Number((qty * unitPrice).toFixed(2));
+        const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
+
+        return {
+            materialId: material._id,
+            materialName: material.name,
+            unit: item.unit?.trim() || material.unit,
+            quantityRequested: Number(item.quantityRequested ?? qty),
+            quantity: qty,
+            unitPrice,
+            totalPrice,
+            vatRate,
+            vatAmount,
+            totalWithVat: Number((totalPrice + vatAmount).toFixed(2)),
+            note: item.note?.trim() || undefined,
+        };
+    });
+
+    const allItems = [...((record as any).items ?? []).map((i: any) => i.toObject ? i.toObject() : i), ...newItems];
+    const totalAmount = Number(allItems.reduce((s: number, i: any) => s + (i.totalPrice ?? 0), 0).toFixed(2));
+    const totalVatAmount = Number(allItems.reduce((s: number, i: any) => s + (i.vatAmount ?? 0), 0).toFixed(2));
+    const totalWithVat = Number(allItems.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0).toFixed(2));
+
+    await (DistributionRecord as any).updateOne(
+        { _id: (record as any)._id },
+        { $set: { items: allItems, totalAmount, totalVatAmount, totalWithVat } }
+    );
+
+    const updated = await distributionRepository.findById(String(req.params.id));
+    return res.status(StatusCodes.OK).json(
+        customResponse({ data: serializeDistributionRecord(updated), message: 'Da them vat tu vao phieu nhap', status: StatusCodes.OK, success: true })
+    );
+};
+
+/** Chốt phiếu nội bộ draft → trừ kho */
+export const finalizeInternalDraft = async (req: Request, res: Response, next: NextFunction) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const record = await (DistributionRecord as any)
+            .findOneAndUpdate(
+                { _id: req.params.id, status: 'draft', distributionType: 'internal_issue', isDeleted: { $ne: true } },
+                { $set: { status: 'processing' } },
+                { new: false, session }
+            );
+
+        if (!record) {
+            const exists = await (DistributionRecord as any).findById(req.params.id).session(session);
+            if (!exists) throw new NotFoundError('Khong tim thay phieu cap phat');
+            throw new BadRequestError('Phieu khong o trang thai nhap hoac da duoc xu ly');
+        }
+
+        if (!isManagerRole(req.role) && toId(record.distributedBy) !== req.userId) {
+            throw new UnAuthorizedError('Ban khong co quyen chot phieu nay');
+        }
+
+        const fromPlantId = toId(record.fromPlantId);
+        const now = new Date();
+
+        for (const item of record.items ?? []) {
+            const qty = Number(item.quantity ?? 0);
+            if (qty <= 0 || !item.materialId) continue;
+
+            await applyStockMovement({
+                materialId: String(item.materialId),
+                materialName: item.materialName,
+                plantId: String(fromPlantId),
+                quantity: -qty,
+                type: 'export',
+                relatedId: String(record._id),
+                relatedType: 'distribution',
+                performedBy: req.userId,
+                note: `Chot phieu cap phat noi bo ${record.distributionCode}`,
+                session,
+            });
+        }
+
+        await (DistributionRecord as any).updateOne(
+            { _id: record._id },
+            { $set: { status: 'confirmed', confirmedBy: req.userId, confirmedAt: now, distributedAt: now } },
+            { session }
+        );
+
+        await session.commitTransaction();
+
+        const updated = await distributionRepository.findById(String(req.params.id));
+        return res.status(StatusCodes.OK).json(
+            customResponse({ data: serializeDistributionRecord(updated), message: 'Chot phieu cap phat noi bo thanh cong', status: StatusCodes.OK, success: true })
+        );
+    } catch (err) {
+        await session.abortTransaction();
+        throw err;
+    } finally {
+        await session.endSession();
+    }
 };
 
 export const distributeRecord = async (req: Request, res: Response, next: NextFunction) => {
