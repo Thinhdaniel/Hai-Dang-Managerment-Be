@@ -65,7 +65,7 @@ async function addSheet(
     // ROW 4: Tiêu đề
     ws.mergeCells(`A4:${lastCol}4`);
     const r4 = ws.getCell('A4');
-    r4.value = isSummary ? 'PHIẾU NHẬP HÀNG — TỔNG HỢP' : 'PHIẾU NHẬP HÀNG';
+    r4.value = isSummary ? 'PHIẾU NHẬP KHO — TỔNG HỢP' : 'PHIẾU NHẬP KHO';
     r4.font = font(true, 16);
     r4.alignment = center;
     ws.getRow(4).height = 30;

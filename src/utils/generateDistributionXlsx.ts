@@ -49,15 +49,15 @@ export const generateDistributionXlsx = async (distribution: any): Promise<Buffe
     ];
 
     ws.mergeCells('A1:D1');
-    cell(ws, 'A1').value = 'CONG TY TNHH MAY XUAT KHAU HAI DANG';
+    cell(ws, 'A1').value = 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG';
     cell(ws, 'A1').font = { name: FONT, size: 12, bold: true };
 
     ws.mergeCells('A2:D2');
-    cell(ws, 'A2').value = 'Dia chi CS1: Khu 23, Xa Thanh Ba, Tinh Phu Tho';
+    cell(ws, 'A2').value = 'Địa chỉ CS1: Khu 23, Xã Thanh Ba, Tỉnh Phú Thọ';
     cell(ws, 'A2').font = { name: FONT, size: 11, italic: true };
 
     ws.mergeCells('A4:K4');
-    cell(ws, 'A4').value = 'PHIEU CAP PHAT VAT TU';
+    cell(ws, 'A4').value = 'PHIẾU CẤP PHÁT VẬT TƯ';
     cell(ws, 'A4').font = { name: FONT, size: 18, bold: true };
     cell(ws, 'A4').alignment = { horizontal: 'center', vertical: 'middle' };
 
@@ -80,26 +80,26 @@ export const generateDistributionXlsx = async (distribution: any): Promise<Buffe
     const confirmedByName = distribution.confirmedBy?.name || distribution.confirmedBy?.email || '';
     const requesterName = distribution.requesterName || '';
 
-    setInfo(ws, 'A8', 'B8', 'K8', isInternalIssue ? 'Loai phieu:' : 'Can cu de xuat:', isInternalIssue ? 'Cap phat noi bo' : srCode);
-    setInfo(ws, 'A9', 'B9', 'K9', 'Xuat tai kho:', fromName);
+    setInfo(ws, 'A8', 'B8', 'K8', isInternalIssue ? 'Loại phiếu:' : 'Căn cứ đề xuất:', isInternalIssue ? 'Cấp phát nội bộ' : srCode);
+    setInfo(ws, 'A9', 'B9', 'K9', 'Xuất tại kho:', fromName);
     setInfo(
         ws,
         'A10',
         'B10',
         'K10',
-        isInternalIssue ? 'Su dung tai:' : 'Nhap tai kho:',
+        isInternalIssue ? 'Sử dụng tại:' : 'Nhập tại kho:',
         isInternalIssue ? (distribution.targetDepartment || distribution.targetLine || fromName) : toName
     );
-    setInfo(ws, 'A11', 'B11', 'F11', 'Nguoi cap phat:', distributedByName);
-    setInfo(ws, 'G11', 'H11', 'K11', isInternalIssue ? 'Nguoi xin cap:' : 'Nguoi nhan:', isInternalIssue ? requesterName : confirmedByName);
+    setInfo(ws, 'A11', 'B11', 'F11', 'Người cấp phát:', distributedByName);
+    setInfo(ws, 'G11', 'H11', 'K11', isInternalIssue ? 'Người xin cấp:' : 'Người nhận:', isInternalIssue ? requesterName : confirmedByName);
 
     const headerRowIndex = isInternalIssue ? 14 : 13;
     if (isInternalIssue) {
-        setInfo(ws, 'A12', 'B12', 'F12', 'Bo phan:', distribution.targetDepartment || '');
-        setInfo(ws, 'G12', 'H12', 'K12', 'Chuyen may:', distribution.targetLine || '');
+        setInfo(ws, 'A12', 'B12', 'F12', 'Bộ phận:', distribution.targetDepartment || '');
+        setInfo(ws, 'G12', 'H12', 'K12', 'Chuyền may:', distribution.targetLine || '');
     }
 
-    const headers = ['STT', 'Ten vat tu', 'DVT', 'SL yeu cau', 'SL thuc xuat', 'Don gia', 'Thanh tien', 'VAT%', 'Tien VAT', 'Tong tien', 'Ghi chu'];
+    const headers = ['STT', 'Tên vật tư', 'ĐVT', 'SL yêu cầu', 'SL thực xuất', 'Đơn giá', 'Thành tiền', 'VAT%', 'Tiền VAT', 'Tổng tiền', 'Ghi chú'];
     const headerRow = ws.getRow(headerRowIndex);
     headerRow.height = 28;
 
@@ -164,7 +164,7 @@ export const generateDistributionXlsx = async (distribution: any): Promise<Buffe
 
     ws.mergeCells(`A${currentRow}:I${currentRow}`);
     const totalLabelCell = ws.getCell(`A${currentRow}`);
-    totalLabelCell.value = 'TONG CONG';
+    totalLabelCell.value = 'TỔNG CỘNG';
     totalLabelCell.font = { name: FONT, size: 11, bold: true };
     totalLabelCell.alignment = { horizontal: 'center', vertical: 'middle' };
     totalLabelCell.border = border;
@@ -189,9 +189,9 @@ export const generateDistributionXlsx = async (distribution: any): Promise<Buffe
         cell(ws, `${column}${signatureNameRow}`).alignment = { horizontal: 'center' };
     };
 
-    setSignature('B', 'Nguoi lap phieu', '');
-    setSignature('F', isInternalIssue ? 'Nguoi xin cap' : 'Nguoi nhan hang', isInternalIssue ? requesterName : confirmedByName);
-    setSignature('J', 'Thu kho xuat', distributedByName);
+    setSignature('B', 'Người lập phiếu', '');
+    setSignature('F', isInternalIssue ? 'Người xin cấp' : 'Người nhận hàng', isInternalIssue ? requesterName : confirmedByName);
+    setSignature('J', 'Thủ kho xuất', distributedByName);
 
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);

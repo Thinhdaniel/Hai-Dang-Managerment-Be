@@ -32,3 +32,6 @@ export const updateDistributionRecord = asyncHandler(async (req: Request, res: R
 export const exportDistributionXlsx = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await distributionService.exportDistributionXlsx(req, res, next);
 });
+export const exportRangeDistributionXlsx = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await distributionService.exportRangeDistributionXlsx(req, res, next);
+});

@@ -18,6 +18,7 @@ router.use(authenticate);
 
 // Static routes first
 router.get('/', distributionController.getAllDistributionRecords);
+router.get('/export-range-xlsx', distributionController.exportRangeDistributionXlsx);
 router.post('/', requireCS1Manager, validator(createDistributionRecordSchema), distributionController.createDistributionRecord);
 router.post('/internal', requirePlantManager, validator(createInternalDraftSchema), distributionController.createInternalDistributionRecord);
 router.post('/:id/internal/items', requirePlantManager, validateObjectId, validator(appendInternalItemsSchema), distributionController.appendInternalItems);

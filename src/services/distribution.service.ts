@@ -701,6 +701,31 @@ export const updateDistributionRecord = async (req: Request, res: Response, next
     );
 };
 
+export const exportRangeDistributionXlsx = async (req: Request, res: Response, next: NextFunction) => {
+    const filter = buildDistributionFilter(req.query, req);
+    const records = await distributionRepository.findMany(filter, { sort: 'createdAt' });
+
+    if (!records.length) {
+        throw new BadRequestError('Khong co phieu cap phat nao trong khoang thoi gian nay');
+    }
+
+    const plains = records.map(serializeDistributionRecord);
+
+    const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+    const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+    const label = startDate && endDate
+        ? `${startDate} den ${endDate}`
+        : startDate || endDate || 'Tat ca';
+
+    const { generateRangeDistributionXlsx } = await import('@/utils/generateRangeDistributionXlsx');
+    const buffer = await generateRangeDistributionXlsx(plains, label);
+
+    const filename = `cap-phat-${label.replace(/\//g, '-')}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(StatusCodes.OK).send(buffer);
+};
+
 export const exportDistributionXlsx = async (req: Request, res: Response, next: NextFunction) => {
     const record = await distributionRepository.findById(String(req.params.id));
 
