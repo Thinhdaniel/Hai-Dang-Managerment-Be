@@ -74,6 +74,35 @@ const attachMachineCounts = (plants: any[], countsByPlant: Map<string, number>) 
     });
 };
 
+const extractPlantOrderNumber = (plant: any) => {
+    const codeMatch = String(plant?.code ?? '').match(/\d+/);
+    if (codeMatch) return Number(codeMatch[0]);
+
+    const nameMatch = String(plant?.name ?? '').match(/\d+/);
+    return nameMatch ? Number(nameMatch[0]) : null;
+};
+
+const sortPlantsNaturally = <T extends { code?: string; name?: string }>(plants: T[]) => {
+    const collator = new Intl.Collator('vi', {
+        numeric: true,
+        sensitivity: 'base',
+    });
+
+    return [...plants].sort((left, right) => {
+        const leftNumber = extractPlantOrderNumber(left);
+        const rightNumber = extractPlantOrderNumber(right);
+
+        if (leftNumber !== null && rightNumber !== null && leftNumber !== rightNumber) {
+            return leftNumber - rightNumber;
+        }
+
+        if (leftNumber !== null && rightNumber === null) return -1;
+        if (leftNumber === null && rightNumber !== null) return 1;
+
+        return collator.compare(left.name ?? left.code ?? '', right.name ?? right.code ?? '');
+    });
+};
+
 export const createPlant = async (req: Request, res: Response, next: NextFunction) => {
     const payload = sanitizePlantPayload(req.body);
 
@@ -94,10 +123,11 @@ export const createPlant = async (req: Request, res: Response, next: NextFunctio
 export const getAllPlants = async (req: Request, res: Response, next: NextFunction) => {
     const plants = await plantRepository.findMany(buildFilter(req.query), { sort: String(req.query.sort || 'name') });
     const plantsWithCounts = await attachAssetCounts(plants);
+    const serializedPlants = plantsWithCounts.map(serializePlant);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
-            data: plantsWithCounts.map(serializePlant),
+            data: sortPlantsNaturally(serializedPlants),
             message: 'Lay danh sach co so thanh cong',
             status: StatusCodes.OK,
             success: true,
@@ -108,7 +138,7 @@ export const getAllPlants = async (req: Request, res: Response, next: NextFuncti
 export const getPlantsWithMachineCount = async (req: Request, res: Response, next: NextFunction) => {
     const plants = await plantRepository.findMany(buildFilter(req.query), { sort: String(req.query.sort || 'name') });
     const machineStats = await assetRepository.getPlantMachineStats();
-    const facilities = attachMachineCounts(plants, machineStats.countsByPlant).map(serializePlant);
+    const facilities = sortPlantsNaturally(attachMachineCounts(plants, machineStats.countsByPlant).map(serializePlant));
     const totalMachines = facilities.reduce((sum, facility) => sum + (facility.machineCount ?? facility.assetCount ?? 0), 0);
 
     return res.status(StatusCodes.OK).json(

@@ -18,6 +18,10 @@ export const getTransferById = asyncHandler(async (req: Request, res: Response, 
     return await transferService.getTransferById(req, res, next);
 });
 
+export const exportTransferStockOutXlsx = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await transferService.exportTransferStockOutXlsx(req, res, next);
+});
+
 export const approveTransfer = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await transferService.approveTransfer(req, res, next);
 });

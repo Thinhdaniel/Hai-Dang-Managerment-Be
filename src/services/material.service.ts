@@ -125,6 +125,271 @@ const getPurchaseOrdersByPlant = async (plantId?: string) => {
 
 const getOrderEffectiveDate = (order: any) => new Date(order.receivedAt || order.orderedAt || order.createdAt);
 
+type ReportGroupBy = 'day' | 'week' | 'month' | 'quarter';
+
+type MaterialReportFilters = {
+    plantId?: string;
+    startDate?: Date;
+    endDate?: Date;
+    materialId?: string;
+    category?: string;
+    supplierId?: string;
+    status?: string;
+    groupBy: ReportGroupBy;
+};
+
+const parseDateStart = (value: unknown) => {
+    if (!value) return undefined;
+    const date = new Date(String(value));
+    if (Number.isNaN(date.getTime())) return undefined;
+    date.setHours(0, 0, 0, 0);
+    return date;
+};
+
+const parseDateEnd = (value: unknown) => {
+    if (!value) return undefined;
+    const date = new Date(String(value));
+    if (Number.isNaN(date.getTime())) return undefined;
+    date.setHours(23, 59, 59, 999);
+    return date;
+};
+
+const buildReportFilters = (query: Request['query']): MaterialReportFilters => {
+    const groupBy = ['day', 'week', 'month', 'quarter'].includes(String(query.groupBy))
+        ? (String(query.groupBy) as ReportGroupBy)
+        : 'month';
+
+    return {
+        plantId: query.plantId ? String(query.plantId) : undefined,
+        startDate: parseDateStart(query.startDate),
+        endDate: parseDateEnd(query.endDate),
+        materialId: query.materialId ? String(query.materialId) : undefined,
+        category: query.category ? String(query.category) : undefined,
+        supplierId: query.supplierId ? String(query.supplierId) : undefined,
+        status: query.status ? String(query.status) : undefined,
+        groupBy,
+    };
+};
+
+const getMaterialIdsForReport = async (filters: MaterialReportFilters) => {
+    const materialFilter: Record<string, any> = {
+        isDeleted: { $ne: true },
+        isActive: { $ne: false },
+    };
+
+    if (filters.materialId) {
+        materialFilter._id = filters.materialId;
+    }
+
+    if (filters.category) {
+        materialFilter.category = filters.category;
+    }
+
+    if (!filters.materialId && !filters.category) {
+        return undefined;
+    }
+
+    const materials = await Material.find(materialFilter).select('_id').lean();
+    return new Set(materials.map((material: any) => String(material._id)));
+};
+
+const isDateInRange = (date: Date, filters: MaterialReportFilters) => {
+    if (filters.startDate && date < filters.startDate) return false;
+    if (filters.endDate && date > filters.endDate) return false;
+    return true;
+};
+
+const getPeriodLabel = (date: Date, groupBy: ReportGroupBy) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    if (groupBy === 'day') return `${year}-${month}-${day}`;
+    if (groupBy === 'week') {
+        const firstDay = new Date(year, 0, 1);
+        const pastDays = Math.floor((date.getTime() - firstDay.getTime()) / 86400000);
+        const week = String(Math.ceil((pastDays + firstDay.getDay() + 1) / 7)).padStart(2, '0');
+        return `${year}-W${week}`;
+    }
+    if (groupBy === 'quarter') return `${year}-Q${Math.floor(date.getMonth() / 3) + 1}`;
+    return `${year}-${month}`;
+};
+
+const itemMatchesReportFilters = (
+    item: any,
+    filters: MaterialReportFilters,
+    materialIds?: Set<string>,
+    fallbackSupplierId?: string
+) => {
+    const itemMaterialId = toId(item.materialId);
+    if (materialIds && (!itemMaterialId || !materialIds.has(itemMaterialId))) return false;
+
+    if (filters.supplierId) {
+        const supplierId = toId(item.supplierId) || fallbackSupplierId;
+        if (supplierId !== filters.supplierId) return false;
+    }
+
+    return true;
+};
+
+const getReportOrderItems = (order: any, filters: MaterialReportFilters, materialIds?: Set<string>) =>
+    ((order.items ?? []) as any[]).filter((item) =>
+        itemMatchesReportFilters(item, filters, materialIds, toId(order.supplierId))
+    );
+
+const sumItemsAmount = (items: any[], key: 'totalWithVat' | 'totalPrice' = 'totalWithVat') =>
+    items.reduce((sum, item) => sum + Number(item[key] ?? item.totalPrice ?? 0), 0);
+
+const getItemSupplierName = (item: any) =>
+    item.supplierName || (item.supplierId && typeof item.supplierId === 'object' ? item.supplierId.name : undefined);
+
+const getOrderSupplierInfo = (order: any, items: any[] = order.items ?? []) => {
+    const orderSupplierId = toId(order.supplierId);
+    const orderSupplierName = order.supplierName || order.supplierId?.name;
+
+    if (orderSupplierId || orderSupplierName) {
+        return {
+            supplierId: orderSupplierId,
+            supplierName: orderSupplierName || 'Chua gan nha cung cap',
+        };
+    }
+
+    const itemSuppliers = new Map<string, { supplierId?: string; supplierName: string }>();
+
+    items.forEach((item) => {
+        const supplierId = toId(item.supplierId);
+        const supplierName = getItemSupplierName(item);
+        const key = supplierId || supplierName;
+        if (!key || !supplierName) return;
+        itemSuppliers.set(key, { supplierId, supplierName });
+    });
+
+    const suppliers = Array.from(itemSuppliers.values());
+    if (suppliers.length === 1) return suppliers[0];
+    if (suppliers.length > 1) {
+        return {
+            supplierId: undefined,
+            supplierName: `Nhieu nha cung cap (${suppliers.length})`,
+        };
+    }
+
+    return {
+        supplierId: undefined,
+        supplierName: 'Chua gan nha cung cap',
+    };
+};
+
+const buildReturnReportMatch = (filters: MaterialReportFilters, purchaseOrderIds?: any[]) => {
+    const match: Record<string, any> = { isDeleted: { $ne: true } };
+
+    if (purchaseOrderIds) {
+        match.purchaseOrderId = { $in: purchaseOrderIds };
+    }
+
+    if (filters.startDate || filters.endDate) {
+        match.returnedAt = {};
+        if (filters.startDate) match.returnedAt.$gte = filters.startDate;
+        if (filters.endDate) match.returnedAt.$lte = filters.endDate;
+    }
+
+    if (filters.supplierId) {
+        match.$or = [
+            { supplierId: new mongoose.Types.ObjectId(filters.supplierId) },
+            { 'items.supplierId': new mongoose.Types.ObjectId(filters.supplierId) },
+        ];
+    }
+
+    return match;
+};
+
+const buildReturnItemMatch = (filters: MaterialReportFilters, materialIds?: Set<string>) => {
+    const match: Record<string, any> = {};
+
+    if (materialIds) {
+        match['items.materialId'] = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    }
+
+    if (filters.supplierId) {
+        match['items.supplierId'] = new mongoose.Types.ObjectId(filters.supplierId);
+    }
+
+    return match;
+};
+
+const getRefundByPurchaseOrder = async (
+    ReturnRecord: any,
+    filters: MaterialReportFilters,
+    purchaseOrderIds: any[],
+    materialIds?: Set<string>
+): Promise<Map<string, number>> => {
+    if (!purchaseOrderIds.length) return new Map<string, number>();
+
+    const itemMatch = buildReturnItemMatch(filters, materialIds);
+    const rows = await ReturnRecord.aggregate([
+        { $match: buildReturnReportMatch(filters, purchaseOrderIds) },
+        { $unwind: '$items' },
+        ...(Object.keys(itemMatch).length ? [{ $match: itemMatch }] : []),
+        { $group: { _id: '$purchaseOrderId', totalRefund: { $sum: '$items.refundWithVat' } } },
+    ]);
+
+    return new Map<string, number>(rows.map((row: any) => [String(row._id), Number(row.totalRefund ?? 0)]));
+};
+
+const getRefundBySupplier = async (
+    ReturnRecord: any,
+    filters: MaterialReportFilters,
+    purchaseOrderIds: any[],
+    materialIds?: Set<string>
+): Promise<Map<string, number>> => {
+    if (!purchaseOrderIds.length) return new Map<string, number>();
+
+    const itemMatch = buildReturnItemMatch(filters, materialIds);
+    const rows = await ReturnRecord.aggregate([
+        { $match: buildReturnReportMatch(filters, purchaseOrderIds) },
+        { $unwind: '$items' },
+        ...(Object.keys(itemMatch).length ? [{ $match: itemMatch }] : []),
+        {
+            $group: {
+                _id: '$items.supplierId',
+                totalRefund: { $sum: '$items.refundWithVat' },
+            },
+        },
+    ]);
+
+    return new Map<string, number>(rows.map((row: any) => [String(row._id), Number(row.totalRefund ?? 0)]));
+};
+
+const getPurchaseOrdersForReport = async (filters: MaterialReportFilters, materialIds?: Set<string>) => {
+    const orders = await PurchaseOrder.find({ isDeleted: { $ne: true } })
+        .populate('purchaseRequestIds')
+        .populate('supplierId')
+        .populate('items.supplierId', 'name');
+
+    return orders.filter((order: any) => {
+        if (filters.status && order.status !== filters.status) return false;
+
+        const effectiveDate = getOrderEffectiveDate(order);
+        if (!isDateInRange(effectiveDate, filters)) return false;
+
+        if (filters.plantId) {
+            const hasPlant = (order.purchaseRequestIds ?? []).some(
+                (request: any) => String(request.plantId) === filters.plantId
+            );
+            if (!hasPlant) return false;
+        }
+
+        const orderSupplierId = toId(order.supplierId);
+        if (filters.supplierId && orderSupplierId !== filters.supplierId) {
+            const hasItemSupplier = (order.items ?? []).some((item: any) => toId(item.supplierId) === filters.supplierId);
+            if (!hasItemSupplier) return false;
+        }
+
+        if (materialIds && getReportOrderItems(order, filters, materialIds).length === 0) return false;
+
+        return true;
+    });
+};
+
 export const getAllMaterials = async (req: Request, res: Response, next: NextFunction) => {
     const filter = buildMaterialFilter(req.query);
     const { page, limit, skip } = getPagination(req.query as Record<string, any>);
@@ -296,34 +561,99 @@ export const getLowStockMaterials = async (req: Request, res: Response, next: Ne
 };
 
 export const getMaterialReportsSummary = async (req: Request, res: Response, next: NextFunction) => {
-    const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const filters = buildReportFilters(req.query);
+    const materialIds = await getMaterialIdsForReport(filters);
 
-    const [totalMaterials, pendingRequestCount, lowStockMaterials, purchaseOrders] = await Promise.all([
-        Material.countDocuments({ isDeleted: { $ne: true }, isActive: { $ne: false } }),
+    const materialCountFilter: Record<string, any> = {
+        isDeleted: { $ne: true },
+        isActive: { $ne: false },
+        ...(filters.category ? { category: filters.category } : {}),
+        ...(filters.materialId ? { _id: filters.materialId } : {}),
+    };
+
+    const requestFilter: Record<string, any> = {
+        isDeleted: { $ne: true },
+        status: 'pending',
+        ...(filters.plantId ? { plantId: filters.plantId } : {}),
+    };
+    if (filters.startDate || filters.endDate) {
+        requestFilter.createdAt = {};
+        if (filters.startDate) requestFilter.createdAt.$gte = filters.startDate;
+        if (filters.endDate) requestFilter.createdAt.$lte = filters.endDate;
+    }
+
+    const [totalMaterials, pendingRequestCount, lowStockMaterials, purchaseOrders, ReturnRecord, DistributionRecord] = await Promise.all([
+        Material.countDocuments(materialCountFilter),
         PurchaseRequest.countDocuments({
-            isDeleted: { $ne: true },
-            status: 'pending',
-            ...(plantId ? { plantId } : {}),
+            ...requestFilter,
+            ...(materialIds ? { 'items.materialId': { $in: Array.from(materialIds) } } : {}),
         }),
         getLowStockMaterialsData(req),
-        getPurchaseOrdersByPlant(plantId),
+        getPurchaseOrdersForReport(filters, materialIds),
+        import('@/models/ReturnRecord').then((m) => m.default),
+        import('@/models/DistributionRecord').then((m) => m.default),
     ]);
 
-    const totalMonthlyCost = purchaseOrders
-        .filter((order) => {
-            const orderDate = getOrderEffectiveDate(order);
-            return orderDate >= monthStart && orderDate < monthEnd;
-        })
-        .reduce((sum, order: any) => sum + (order.totalAmount ?? 0), 0);
+    const orderIds = purchaseOrders.map((order: any) => order._id);
+    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, orderIds, materialIds);
+
+    const distributionMatch: Record<string, any> = {
+        isDeleted: { $ne: true },
+        status: { $in: ['distributed', 'confirmed'] },
+        ...(filters.plantId ? { toPlantId: new mongoose.Types.ObjectId(filters.plantId) } : {}),
+    };
+    if (filters.startDate || filters.endDate) {
+        distributionMatch.createdAt = {};
+        if (filters.startDate) distributionMatch.createdAt.$gte = filters.startDate;
+        if (filters.endDate) distributionMatch.createdAt.$lte = filters.endDate;
+    }
+    if (materialIds) {
+        distributionMatch['items.materialId'] = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    }
+
+    const distributionAgg = await DistributionRecord.aggregate([
+        { $match: distributionMatch },
+        { $unwind: '$items' },
+        ...(materialIds
+            ? [{ $match: { 'items.materialId': { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) } } }]
+            : []),
+        {
+            $group: {
+                _id: null,
+                totalWithVat: { $sum: { $ifNull: ['$items.totalWithVat', 0] } },
+                count: { $addToSet: '$_id' },
+            },
+        },
+    ]);
+
+    const totalPurchaseCost = purchaseOrders.reduce((sum, order: any) => {
+        const items = getReportOrderItems(order, filters, materialIds);
+        return sum + sumItemsAmount(items, 'totalWithVat');
+    }, 0);
+    const totalRefund = Array.from(refundMap.values()).reduce((sum, value) => sum + value, 0);
+    const totalDistributionCost = Number(distributionAgg[0]?.totalWithVat ?? 0);
+    const distributionRecordCount = Number(distributionAgg[0]?.count?.length ?? 0);
+    const totalEstimated = purchaseOrders.reduce((sum, order: any) => {
+        const items = getReportOrderItems(order, filters, materialIds);
+        return sum + items.reduce((itemSum, item) => {
+            const qty = Number(item.quantityRequested ?? item.quantityOrdered ?? 0);
+            const price = Number(item.unitPrice ?? 0);
+            const vatRate = Number(item.vatRate ?? 0);
+            return itemSum + Number((qty * price * (1 + vatRate / 100)).toFixed(2));
+        }, 0);
+    }, 0);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: {
                 totalMaterials,
-                totalMonthlyCost: Number(totalMonthlyCost.toFixed(2)),
+                totalMonthlyCost: Number(totalPurchaseCost.toFixed(2)),
+                totalPurchaseCost: Number(totalPurchaseCost.toFixed(2)),
+                totalDistributionCost: Number(totalDistributionCost.toFixed(2)),
+                totalRefund: Number(totalRefund.toFixed(2)),
+                totalNetPurchaseCost: Number(Math.max(0, totalPurchaseCost - totalRefund).toFixed(2)),
+                totalPriceVariance: Number((Math.max(0, totalPurchaseCost - totalRefund) - totalEstimated).toFixed(2)),
+                distributionRecordCount,
                 pendingRequestCount,
                 lowStockCount: lowStockMaterials.length,
             },
@@ -335,33 +665,32 @@ export const getMaterialReportsSummary = async (req: Request, res: Response, nex
 };
 
 export const getMaterialCostByPeriodReport = async (req: Request, res: Response, next: NextFunction) => {
-    const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
-    const year = Number(req.query.year) || new Date().getFullYear();
-    const period = req.query.period === 'quarter' ? 'quarter' : 'month';
+    const filters = buildReportFilters({
+        ...req.query,
+        groupBy: req.query.period === 'quarter' ? 'quarter' : req.query.groupBy,
+    });
+    const materialIds = await getMaterialIdsForReport(filters);
 
     const [purchaseOrders, ReturnRecord] = await Promise.all([
-        getPurchaseOrdersByPlant(plantId),
+        getPurchaseOrdersForReport(filters, materialIds),
         import('@/models/ReturnRecord').then((m) => m.default),
     ]);
 
     // Map poId → totalRefundWithVat
-    const returnAgg = await ReturnRecord.aggregate([
-        { $match: { isDeleted: { $ne: true } } },
-        { $group: { _id: '$purchaseOrderId', totalRefund: { $sum: '$totalRefundWithVat' } } },
-    ]);
-    const refundMap = new Map(returnAgg.map((r: any) => [String(r._id), r.totalRefund as number]));
+    const refundMap = await getRefundByPurchaseOrder(
+        ReturnRecord,
+        filters,
+        purchaseOrders.map((order: any) => order._id),
+        materialIds
+    );
 
     const groupedData = purchaseOrders.reduce(
         (result: Record<string, number>, order: any) => {
             const orderDate = getOrderEffectiveDate(order);
-            if (orderDate.getFullYear() !== year) return result;
+            const key = getPeriodLabel(orderDate, filters.groupBy);
+            const items = getReportOrderItems(order, filters, materialIds);
 
-            const key =
-                period === 'quarter'
-                    ? `${year}-Q${Math.floor(orderDate.getMonth() / 3) + 1}`
-                    : `${year}-${String(orderDate.getMonth() + 1).padStart(2, '0')}`;
-
-            const net = (order.totalAmount ?? 0) - (refundMap.get(String(order._id)) ?? 0);
+            const net = sumItemsAmount(items, 'totalWithVat') - (refundMap.get(String(order._id)) ?? 0);
             result[key] = Number(((result[key] ?? 0) + Math.max(0, net)).toFixed(2));
             return result;
         },
@@ -378,31 +707,27 @@ export const getMaterialCostByPeriodReport = async (req: Request, res: Response,
 };
 
 export const getMaterialReportBySupplier = async (req: Request, res: Response, next: NextFunction) => {
-    const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
+    const filters = buildReportFilters(req.query);
+    const materialIds = await getMaterialIdsForReport(filters);
     const [purchaseOrders, ReturnRecord] = await Promise.all([
-        getPurchaseOrdersByPlant(plantId),
+        getPurchaseOrdersForReport(filters, materialIds),
         import('@/models/ReturnRecord').then((m) => m.default),
     ]);
 
     // Refund theo supplierId ở item level (chính xác khi PO có nhiều NCC)
-    const returnAgg = await ReturnRecord.aggregate([
-        { $match: { isDeleted: { $ne: true } } },
-        { $unwind: '$items' },
-        {
-            $group: {
-                _id: '$items.supplierId',
-                totalRefund: { $sum: '$items.refundWithVat' },
-            },
-        },
-    ]);
-    const refundBySupplier = new Map(returnAgg.map((r: any) => [String(r._id), r.totalRefund as number]));
+    const refundBySupplier = await getRefundBySupplier(
+        ReturnRecord,
+        filters,
+        purchaseOrders.map((order: any) => order._id),
+        materialIds
+    );
 
     const groupedData: Record<string, { supplierId?: string; supplierName: string; totalAmount: number; orderCount: Set<string> }> = {};
 
     purchaseOrders.forEach((order: any) => {
-        (order.items ?? []).forEach((item: any) => {
-            const supplierId = toId(item.supplierId);
-            const supplierName = item.supplierName || 'Chua gan nha cung cap';
+        getReportOrderItems(order, filters, materialIds).forEach((item: any) => {
+            const supplierId = toId(item.supplierId) || toId(order.supplierId);
+            const supplierName = getItemSupplierName(item) || order.supplierName || order.supplierId?.name || 'Chua gan nha cung cap';
             const key = supplierId || supplierName;
             if (!groupedData[key]) {
                 groupedData[key] = { supplierId, supplierName, totalAmount: 0, orderCount: new Set() };
@@ -427,35 +752,39 @@ export const getMaterialReportBySupplier = async (req: Request, res: Response, n
 };
 
 export const getMaterialPriceComparisonReport = async (req: Request, res: Response, next: NextFunction) => {
-    const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
+    const filters = buildReportFilters(req.query);
+    const materialIds = await getMaterialIdsForReport(filters);
     const [purchaseOrders, ReturnRecord] = await Promise.all([
-        getPurchaseOrdersByPlant(plantId),
+        getPurchaseOrdersForReport(filters, materialIds),
         import('@/models/ReturnRecord').then((m) => m.default),
     ]);
 
-    const returnAgg = await ReturnRecord.aggregate([
-        { $match: { isDeleted: { $ne: true } } },
-        { $group: { _id: '$purchaseOrderId', totalRefund: { $sum: '$totalRefundWithVat' } } },
-    ]);
-    const refundMap = new Map(returnAgg.map((r: any) => [String(r._id), r.totalRefund as number]));
+    const refundMap = await getRefundByPurchaseOrder(
+        ReturnRecord,
+        filters,
+        purchaseOrders.map((order: any) => order._id),
+        materialIds
+    );
 
     const data = purchaseOrders.map((order: any) => {
-        const estimatedTotal = (order.items ?? []).reduce((sum: number, item: any) => {
+        const items = getReportOrderItems(order, filters, materialIds);
+        const supplierInfo = getOrderSupplierInfo(order, items);
+        const estimatedTotal = items.reduce((sum: number, item: any) => {
             const qty = Number(item.quantityRequested ?? 0);
             const price = Number(item.unitPrice ?? 0);
             const vatRate = Number(item.vatRate ?? 0);
             const base = Number((qty * price).toFixed(2));
             return sum + Number((base * (1 + vatRate / 100)).toFixed(2));
         }, 0);
-        const actualTotal = Number(order.totalWithVat ?? order.totalAmount ?? 0);
+        const actualTotal = Number(sumItemsAmount(items, 'totalWithVat').toFixed(2));
         const refundTotal = refundMap.get(String(order._id)) ?? 0;
         const netActual = Number(Math.max(0, actualTotal - refundTotal).toFixed(2));
 
         return {
             orderId: String(order._id),
             orderCode: order.orderCode,
-            supplierId: toId(order.supplierId),
-            supplierName: order.supplierName || order.supplierId?.name || 'Chua gan nha cung cap',
+            supplierId: supplierInfo.supplierId,
+            supplierName: supplierInfo.supplierName,
             requestCodes: (order.purchaseRequestIds ?? []).map((r: any) => r.requestCode),
             estimatedTotal: Number(estimatedTotal.toFixed(2)),
             actualTotal,
@@ -480,21 +809,19 @@ export const getMaterialPriceComparisonReport = async (req: Request, res: Respon
 
 
 export const getTopMaterials = async (req: Request, res: Response, next: NextFunction) => {
-    const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
-    const startDate = req.query.startDate ? new Date(String(req.query.startDate)) : undefined;
-    const endDate = req.query.endDate ? new Date(String(req.query.endDate)) : undefined;
+    const filters = buildReportFilters(req.query);
+    const materialIds = await getMaterialIdsForReport(filters);
     const limit = Math.min(Number(req.query.limit) || 20, 100);
 
     const txFilter: Record<string, any> = { isDeleted: { $ne: true }, type: 'export' };
-    if (plantId) txFilter.plantId = new mongoose.Types.ObjectId(plantId);
-    if (startDate || endDate) {
+    if (filters.plantId) txFilter.plantId = new mongoose.Types.ObjectId(filters.plantId);
+    if (materialIds) {
+        txFilter.materialId = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    }
+    if (filters.startDate || filters.endDate) {
         txFilter.createdAt = {};
-        if (startDate) txFilter.createdAt.$gte = startDate;
-        if (endDate) {
-            const end = new Date(endDate);
-            end.setHours(23, 59, 59, 999);
-            txFilter.createdAt.$lte = end;
-        }
+        if (filters.startDate) txFilter.createdAt.$gte = filters.startDate;
+        if (filters.endDate) txFilter.createdAt.$lte = filters.endDate;
     }
 
     const StockTransaction = (await import('@/models/StockTransaction')).default;
@@ -527,7 +854,7 @@ export const getTopMaterials = async (req: Request, res: Response, next: NextFun
                         $match: {
                             $expr: { $eq: ['$materialId', '$$mid'] },
                             isDeleted: { $ne: true },
-                            ...(plantId ? { plantId: new mongoose.Types.ObjectId(plantId) } : {}),
+                            ...(filters.plantId ? { plantId: new mongoose.Types.ObjectId(filters.plantId) } : {}),
                         },
                     },
                     { $group: { _id: null, total: { $sum: '$currentStock' } } },
@@ -908,20 +1235,22 @@ export const confirmMaterialImport = async (req: Request, res: Response, next: N
 };
 
 export const getDistributionCostReport = async (req: Request, res: Response, next: NextFunction) => {
-    const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
-    const startDate = req.query.startDate ? new Date(String(req.query.startDate)) : undefined;
-    const endDate = req.query.endDate ? (() => { const d = new Date(String(req.query.endDate)); d.setHours(23, 59, 59, 999); return d; })() : undefined;
+    const filters = buildReportFilters(req.query);
+    const materialIds = await getMaterialIdsForReport(filters);
 
     const matchStage: Record<string, any> = {
         isDeleted: { $ne: true },
         status: { $in: ['distributed', 'confirmed'] },
     };
-    if (plantId) matchStage.toPlantId = new mongoose.Types.ObjectId(plantId);
-    if (startDate || endDate) {
+    if (filters.plantId) matchStage.toPlantId = new mongoose.Types.ObjectId(filters.plantId);
+    if (filters.startDate || filters.endDate) {
         // dùng createdAt vì distributedAt có thể null trên một số record cũ
         matchStage.createdAt = {};
-        if (startDate) matchStage.createdAt.$gte = startDate;
-        if (endDate) matchStage.createdAt.$lte = endDate;
+        if (filters.startDate) matchStage.createdAt.$gte = filters.startDate;
+        if (filters.endDate) matchStage.createdAt.$lte = filters.endDate;
+    }
+    if (materialIds) {
+        matchStage['items.materialId'] = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
     }
 
     const DistributionRecord = (await import('@/models/DistributionRecord')).default;
@@ -929,6 +1258,9 @@ export const getDistributionCostReport = async (req: Request, res: Response, nex
     const byPlant = await DistributionRecord.aggregate([
         { $match: matchStage },
         { $unwind: '$items' },
+        ...(materialIds
+            ? [{ $match: { 'items.materialId': { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) } } }]
+            : []),
         {
             $group: {
                 _id: '$toPlantId',
@@ -952,20 +1284,23 @@ export const getDistributionCostReport = async (req: Request, res: Response, nex
     const byPeriod = await DistributionRecord.aggregate([
         { $match: matchStage },
         { $unwind: '$items' },
+        ...(materialIds
+            ? [{ $match: { 'items.materialId': { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) } } }]
+            : []),
         {
             $group: {
                 _id: {
                     year: { $year: '$createdAt' },
                     month: { $month: '$createdAt' },
                     docId: '$_id',
-                    ...(plantId ? { plantId: '$toPlantId' } : {}),
+                    ...(filters.plantId ? { plantId: '$toPlantId' } : {}),
                 },
                 totalWithVat: { $sum: { $ifNull: ['$items.totalWithVat', 0] } },
             },
         },
         {
             $group: {
-                _id: { year: '$_id.year', month: '$_id.month', ...(plantId ? { plantId: '$_id.plantId' } : {}) },
+                _id: { year: '$_id.year', month: '$_id.month', ...(filters.plantId ? { plantId: '$_id.plantId' } : {}) },
                 totalWithVat: { $sum: '$totalWithVat' },
                 count: { $sum: 1 },
             },
@@ -996,7 +1331,7 @@ export const getDistributionCostReport = async (req: Request, res: Response, nex
     );
 };
 
-export const exportMaterialReportExcel = async (req: Request, res: Response, next: NextFunction) => {
+const exportMaterialReportExcelLegacy = async (req: Request, res: Response, next: NextFunction) => {
     const plantId = req.query.plantId ? String(req.query.plantId) : undefined;
     const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
     const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
@@ -1127,6 +1462,269 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
 
     const buffer = await wb.xlsx.writeBuffer();
     const filename = `BaoCaoVatTu_${(startDate || '').replace(/-/g, '')}_${(endDate || '').replace(/-/g, '')}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(Buffer.from(buffer));
+};
+
+export const exportMaterialReportExcel = async (req: Request, res: Response, next: NextFunction) => {
+    const filters = buildReportFilters(req.query);
+    const materialIds = await getMaterialIdsForReport(filters);
+    const ExcelJS = (await import('exceljs')).default;
+    const ReturnRecord = (await import('@/models/ReturnRecord')).default;
+    const DistributionRecord = (await import('@/models/DistributionRecord')).default;
+    const StockTransaction = (await import('@/models/StockTransaction')).default;
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Hai Dang Ops';
+    wb.created = new Date();
+
+    const dateLabel =
+        filters.startDate && filters.endDate
+            ? `${filters.startDate.toLocaleDateString('vi-VN')} - ${filters.endDate.toLocaleDateString('vi-VN')}`
+            : 'Tat ca';
+
+    const styleWorksheet = (ws: any) => {
+        ws.views = [{ state: 'frozen', ySplit: 1 }];
+        ws.autoFilter = {
+            from: { row: 1, column: 1 },
+            to: { row: 1, column: ws.columnCount || 1 },
+        };
+        ws.getRow(1).eachCell((cell: any) => {
+            cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        });
+        ws.eachRow((row: any) => {
+            row.eachCell((cell: any) => {
+                cell.border = {
+                    top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+                    left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+                    bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+                    right: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+                };
+            });
+        });
+    };
+
+    const purchaseOrders = await getPurchaseOrdersForReport(filters, materialIds);
+    const orderIds = purchaseOrders.map((order: any) => order._id);
+    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, orderIds, materialIds);
+
+    const purchaseRows = purchaseOrders.map((order: any) => {
+        const items = getReportOrderItems(order, filters, materialIds);
+        const supplierInfo = getOrderSupplierInfo(order, items);
+        const actualTotal = Number(sumItemsAmount(items, 'totalWithVat').toFixed(2));
+        const estimatedTotal = items.reduce((sum, item) => {
+            const qty = Number(item.quantityRequested ?? item.quantityOrdered ?? 0);
+            const price = Number(item.unitPrice ?? 0);
+            const vatRate = Number(item.vatRate ?? 0);
+            return sum + Number((qty * price * (1 + vatRate / 100)).toFixed(2));
+        }, 0);
+        const refund = refundMap.get(String(order._id)) ?? 0;
+        const netActual = Number(Math.max(0, actualTotal - refund).toFixed(2));
+
+        return {
+            code: order.orderCode || '',
+            supplier: supplierInfo.supplierName || 'Chua xac dinh',
+            requestCodes: (order.purchaseRequestIds ?? [])
+                .map((request: any) => request.requestCode)
+                .filter(Boolean)
+                .join(', '),
+            status: order.status,
+            orderedAt: order.orderedAt ? new Date(order.orderedAt).toLocaleDateString('vi-VN') : '',
+            receivedAt: order.receivedAt ? new Date(order.receivedAt).toLocaleDateString('vi-VN') : '',
+            estimatedTotal: Number(estimatedTotal.toFixed(2)),
+            actualTotal,
+            refund,
+            netActual,
+            variance: Number((netActual - estimatedTotal).toFixed(2)),
+            itemCount: items.length,
+        };
+    });
+
+    const costMap: Record<string, number> = {};
+    purchaseOrders.forEach((order: any) => {
+        const period = getPeriodLabel(getOrderEffectiveDate(order), filters.groupBy);
+        const items = getReportOrderItems(order, filters, materialIds);
+        const net = sumItemsAmount(items, 'totalWithVat') - (refundMap.get(String(order._id)) ?? 0);
+        costMap[period] = Number(((costMap[period] ?? 0) + Math.max(0, net)).toFixed(2));
+    });
+
+    const txFilter: Record<string, any> = { isDeleted: { $ne: true }, type: 'export' };
+    if (filters.plantId) txFilter.plantId = new mongoose.Types.ObjectId(filters.plantId);
+    if (materialIds) txFilter.materialId = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    if (filters.startDate || filters.endDate) {
+        txFilter.createdAt = {};
+        if (filters.startDate) txFilter.createdAt.$gte = filters.startDate;
+        if (filters.endDate) txFilter.createdAt.$lte = filters.endDate;
+    }
+
+    const topAgg = await StockTransaction.aggregate([
+        { $match: txFilter },
+        { $group: { _id: '$materialId', totalQty: { $sum: { $abs: '$quantity' } }, materialName: { $first: '$materialName' } } },
+        { $sort: { totalQty: -1 } },
+        { $limit: 50 },
+        { $lookup: { from: 'materials', localField: '_id', foreignField: '_id', as: 'material' } },
+        { $unwind: { path: '$material', preserveNullAndEmptyArrays: true } },
+    ]);
+
+    const distributionMatch: Record<string, any> = {
+        isDeleted: { $ne: true },
+        status: { $in: ['distributed', 'confirmed'] },
+    };
+    if (filters.plantId) distributionMatch.toPlantId = new mongoose.Types.ObjectId(filters.plantId);
+    if (filters.startDate || filters.endDate) {
+        distributionMatch.createdAt = {};
+        if (filters.startDate) distributionMatch.createdAt.$gte = filters.startDate;
+        if (filters.endDate) distributionMatch.createdAt.$lte = filters.endDate;
+    }
+    if (materialIds) {
+        distributionMatch['items.materialId'] = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    }
+
+    const distributions = await DistributionRecord.find(distributionMatch)
+        .populate('fromPlantId')
+        .populate('toPlantId')
+        .lean();
+
+    const distributionRows = distributions.flatMap((record: any) =>
+        (record.items ?? [])
+            .filter((item: any) => itemMatchesReportFilters(item, filters, materialIds))
+            .map((item: any) => ({
+                code: record.distributionCode || '',
+                type: record.distributionType,
+                status: record.status,
+                fromPlant: record.fromPlantId?.name || '',
+                toPlant: record.toPlantId?.name || '',
+                material: item.materialName || '',
+                unit: item.unit || '',
+                quantity: Number(item.quantityDistributed ?? item.quantity ?? 0),
+                totalAmount: Number(item.totalPrice ?? 0),
+                totalWithVat: Number(item.totalWithVat ?? 0),
+                createdAt: record.createdAt ? new Date(record.createdAt).toLocaleDateString('vi-VN') : '',
+            }))
+    );
+
+    const supplierMap: Record<string, { supplier: string; count: Set<string>; total: number }> = {};
+    purchaseOrders.forEach((order: any) => {
+        getReportOrderItems(order, filters, materialIds).forEach((item: any) => {
+            const supplierKey =
+                toId(item.supplierId) || toId(order.supplierId) || getItemSupplierName(item) || order.supplierName || 'unknown';
+            if (!supplierMap[supplierKey]) {
+                supplierMap[supplierKey] = {
+                    supplier: getItemSupplierName(item) || order.supplierName || order.supplierId?.name || 'Chua xac dinh',
+                    count: new Set(),
+                    total: 0,
+                };
+            }
+            supplierMap[supplierKey].count.add(String(order._id));
+            supplierMap[supplierKey].total = Number(
+                (supplierMap[supplierKey].total + Number(item.totalWithVat ?? item.totalPrice ?? 0)).toFixed(2)
+            );
+        });
+    });
+
+    const totalPurchaseCost = purchaseRows.reduce((sum, row) => sum + row.actualTotal, 0);
+    const totalRefund = purchaseRows.reduce((sum, row) => sum + row.refund, 0);
+    const totalDistributionCost = distributionRows.reduce((sum, row) => sum + row.totalWithVat, 0);
+    const lowStockMaterials = await getLowStockMaterialsData(req);
+
+    const wsOverview = wb.addWorksheet('Tong quan');
+    wsOverview.columns = [{ width: 34 }, { width: 24 }];
+    wsOverview.addRow(['Chi tieu', 'Gia tri']);
+    wsOverview.addRow(['Ky bao cao', dateLabel]);
+    wsOverview.addRow(['Ngay xuat', new Date().toLocaleString('vi-VN')]);
+    wsOverview.addRow(['Tong chi phi mua hang', totalPurchaseCost]);
+    wsOverview.addRow(['Tong hoan tra', totalRefund]);
+    wsOverview.addRow(['Chi phi mua net', Math.max(0, totalPurchaseCost - totalRefund)]);
+    wsOverview.addRow(['Tong chi phi cap phat', totalDistributionCost]);
+    wsOverview.addRow(['So don mua hang', purchaseRows.length]);
+    wsOverview.addRow(['So dong cap phat', distributionRows.length]);
+    wsOverview.addRow(['Vat tu duoi nguong', lowStockMaterials.length]);
+    styleWorksheet(wsOverview);
+
+    const wsCost = wb.addWorksheet('Chi phi theo ky');
+    wsCost.columns = [
+        { header: 'Ky', key: 'period', width: 18 },
+        { header: 'Chi phi net', key: 'totalAmount', width: 20, style: { numFmt: '#,##0' } },
+    ];
+    Object.entries(costMap).sort(([a], [b]) => a.localeCompare(b)).forEach(([period, totalAmount]) => {
+        wsCost.addRow({ period, totalAmount });
+    });
+    styleWorksheet(wsCost);
+
+    const wsPurchase = wb.addWorksheet('Mua hang');
+    wsPurchase.columns = [
+        { header: 'Ma PO', key: 'code', width: 18 },
+        { header: 'Nha cung cap', key: 'supplier', width: 28 },
+        { header: 'Phieu de xuat', key: 'requestCodes', width: 28 },
+        { header: 'Trang thai', key: 'status', width: 14 },
+        { header: 'Ngay dat', key: 'orderedAt', width: 14 },
+        { header: 'Ngay nhan', key: 'receivedAt', width: 14 },
+        { header: 'Du tinh', key: 'estimatedTotal', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'Thuc te', key: 'actualTotal', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'Hoan tra', key: 'refund', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'Net', key: 'netActual', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'Chenh lech', key: 'variance', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'So dong VT', key: 'itemCount', width: 12 },
+    ];
+    purchaseRows.forEach((row) => wsPurchase.addRow(row));
+    styleWorksheet(wsPurchase);
+
+    const wsDistribution = wb.addWorksheet('Cap phat');
+    wsDistribution.columns = [
+        { header: 'Ma phieu', key: 'code', width: 18 },
+        { header: 'Loai', key: 'type', width: 18 },
+        { header: 'Trang thai', key: 'status', width: 14 },
+        { header: 'Tu co so', key: 'fromPlant', width: 20 },
+        { header: 'Den co so', key: 'toPlant', width: 20 },
+        { header: 'Vat tu', key: 'material', width: 30 },
+        { header: 'DVT', key: 'unit', width: 10 },
+        { header: 'So luong', key: 'quantity', width: 12 },
+        { header: 'Tien hang', key: 'totalAmount', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'Tong co VAT', key: 'totalWithVat', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'Ngay tao', key: 'createdAt', width: 14 },
+    ];
+    distributionRows.forEach((row) => wsDistribution.addRow(row));
+    styleWorksheet(wsDistribution);
+
+    const wsTop = wb.addWorksheet('Top tieu hao');
+    wsTop.columns = [
+        { header: 'STT', key: 'stt', width: 8 },
+        { header: 'Ma vat tu', key: 'code', width: 16 },
+        { header: 'Ten vat tu', key: 'name', width: 32 },
+        { header: 'Nhom', key: 'category', width: 20 },
+        { header: 'DVT', key: 'unit', width: 10 },
+        { header: 'SL xuat', key: 'qty', width: 14 },
+    ];
+    topAgg.forEach((row: any, index: number) => {
+        wsTop.addRow({
+            stt: index + 1,
+            code: row.material?.code || '',
+            name: row.material?.name || row.materialName || '',
+            category: row.material?.category || '',
+            unit: row.material?.unit || '',
+            qty: row.totalQty,
+        });
+    });
+    styleWorksheet(wsTop);
+
+    const wsSupplier = wb.addWorksheet('Nha cung cap');
+    wsSupplier.columns = [
+        { header: 'Nha cung cap', key: 'supplier', width: 32 },
+        { header: 'So don', key: 'orderCount', width: 12 },
+        { header: 'Tong tien', key: 'total', width: 20, style: { numFmt: '#,##0' } },
+    ];
+    Object.values(supplierMap)
+        .sort((a, b) => b.total - a.total)
+        .forEach((row) => wsSupplier.addRow({ supplier: row.supplier, orderCount: row.count.size, total: row.total }));
+    styleWorksheet(wsSupplier);
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const startStr = req.query.startDate ? String(req.query.startDate).replace(/-/g, '') : 'all';
+    const endStr = req.query.endDate ? String(req.query.endDate).replace(/-/g, '') : 'all';
+    const filename = `BaoCaoVatTu_${startStr}_${endStr}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(Buffer.from(buffer));

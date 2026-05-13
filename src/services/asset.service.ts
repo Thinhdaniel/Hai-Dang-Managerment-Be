@@ -86,12 +86,17 @@ export const getAllAssets = async (req: Request, res: Response, next: NextFuncti
 
     const assetIds = assets.map((a) => a._id);
     const openTransfers = await Transfer.find({
-        assetId: { $in: assetIds },
         isDeleted: { $ne: true },
         status: { $in: ['pending', 'approved'] },
-    }).distinct('assetId');
+        $or: [{ assetId: { $in: assetIds } }, { assetIds: { $in: assetIds } }],
+    }).select('assetId assetIds');
 
-    const openTransferIds = new Set(openTransfers.map((id) => String(id)));
+    const openTransferIds = new Set(
+        openTransfers.flatMap((transfer: any) => [
+            transfer.assetId ? String(transfer.assetId) : undefined,
+            ...(Array.isArray(transfer.assetIds) ? transfer.assetIds.map(String) : []),
+        ]).filter(Boolean)
+    );
 
     const serializedAssets = assets.map((a) => ({
         ...serializeAsset(a),
@@ -175,9 +180,9 @@ export const getAssetById = async (req: Request, res: Response, next: NextFuncti
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
 
     const openTransfer = await Transfer.findOne({
-        assetId: asset._id,
         isDeleted: { $ne: true },
         status: { $in: ['pending', 'approved'] },
+        $or: [{ assetId: asset._id }, { assetIds: asset._id }],
     });
 
     return res.status(StatusCodes.OK).json(

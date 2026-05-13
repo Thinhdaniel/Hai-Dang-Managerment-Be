@@ -10,7 +10,12 @@ type SerializeFn<TInput, TOutput> = (input: TInput) => TOutput;
 
 export const WORKFLOW_POPULATE = {
     maintenance: [{ path: 'assetId', populate: ['brandId', 'plantId'] }],
-    transfer: [{ path: 'assetId', populate: ['brandId', 'plantId'] }, 'fromPlantId', 'toPlantId'],
+    transfer: [
+        { path: 'assetId', populate: ['brandId', 'plantId'] },
+        { path: 'assetIds', populate: ['brandId', 'plantId'] },
+        'fromPlantId',
+        'toPlantId',
+    ],
     borrowing: [
         { path: 'assetId', populate: ['brandId', 'plantId'] },
         { path: 'borrowerId', populate: ['plantId'] },

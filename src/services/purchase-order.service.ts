@@ -32,6 +32,21 @@ const calcTotals = (items: any[]) => ({
     totalWithVat: Number(items.reduce((s, i) => s + (i.totalWithVat ?? 0), 0).toFixed(2)),
 });
 
+const deriveSingleSupplier = (items: any[]) => {
+    const suppliers = new Map<string, { supplierId?: any; supplierName?: string }>();
+
+    items.forEach((item) => {
+        const supplierId = toId(item.supplierId);
+        const supplierName = item.supplierName || item.supplierId?.name;
+        const key = supplierId || supplierName;
+        if (!key) return;
+        suppliers.set(key, { supplierId: item.supplierId, supplierName });
+    });
+
+    const values = Array.from(suppliers.values());
+    return values.length === 1 ? values[0] : { supplierId: undefined, supplierName: undefined };
+};
+
 const buildFilter = (query: Request['query']) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
     const regex = buildSearchRegex(query.search, { flexibleWhitespace: true });
@@ -138,6 +153,7 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     }
 
     const totals = calcTotals(items);
+    const orderSupplier = deriveSingleSupplier(items);
     const orderCode = await generateDocumentCode({ model: PurchaseOrder, field: 'orderCode', prefix: 'PO' });
 
     const session = await mongoose.startSession();
@@ -150,6 +166,8 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
                 purchaseRequestCodes: requests.map((r: any) => r.requestCode),
                 status: 'draft',
                 items,
+                supplierId: orderSupplier.supplierId,
+                supplierName: orderSupplier.supplierName,
                 ...totals,
                 createdBy: req.userId,
                 note: note?.trim() || undefined,
@@ -211,8 +229,11 @@ export const updatePurchaseOrder = async (req: Request, res: Response, next: Nex
     }
 
     const totals = calcTotals(items);
+    const orderSupplier = deriveSingleSupplier(items);
     const updated = await purchaseOrderRepository.updateById(String(req.params.id), {
         items,
+        supplierId: orderSupplier.supplierId,
+        supplierName: orderSupplier.supplierName,
         ...totals,
         ...(note !== undefined ? { note: note?.trim() || undefined } : {}),
     });

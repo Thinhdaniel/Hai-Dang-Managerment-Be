@@ -23,7 +23,13 @@ export const transferRepository = {
     },
 
     findByAssetId(assetId: string) {
-        return applyPopulate(Transfer.find({ assetId, isDeleted: { $ne: true } }), WORKFLOW_POPULATE.transfer).sort({
+        return applyPopulate(
+            Transfer.find({
+                isDeleted: { $ne: true },
+                $or: [{ assetId }, { assetIds: assetId }],
+            }),
+            WORKFLOW_POPULATE.transfer
+        ).sort({
             transferDate: -1,
             createdAt: -1,
         });
@@ -45,9 +51,17 @@ export const transferRepository = {
 
     findOpenByAssetId(assetId: string) {
         return Transfer.findOne({
-            assetId,
             isDeleted: { $ne: true },
             status: { $in: ['pending', 'approved'] },
+            $or: [{ assetId }, { assetIds: assetId }],
+        }).sort({ createdAt: -1 });
+    },
+
+    findOpenByAssetIds(assetIds: string[]) {
+        return Transfer.find({
+            isDeleted: { $ne: true },
+            status: { $in: ['pending', 'approved'] },
+            $or: [{ assetId: { $in: assetIds } }, { assetIds: { $in: assetIds } }],
         }).sort({ createdAt: -1 });
     },
 

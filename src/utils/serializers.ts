@@ -170,6 +170,11 @@ export const serializeTransfer = (input: any) => {
         transfer?.assetId && typeof transfer.assetId === 'object' && transfer.assetId.name
             ? serializeAsset(transfer.assetId)
             : undefined;
+    const assets = Array.isArray(transfer?.assetIds)
+        ? transfer.assetIds
+              .filter((item: any) => item && typeof item === 'object' && item.name)
+              .map(serializeAsset)
+        : [];
     const fromPlant =
         transfer?.fromPlantId && typeof transfer.fromPlantId === 'object' && transfer.fromPlantId.name
             ? serializePlant(transfer.fromPlantId)
@@ -183,6 +188,8 @@ export const serializeTransfer = (input: any) => {
         id: toId(transfer),
         assetId: asset?.id ?? toId(transfer?.assetId),
         asset,
+        assetIds: assets.length ? assets.map((item: any) => item.id) : [asset?.id ?? toId(transfer?.assetId)].filter(Boolean),
+        assets: assets.length ? assets : asset ? [asset] : [],
         fromPlantId: fromPlant?.id ?? toId(transfer?.fromPlantId),
         fromPlant,
         fromArea: transfer?.fromArea,

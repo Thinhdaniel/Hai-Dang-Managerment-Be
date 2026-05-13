@@ -7,6 +7,10 @@ const TransferSchema = new mongoose.Schema(
             ref: 'Asset',
             required: true,
         },
+        assetIds: {
+            type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Asset' }],
+            default: [],
+        },
         fromPlantId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Plant',
@@ -99,10 +103,12 @@ const TransferSchema = new mongoose.Schema(
 );
 
 TransferSchema.index({ assetId: 1 });
+TransferSchema.index({ assetIds: 1 });
 TransferSchema.index({ fromPlantId: 1 });
 TransferSchema.index({ toPlantId: 1 });
 TransferSchema.index({ status: 1 });
 TransferSchema.index({ assetId: 1, status: 1 });
+TransferSchema.index({ assetIds: 1, status: 1 });
 
 const Transfer = mongoose.model('Transfer', TransferSchema);
 

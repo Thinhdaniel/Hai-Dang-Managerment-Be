@@ -14,6 +14,7 @@ router.use(authenticate);
 router.post('/', validator(createTransferSchema), transferController.createTransfer);
 router.get('/', transferController.getAllTransfers);
 router.get('/asset/:assetId', validateObjectId, transferController.getTransferByAsset);
+router.get('/:id/export-stock-out-xlsx', validateObjectId, transferController.exportTransferStockOutXlsx);
 router.get('/:id', validateObjectId, transferController.getTransferById);
 router.patch(
     '/:id/approve',

@@ -2,6 +2,7 @@ import { ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
 import TransferHistory from '@/models/TransferHistory';
+import User from '@/models/User';
 import { transferRepository } from '@/repositories/transfer.repository';
 import { getPagination } from '@/utils/pagination';
 import { serializeTransfer } from '@/utils/serializers';
@@ -12,8 +13,9 @@ import { StatusCodes } from 'http-status-codes';
 
 const buildFilter = async (query: Request['query']) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
+    const andConditions: Record<string, any>[] = [];
 
-    if (query.assetId) filter.assetId = query.assetId;
+    if (query.assetId) andConditions.push({ $or: [{ assetId: query.assetId }, { assetIds: query.assetId }] });
     if (query.fromPlantId) filter.fromPlantId = query.fromPlantId;
     if (query.toPlantId) filter.toPlantId = query.toPlantId;
     if (query.status) filter.status = query.status;
@@ -25,13 +27,18 @@ const buildFilter = async (query: Request['query']) => {
             $or: [{ name: regex }, { machineCode: regex }, { serial: regex }],
         }).distinct('_id');
 
-        filter.$or = [
+        andConditions.push({ $or: [
             { reason: regex },
             { note: regex },
             { fromArea: regex },
             { toArea: regex },
             { assetId: { $in: assetIds } },
-        ];
+            { assetIds: { $in: assetIds } },
+        ] });
+    }
+
+    if (andConditions.length) {
+        filter.$and = andConditions;
     }
 
     return filter;
@@ -43,6 +50,28 @@ const toDocumentId = (value: unknown) =>
     value && typeof value === 'object' && '_id' in (value as Record<string, unknown>)
         ? String((value as Record<string, unknown>)._id)
         : String(value);
+const sameId = (left: unknown, right: unknown) => String(left) === String(right);
+
+const getTransferAssets = (transfer: any) => {
+    const populatedAssets = Array.isArray(transfer?.assetIds)
+        ? transfer.assetIds.filter((asset: any) => asset && typeof asset === 'object' && asset._id)
+        : [];
+
+    if (populatedAssets.length) return populatedAssets;
+    return transfer?.assetId && typeof transfer.assetId === 'object' ? [transfer.assetId] : [];
+};
+
+const getTransferAssetIds = (transfer: any): string[] => {
+    const populatedAssetIds = getTransferAssets(transfer).map((asset: any) => toDocumentId(asset));
+    if (populatedAssetIds.length) return populatedAssetIds;
+
+    return [toDocumentId(transfer.assetId)].filter((assetId): assetId is string => Boolean(assetId && assetId !== 'undefined'));
+};
+
+const formatAssetLabel = (assets: any[]) => {
+    if (assets.length === 1) return assets[0]?.name || 'Thiet bi';
+    return `${assets.length} thiet bi`;
+};
 
 export const getAllTransfers = async (req: Request, res: Response, next: NextFunction) => {
     const filter = await buildFilter(req.query);
@@ -80,20 +109,101 @@ export const getTransferById = async (req: Request, res: Response, next: NextFun
     return sendSerializedItem(res, item, serializeTransfer, 'Lay chi tiet dieu chuyen thanh cong');
 };
 
-export const createTransfer = async (req: Request, res: Response, next: NextFunction) => {
-    const asset = await Asset.findOne({ _id: req.body.assetId, isDeleted: { $ne: true } });
+const getUserDisplayName = (user: any) => user?.fullname || user?.username || user?.email || '';
 
-    if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
+const buildTransferUserNames = async (transfer: any) => {
+    const ids = [
+        toDocumentId(transfer.createdBy),
+        toDocumentId(transfer.approvedBy),
+        toDocumentId(transfer.completedBy),
+        toDocumentId(transfer.cancelledBy),
+    ].filter((id) => id && id !== 'undefined');
 
-    const existingOpenTransfer = await transferRepository.findOpenByAssetId(req.body.assetId);
+    if (!ids.length) return {};
 
-    if (existingOpenTransfer) {
-        throw new DuplicateError('Thiet bi dang co lenh dieu chuyen chua hoan tat');
+    const users = await User.find({ _id: { $in: ids }, isDeleted: { $ne: true } })
+        .select('fullname username email')
+        .lean();
+    const byId = new Map(users.map((user: any) => [String(user._id), getUserDisplayName(user)]));
+
+    return {
+        createdByName: byId.get(toDocumentId(transfer.createdBy)) || '',
+        approvedByName: byId.get(toDocumentId(transfer.approvedBy)) || '',
+        completedByName: byId.get(toDocumentId(transfer.completedBy)) || '',
+        cancelledByName: byId.get(toDocumentId(transfer.cancelledBy)) || '',
+    };
+};
+
+export const exportTransferStockOutXlsx = async (req: Request, res: Response, next: NextFunction) => {
+    const transferId = getParamValue(req.params.id);
+    const item = await transferRepository.findById(transferId);
+
+    if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
+    if (!['approved', 'completed'].includes(String((item as any).status))) {
+        throw new BadRequestError('Chi co the xuat phieu xuat kho cho lenh da duoc duyet hoac da hoan tat');
     }
 
-    const fromArea = trimLocation(asset.area);
+    const plain = {
+        ...serializeTransfer(item),
+        ...(await buildTransferUserNames(item)),
+    };
+
+    if (!Array.isArray(plain.assets) || plain.assets.length === 0) {
+        throw new BadRequestError('Lenh dieu chuyen khong co danh sach may de xuat kho');
+    }
+
+    const { generateTransferStockOutXlsx } = await import('@/utils/generateTransferStockOutXlsx');
+    const buffer = await generateTransferStockOutXlsx(plain);
+    const filename = `phieu-xuat-kho-dieu-chuyen-${String(plain.id).slice(-6)}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(StatusCodes.OK).send(buffer);
+};
+
+export const createTransfer = async (req: Request, res: Response, next: NextFunction) => {
+    const requestedAssetIds = Array.from(new Set([...(req.body.assetIds ?? []), req.body.assetId].filter(Boolean).map(String)));
+
+    if (!requestedAssetIds.length) {
+        throw new BadRequestError('Vui long chon thiet bi');
+    }
+
+    const assets = await Asset.find({ _id: { $in: requestedAssetIds }, isDeleted: { $ne: true } });
+
+    if (assets.length !== requestedAssetIds.length) {
+        throw new NotFoundError('Mot so thiet bi khong ton tai');
+    }
+
+    const existingOpenTransfers = await transferRepository.findOpenByAssetIds(requestedAssetIds);
+
+    if (existingOpenTransfers.length) {
+        const blockedAssetIds = new Set(existingOpenTransfers.flatMap((transfer: any) => getTransferAssetIds(transfer)));
+        const blockedNames = assets
+            .filter((asset) => blockedAssetIds.has(String(asset._id)))
+            .map((asset) => asset.name)
+            .join(', ');
+
+        throw new DuplicateError(
+            blockedNames
+                ? `Thiet bi dang co lenh dieu chuyen chua hoan tat: ${blockedNames}`
+                : 'Thiet bi dang co lenh dieu chuyen chua hoan tat'
+        );
+    }
+
+    const [firstAsset] = assets;
+    const hasDifferentSource = assets.some(
+        (asset) =>
+            !sameId(asset.plantId, firstAsset.plantId) ||
+            trimLocation(asset.area) !== trimLocation(firstAsset.area)
+    );
+
+    if (hasDifferentSource) {
+        throw new BadRequestError('Chi co the tao mot lenh cho cac thiet bi cung co so va cung khu vuc hien tai');
+    }
+
+    const fromArea = trimLocation(firstAsset.area);
     const toArea = trimLocation(req.body.toArea);
-    const isSamePlant = String(asset.plantId) === String(req.body.toPlantId);
+    const isSamePlant = String(firstAsset.plantId) === String(req.body.toPlantId);
     const isSameArea = fromArea === toArea;
 
     if (isSamePlant && isSameArea) {
@@ -102,7 +212,9 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
 
     const item = await transferRepository.create({
         ...req.body,
-        fromPlantId: asset.plantId,
+        assetId: firstAsset._id,
+        assetIds: assets.map((asset) => asset._id),
+        fromPlantId: firstAsset.plantId,
         fromArea,
         toArea,
         createdBy: req.userId,
@@ -113,7 +225,7 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
     if (!createdItem) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
 
     // Send notification to admins about new transfer request
-    const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
+    const assetName = formatAssetLabel(getTransferAssets(createdItem));
     const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         type: 'warning',
@@ -153,7 +265,7 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
 
     // Send notification about approved transfer
-    const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
     await notifyAdmins('notify:new', {
         type: 'success',
@@ -200,7 +312,7 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
 
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
 
-    const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
 
     await notifyAdmins('notify:new', {
@@ -239,10 +351,7 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
         throw new BadRequestError('Chi co the hoan thanh lenh dieu chuyen da duoc duyet');
     }
 
-    const currentAssetStatus =
-        currentTransfer.assetId && typeof currentTransfer.assetId === 'object' && 'status' in currentTransfer.assetId
-            ? String(currentTransfer.assetId.status)
-            : ASSET_STATUS.ACTIVE;
+    const currentAssets = getTransferAssets(currentTransfer);
 
     const item = await transferRepository.updateById(transferId, {
         status: 'completed',
@@ -254,27 +363,38 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
 
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
 
-    await Asset.findByIdAndUpdate(toDocumentId(item.assetId), {
-        plantId: toDocumentId(item.toPlantId),
-        area: item.toArea ?? null,
-        status: currentAssetStatus,
-        updatedBy: req.userId,
-    });
+    const itemAssetIds = getTransferAssetIds(item);
+    const statusByAssetId = new Map(
+        currentAssets.map((asset: any) => [toDocumentId(asset), String(asset.status || ASSET_STATUS.ACTIVE)])
+    );
+
+    await Promise.all(
+        itemAssetIds.map((assetId) =>
+            Asset.findByIdAndUpdate(assetId, {
+                plantId: toDocumentId(item.toPlantId),
+                area: item.toArea ?? null,
+                status: statusByAssetId.get(assetId) || ASSET_STATUS.ACTIVE,
+                updatedBy: req.userId,
+            })
+        )
+    );
 
     // Ghi TransferHistory
     const fromPlantName = (item.fromPlantId as any)?.name || String(item.fromPlantId);
     const toPlantName = (item.toPlantId as any)?.name || String(item.toPlantId);
-    await TransferHistory.create({
-        machineId: toDocumentId(item.assetId),
-        fromPlantId: toDocumentId(item.fromPlantId),
-        fromPlant: fromPlantName,
-        toPlantId: toDocumentId(item.toPlantId),
-        toPlant: toPlantName,
-        note: item.note || undefined,
-        createdBy: req.userId,
-    } as any);
+    await TransferHistory.insertMany(
+        itemAssetIds.map((assetId) => ({
+            machineId: assetId,
+            fromPlantId: toDocumentId(item.fromPlantId),
+            fromPlant: fromPlantName,
+            toPlantId: toDocumentId(item.toPlantId),
+            toPlant: toPlantName,
+            note: item.note || undefined,
+            createdBy: req.userId,
+        }))
+    );
 
-    const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
 
     await notifyAdmins('notify:new', {
@@ -330,7 +450,7 @@ export const cancelTransfer = async (req: Request, res: Response, next: NextFunc
 
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
 
-    const assetName = (item.assetId as any)?.name || 'Thiết bị';
+    const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
 
     await notifyAdmins('notify:new', {
