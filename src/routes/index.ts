@@ -20,6 +20,7 @@ import distributionRoutes from './distribution.route';
 import supplyRequestRoutes from './supply-request.route';
 import expressDispatchRoutes from './express-dispatch.route';
 import returnRecordRoutes from './return-record.route';
+import aiHelpRoutes from './ai-help.route';
 
 const router = Router();
 
@@ -43,5 +44,6 @@ router.use('/distributions', distributionRoutes);
 router.use('/supply-requests', supplyRequestRoutes);
 router.use('/express-dispatch', expressDispatchRoutes);
 router.use('/return-records', returnRecordRoutes);
+router.use('/ai', aiHelpRoutes);
 
 export default router;
