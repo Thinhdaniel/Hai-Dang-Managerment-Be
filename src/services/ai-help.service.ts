@@ -7,7 +7,10 @@ type HelpContextTopic = {
     title: string;
     summary: string;
     category?: string;
+    prerequisites?: string[];
     steps: string[];
+    checkpoints?: string[];
+    commonMistakes?: string[];
     notes?: string[];
 };
 
@@ -28,7 +31,16 @@ const formatContext = (topics: HelpContextTopic[]) => {
 
     return topics
         .map((topic, index) => {
+            const prerequisites = topic.prerequisites?.length
+                ? `Dieu kien truoc khi thao tac:\n${topic.prerequisites.map((item) => `- ${item}`).join('\n')}`
+                : '';
             const steps = topic.steps.map((step, stepIndex) => `${stepIndex + 1}. ${step}`).join('\n');
+            const checkpoints = topic.checkpoints?.length
+                ? `\nSau khi lam xong can kiem tra:\n${topic.checkpoints.map((item) => `- ${item}`).join('\n')}`
+                : '';
+            const commonMistakes = topic.commonMistakes?.length
+                ? `\nLoi hay gap va cach tranh:\n${topic.commonMistakes.map((item) => `- ${item}`).join('\n')}`
+                : '';
             const notes = topic.notes?.length
                 ? `\nLuu y:\n${topic.notes.map((note) => `- ${note}`).join('\n')}`
                 : '';
@@ -37,7 +49,10 @@ const formatContext = (topics: HelpContextTopic[]) => {
                 `Tai lieu ${index + 1}: ${topic.title}`,
                 `Nhom: ${topic.category || 'general'}`,
                 `Tom tat: ${topic.summary}`,
+                prerequisites,
                 steps ? `Cac buoc:\n${steps}` : '',
+                checkpoints,
+                commonMistakes,
                 notes,
             ]
                 .filter(Boolean)
@@ -58,12 +73,22 @@ const buildFallbackAnswer = (question: string, route: string | undefined, topics
     }
 
     const [topic] = topics;
+    const prerequisites = topic.prerequisites?.length
+        ? `\n\nDieu kien truoc khi thao tac:\n${topic.prerequisites.map((item) => `- ${item}`).join('\n')}`
+        : '';
     const steps = topic.steps.map((step, index) => `${index + 1}. ${step}`).join('\n');
+    const checkpoints = topic.checkpoints?.length
+        ? `\n\nSau khi lam xong can kiem tra:\n${topic.checkpoints.map((item) => `- ${item}`).join('\n')}`
+        : '';
+    const commonMistakes = topic.commonMistakes?.length
+        ? `\n\nLoi hay gap va cach tranh:\n${topic.commonMistakes.map((item) => `- ${item}`).join('\n')}`
+        : '';
     const notes = topic.notes?.length ? `\n\nLưu ý:\n${topic.notes.map((note) => `- ${note}`).join('\n')}` : '';
 
     return [
         `Mình chưa gọi được AI local nên trả lời theo hướng dẫn nội bộ phù hợp nhất: ${topic.title}.`,
         topic.summary,
+        prerequisites,
         steps ? `\nCác bước:\n${steps}` : '',
         notes,
     ]
@@ -73,11 +98,22 @@ const buildFallbackAnswer = (question: string, route: string | undefined, topics
 
 const askOllama = async (question: string, route: string | undefined, topics: HelpContextTopic[]) => {
     const systemPrompt = [
-        'Ban la tro ly huong dan su dung noi bo cho he thong quan ly may moc va vat tu.',
-        'Tra loi bang tieng Viet, than thien nhung ngan gon, thuc dung.',
-        'Chi dua vao tai lieu noi bo trong phan CONTEXT. Khong bia chuc nang khong co trong tai lieu.',
-        'Neu tai lieu khong du, noi ro la chua co huong dan va goi y nguoi dung hoi cu the hon.',
-        'Dinh dang cau tra loi gom: tom tat ngan, cac buoc thao tac, luu y nghiep vu neu co.',
+        'Ban la tro ly huong dan su dung noi bo cho he thong quan ly may moc va vat tu trong cong ty.',
+        'Muc tieu cua ban la viet huong dan van hanh chi tiet nhu SOP noi bo, khong tra loi qua loa.',
+        'Tra loi bang tieng Viet tu nhien, ro rang, thuc dung, phu hop nhan vien khong ranh phan mem.',
+        'Chi dua vao tai lieu noi bo trong phan CONTEXT. Khong bia chuc nang, nut bam, menu hoac trang khong co trong tai lieu.',
+        'Neu tai lieu khong du, noi ro phan nao chua chac, sau do huong dan theo phan chac chan co trong CONTEXT.',
+        'Neu nguoi dung hoi ve quy trinh/thao tac, phai huong dan tung buoc cu the: vao man hinh nao, bam nut nao, nhap truong nao, trang thai thay doi ra sao, sau do can kiem tra gi.',
+        'Neu nguoi dung hoi ve nghiep vu, phai giai thich khi nao dung, ai nen thuc hien, dieu kien truoc khi lam, rui ro neu lam sai.',
+        'Dinh dang cau tra loi bat buoc:',
+        '1. Tom tat nhanh: 2-3 cau noi dung can lam.',
+        '2. Khi nao dung: neu phu hop voi cau hoi.',
+        '3. Dieu kien truoc khi thao tac: tai khoan/quyen/du lieu can co.',
+        '4. Cac buoc thuc hien: danh sach so thu tu, moi buoc co hanh dong ro rang.',
+        '5. Sau khi lam xong can kiem tra: ket qua, trang thai, ton kho, vi tri hoac bao cao lien quan.',
+        '6. Loi hay gap va cach tranh: neu co trong context hoac suy ra truc tiep tu context.',
+        '7. Luu y nghiep vu: cac diem can canh bao.',
+        'Neu cau hoi don gian, van tra loi du cac phan lien quan nhung co the bo phan khong can thiet.',
         'Khong nhac den prompt, context, model hoac ky thuat noi bo.',
     ].join('\n');
 
@@ -98,8 +134,9 @@ const askOllama = async (question: string, route: string | undefined, topics: He
                 { role: 'user', content: userPrompt },
             ],
             options: {
-                temperature: 0.2,
-                top_p: 0.8,
+                temperature: 0.15,
+                top_p: 0.85,
+                num_predict: 1100,
             },
         },
         {
