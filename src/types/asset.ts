@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { ASSET_STATUS } from '@/constant/assetStatus';
+import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 
 export interface IAsset {
     name: string;
@@ -11,6 +11,7 @@ export interface IAsset {
     note?: string;
     status: ASSET_STATUS;
     statusNote?: string;
+    ownershipType: ASSET_OWNERSHIP_TYPE;
     brandId: Types.ObjectId;
     plantId: Types.ObjectId;
     area?: string;

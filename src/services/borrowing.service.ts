@@ -1,4 +1,4 @@
-import { ASSET_STATUS } from '@/constant/assetStatus';
+import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
 import Transfer from '@/models/Transfer';
@@ -13,6 +13,14 @@ import { StatusCodes } from 'http-status-codes';
 const getParamValue = (value: string | string[]) => (Array.isArray(value) ? value[0] : value);
 
 const trimText = (value?: string | null) => value?.trim() || undefined;
+
+const isExternalOrRental = (type?: string) => type === 'external' || type === 'rental';
+
+const getOwnershipTypeForBorrowing = (type: string) => {
+    if (type === 'external') return ASSET_OWNERSHIP_TYPE.PARTNER_BORROWED;
+    if (type === 'rental') return ASSET_OWNERSHIP_TYPE.RENTAL;
+    return ASSET_OWNERSHIP_TYPE.OWNED;
+};
 
 const toDocumentId = (value: unknown) =>
     value && typeof value === 'object' && '_id' in (value as Record<string, unknown>)
@@ -94,6 +102,13 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
 
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
 
+    if (req.body.type === 'internal') {
+        const ownershipType = asset.ownershipType || ASSET_OWNERSHIP_TYPE.OWNED;
+        if (ownershipType !== ASSET_OWNERSHIP_TYPE.OWNED || asset.status === ASSET_STATUS.RETURNED_TO_PARTNER) {
+            throw new BadRequestError('Chi co the tao giao dich noi bo cho may thuoc Hai Dang');
+        }
+    }
+
     const activeTransaction = await borrowingRepository.findActiveByAssetId(req.body.assetId);
 
     if (activeTransaction) {
@@ -126,6 +141,7 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
 
     await Asset.findByIdAndUpdate(req.body.assetId, {
         status: ASSET_STATUS.BORROWING,
+        ownershipType: getOwnershipTypeForBorrowing(req.body.type),
         updatedBy: req.userId,
     });
 
@@ -176,10 +192,12 @@ export const returnBorrowing = async (req: Request, res: Response, next: NextFun
     if (!item) throw new NotFoundError('Khong tim thay giao dich thiet bi');
 
     await Asset.findByIdAndUpdate(toDocumentId(item.assetId), {
-        status:
-            item.assetStatusBefore === ASSET_STATUS.BORROWING || !item.assetStatusBefore
-                ? ASSET_STATUS.ACTIVE
-                : item.assetStatusBefore,
+        status: isExternalOrRental(item.type)
+            ? ASSET_STATUS.RETURNED_TO_PARTNER
+            : item.assetStatusBefore === ASSET_STATUS.BORROWING || !item.assetStatusBefore
+              ? ASSET_STATUS.ACTIVE
+              : item.assetStatusBefore,
+        ownershipType: getOwnershipTypeForBorrowing(item.type),
         updatedBy: req.userId,
     });
 

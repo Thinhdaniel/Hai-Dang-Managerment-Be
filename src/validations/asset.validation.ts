@@ -1,6 +1,6 @@
 import { zOptionalString, zObjectId, zRequiredNumber, zRequiredString } from '@/lib/validation';
 import { z } from 'zod';
-import { ASSET_STATUS } from '@/constant/assetStatus';
+import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 
 export const createAssetSchema = z.object({
     name: zRequiredString('Ten thiet bi'),
@@ -11,6 +11,7 @@ export const createAssetSchema = z.object({
     note: zOptionalString(),
     status: z.nativeEnum(ASSET_STATUS).optional(),
     statusNote: zOptionalString(),
+    ownershipType: z.nativeEnum(ASSET_OWNERSHIP_TYPE).optional(),
     brandId: zObjectId('Nhan hieu'),
     plantId: zObjectId('Co so'),
     area: zOptionalString(),
@@ -31,6 +32,7 @@ export const updateAssetSchema = z.object({
     note: zOptionalString(),
     status: z.nativeEnum(ASSET_STATUS).optional(),
     statusNote: zOptionalString(),
+    ownershipType: z.nativeEnum(ASSET_OWNERSHIP_TYPE).optional(),
     brandId: zObjectId('Nhan hieu').optional(),
     plantId: zObjectId('Co so').optional(),
     area: zOptionalString(),

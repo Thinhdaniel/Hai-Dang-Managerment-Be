@@ -1,6 +1,7 @@
 import Asset from '@/models/Asset';
 import Borrowing from '@/models/Borrowing';
 import Plant from '@/models/Plant';
+import { ASSET_OWNERSHIP_TYPE } from '@/constant/assetStatus';
 
 type DashboardSummaryRow = {
     totalMachines: number;
@@ -52,6 +53,7 @@ export const dashboardRepository = {
             {
                 $match: {
                     isDeleted: { $ne: true },
+                    $or: [{ ownershipType: ASSET_OWNERSHIP_TYPE.OWNED }, { ownershipType: { $exists: false } }],
                 },
             },
             {
@@ -129,11 +131,13 @@ export const dashboardRepository = {
                     pipeline: [
                         {
                             $match: {
+                                isDeleted: { $ne: true },
+                                $or: [
+                                    { ownershipType: ASSET_OWNERSHIP_TYPE.OWNED },
+                                    { ownershipType: { $exists: false } },
+                                ],
                                 $expr: {
-                                    $and: [
-                                        { $eq: ['$plantId', '$$facilityId'] },
-                                        { $ne: ['$isDeleted', true] },
-                                    ],
+                                    $eq: ['$plantId', '$$facilityId'],
                                 },
                             },
                         },
@@ -302,7 +306,10 @@ export const dashboardRepository = {
                                 },
                                 status: '$status',
                                 timestamp: {
-                                    $ifNull: ['$completedAt', { $ifNull: ['$approvedAt', { $ifNull: ['$transferDate', '$createdAt'] }] }],
+                                    $ifNull: [
+                                        '$completedAt',
+                                        { $ifNull: ['$approvedAt', { $ifNull: ['$transferDate', '$createdAt'] }] },
+                                    ],
                                 },
                                 asset: {
                                     id: {
@@ -323,7 +330,11 @@ export const dashboardRepository = {
                                 },
                                 toFacility: {
                                     id: {
-                                        $cond: [{ $ifNull: ['$toFacility._id', false] }, { $toString: '$toFacility._id' }, null],
+                                        $cond: [
+                                            { $ifNull: ['$toFacility._id', false] },
+                                            { $toString: '$toFacility._id' },
+                                            null,
+                                        ],
                                     },
                                     name: '$toFacility.name',
                                 },

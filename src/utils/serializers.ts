@@ -23,7 +23,14 @@ const mapAssetStatus = (status?: string) => {
     if (status === 'broken') return 'broken';
     if (status === 'borrowing') return 'borrowing';
     if (status === 'storage') return 'storage';
+    if (status === 'returned_to_partner') return 'returned_to_partner';
     return 'active';
+};
+
+const mapAssetOwnershipType = (ownershipType?: string) => {
+    if (ownershipType === 'partner_borrowed') return 'partner_borrowed';
+    if (ownershipType === 'rental') return 'rental';
+    return 'owned';
 };
 
 export const serializeBrand = (input: any) => {
@@ -102,6 +109,7 @@ export const serializeAsset = (input: any) => {
         plant,
         area: asset?.area,
         status: mapAssetStatus(asset?.status),
+        ownershipType: mapAssetOwnershipType(asset?.ownershipType),
         purchaseDate: toIso(asset?.purchaseDate),
         purchasePrice: asset?.purchasePrice,
         specifications: asset?.specifications ?? {},
@@ -130,6 +138,7 @@ export const serializePublicAsset = (input: any) => {
         serialNumber: asset?.serial ?? asset?.seri,
         model: asset?.model ?? asset?.type,
         status: mapAssetStatus(asset?.status),
+        ownershipType: mapAssetOwnershipType(asset?.ownershipType),
         facility: facility
             ? {
                   name: facility.name,
@@ -171,9 +180,7 @@ export const serializeTransfer = (input: any) => {
             ? serializeAsset(transfer.assetId)
             : undefined;
     const assets = Array.isArray(transfer?.assetIds)
-        ? transfer.assetIds
-              .filter((item: any) => item && typeof item === 'object' && item.name)
-              .map(serializeAsset)
+        ? transfer.assetIds.filter((item: any) => item && typeof item === 'object' && item.name).map(serializeAsset)
         : [];
     const fromPlant =
         transfer?.fromPlantId && typeof transfer.fromPlantId === 'object' && transfer.fromPlantId.name
@@ -188,7 +195,9 @@ export const serializeTransfer = (input: any) => {
         id: toId(transfer),
         assetId: asset?.id ?? toId(transfer?.assetId),
         asset,
-        assetIds: assets.length ? assets.map((item: any) => item.id) : [asset?.id ?? toId(transfer?.assetId)].filter(Boolean),
+        assetIds: assets.length
+            ? assets.map((item: any) => item.id)
+            : [asset?.id ?? toId(transfer?.assetId)].filter(Boolean),
         assets: assets.length ? assets : asset ? [asset] : [],
         fromPlantId: fromPlant?.id ?? toId(transfer?.fromPlantId),
         fromPlant,

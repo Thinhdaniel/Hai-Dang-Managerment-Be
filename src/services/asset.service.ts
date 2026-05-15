@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { ASSET_STATUS } from '@/constant/assetStatus';
+import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
 import { assetRepository } from '@/repositories/asset.repository';
 import { confirmAssetImport, previewAssetImport } from '@/services/asset-import.helpers';
@@ -25,6 +25,7 @@ const buildFilter = (query: Request['query']) => {
     }
 
     if (query.status) filter.status = query.status;
+    if (query.ownershipType) filter.ownershipType = query.ownershipType;
     if (query.plantId) filter.plantId = query.plantId;
     if (query.name) filter.name = query.name;
     if (query.model) {
@@ -51,13 +52,23 @@ const createAvailablePublicId = async () => {
     return generateUniqueMachinePublicId(async (publicId) => Boolean(await assetRepository.existsByPublicId(publicId)));
 };
 
+const assertValidAssetOwnershipStatus = (status?: string, ownershipType?: string) => {
+    const normalizedOwnershipType = ownershipType || ASSET_OWNERSHIP_TYPE.OWNED;
+    if (status === ASSET_STATUS.RETURNED_TO_PARTNER && normalizedOwnershipType === ASSET_OWNERSHIP_TYPE.OWNED) {
+        throw new BadRequestError('May da tra doi tac phai la may muon doi tac hoac may thue');
+    }
+};
+
 export const createAsset = async (req: Request, res: Response, next: NextFunction) => {
+    assertValidAssetOwnershipStatus(req.body.status, req.body.ownershipType);
+
     const asset = await assetRepository.create({
         ...req.body,
         publicId: await createAvailablePublicId(),
         createdBy: req.userId,
         updatedBy: req.userId,
         status: req.body.status ?? ASSET_STATUS.ACTIVE,
+        ownershipType: req.body.ownershipType ?? ASSET_OWNERSHIP_TYPE.OWNED,
     });
 
     const createdAsset = await assetRepository.findById(String(asset._id));
@@ -92,10 +103,12 @@ export const getAllAssets = async (req: Request, res: Response, next: NextFuncti
     }).select('assetId assetIds');
 
     const openTransferIds = new Set(
-        openTransfers.flatMap((transfer: any) => [
-            transfer.assetId ? String(transfer.assetId) : undefined,
-            ...(Array.isArray(transfer.assetIds) ? transfer.assetIds.map(String) : []),
-        ]).filter(Boolean)
+        openTransfers
+            .flatMap((transfer: any) => [
+                transfer.assetId ? String(transfer.assetId) : undefined,
+                ...(Array.isArray(transfer.assetIds) ? transfer.assetIds.map(String) : []),
+            ])
+            .filter(Boolean)
     );
 
     const serializedAssets = assets.map((a) => ({
@@ -125,16 +138,17 @@ export const exportAssets = async (req: Request, res: Response, next: NextFuncti
 
     // Define columns
     sheet.columns = [
-        { header: 'Tên máy',    key: 'name',          width: 30 },
-        { header: 'Mã máy',     key: 'machineCode',   width: 18 },
-        { header: 'Serial',     key: 'serial',        width: 20 },
-        { header: 'Loại máy',   key: 'type',          width: 20 },
-        { header: 'Model máy',  key: 'model',         width: 20 },
-        { header: 'Trạng thái', key: 'status',        width: 16 },
-        { header: 'Nhãn hiệu',  key: 'brand',         width: 20 },
-        { header: 'Cơ sở',      key: 'plant',         width: 20 },
-        { header: 'Ngày mua',   key: 'purchaseDate',  width: 15 },
-        { header: 'Giá trị',    key: 'purchasePrice', width: 15 },
+        { header: 'Tên máy', key: 'name', width: 30 },
+        { header: 'Mã máy', key: 'machineCode', width: 18 },
+        { header: 'Serial', key: 'serial', width: 20 },
+        { header: 'Loại máy', key: 'type', width: 20 },
+        { header: 'Model máy', key: 'model', width: 20 },
+        { header: 'Trạng thái', key: 'status', width: 16 },
+        { header: 'Nguồn gốc', key: 'ownershipType', width: 18 },
+        { header: 'Nhãn hiệu', key: 'brand', width: 20 },
+        { header: 'Cơ sở', key: 'plant', width: 20 },
+        { header: 'Ngày mua', key: 'purchaseDate', width: 15 },
+        { header: 'Giá trị', key: 'purchasePrice', width: 15 },
     ];
 
     // Style header row
@@ -151,15 +165,16 @@ export const exportAssets = async (req: Request, res: Response, next: NextFuncti
     // Add data rows
     rows.forEach((row) => {
         sheet.addRow({
-            name:          row.name ?? '',
-            machineCode:   row.machineCode ?? '',
-            serial:        row.serial ?? '',
-            type:          row.type ?? '',
-            model:         row.model ?? '',
-            status:        row.status ?? '',
-            brand:         row.brand?.name ?? '',
-            plant:         row.plant?.name ?? '',
-            purchaseDate:  row.purchaseDate ?? '',
+            name: row.name ?? '',
+            machineCode: row.machineCode ?? '',
+            serial: row.serial ?? '',
+            type: row.type ?? '',
+            model: row.model ?? '',
+            status: row.status ?? '',
+            ownershipType: row.ownershipType ?? '',
+            brand: row.brand?.name ?? '',
+            plant: row.plant?.name ?? '',
+            purchaseDate: row.purchaseDate ?? '',
             purchasePrice: row.purchasePrice ?? '',
         });
     });
@@ -249,6 +264,14 @@ export const getPublicAssetByPublicId = async (req: Request, res: Response, next
 };
 
 export const updateAsset = async (req: Request, res: Response, next: NextFunction) => {
+    const currentAsset = await assetRepository.findById(String(req.params.id));
+    if (!currentAsset) throw new NotFoundError('Khong tim thay thiet bi');
+
+    assertValidAssetOwnershipStatus(
+        req.body.status ?? currentAsset.status,
+        req.body.ownershipType ?? currentAsset.ownershipType
+    );
+
     const asset = await assetRepository.updateById(String(req.params.id), { ...req.body, updatedBy: req.userId });
 
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
@@ -264,6 +287,11 @@ export const updateAsset = async (req: Request, res: Response, next: NextFunctio
 };
 
 export const updateAssetStatus = async (req: Request, res: Response, next: NextFunction) => {
+    const currentAsset = await assetRepository.findById(String(req.params.id));
+    if (!currentAsset) throw new NotFoundError('Khong tim thay thiet bi');
+
+    assertValidAssetOwnershipStatus(req.body.status, currentAsset.ownershipType);
+
     const asset = await assetRepository.updateById(String(req.params.id), {
         status: req.body.status,
         statusNote: req.body.note,

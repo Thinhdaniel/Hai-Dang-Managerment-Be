@@ -1,4 +1,4 @@
-import { ASSET_STATUS } from '@/constant/assetStatus';
+import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
 import Maintenance from '@/models/Maintenance';
@@ -97,6 +97,12 @@ export const getMaintenanceById = async (req: Request, res: Response, next: Next
 };
 
 export const createMaintenance = async (req: Request, res: Response, next: NextFunction) => {
+    const asset = await Asset.findOne({ _id: req.body.assetId, isDeleted: { $ne: true } });
+    if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
+    if (asset.status === ASSET_STATUS.RETURNED_TO_PARTNER) {
+        throw new BadRequestError('Thiet bi da tra doi tac, khong the tao phieu bao tri moi');
+    }
+
     const approvedTransfer = await Transfer.findOne({
         assetId: req.body.assetId,
         status: 'approved',
@@ -190,8 +196,14 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
 
     if (!item) throw new NotFoundError('Khong tim thay phieu bao tri');
 
+    const asset = await Asset.findById(item.assetId);
+    const nextAssetStatus =
+        asset?.ownershipType && asset.ownershipType !== ASSET_OWNERSHIP_TYPE.OWNED
+            ? ASSET_STATUS.BORROWING
+            : ASSET_STATUS.ACTIVE;
+
     await Asset.findByIdAndUpdate(item.assetId, {
-        status: ASSET_STATUS.ACTIVE,
+        status: nextAssetStatus,
         lastMaintenanceDate: req.body.endDate,
     });
 

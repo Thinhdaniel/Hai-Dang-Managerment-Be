@@ -180,6 +180,13 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
         throw new NotFoundError('Mot so thiet bi khong ton tai');
     }
 
+    const returnedPartnerAssets = assets.filter((asset) => asset.status === ASSET_STATUS.RETURNED_TO_PARTNER);
+    if (returnedPartnerAssets.length) {
+        throw new BadRequestError(
+            `Khong the dieu chuyen may da tra doi tac: ${returnedPartnerAssets.map((asset) => asset.name).join(', ')}`
+        );
+    }
+
     const existingOpenTransfers = await transferRepository.findOpenByAssetIds(requestedAssetIds);
 
     if (existingOpenTransfers.length) {

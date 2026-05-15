@@ -1,4 +1,5 @@
 import Asset from '@/models/Asset';
+import { ASSET_OWNERSHIP_TYPE } from '@/constant/assetStatus';
 import mongoose from 'mongoose';
 
 type AssetFilter = Record<string, unknown>;
@@ -25,7 +26,9 @@ export const assetRepository = {
     },
 
     findById(id: string) {
-        return Asset.findOne({ _id: id, isDeleted: { $ne: true } }).populate('brandId').populate('plantId');
+        return Asset.findOne({ _id: id, isDeleted: { $ne: true } })
+            .populate('brandId')
+            .populate('plantId');
     },
 
     findByPublicId(publicId: string) {
@@ -62,7 +65,9 @@ export const assetRepository = {
     },
 
     findExistingMachineCodes(machineCodes: string[]) {
-        return Asset.find({ machineCode: { $in: machineCodes } }).select('machineCode').lean();
+        return Asset.find({ machineCode: { $in: machineCodes } })
+            .select('machineCode')
+            .lean();
     },
 
     insertMany(documents: Record<string, unknown>[]) {
@@ -78,6 +83,7 @@ export const assetRepository = {
             {
                 $match: {
                     isDeleted: { $ne: true },
+                    $or: [{ ownershipType: ASSET_OWNERSHIP_TYPE.OWNED }, { ownershipType: { $exists: false } }],
                     plantId: { $in: plantIds.map((id) => new mongoose.Types.ObjectId(id)) },
                 },
             },
@@ -100,6 +106,7 @@ export const assetRepository = {
             {
                 $match: {
                     isDeleted: { $ne: true },
+                    $or: [{ ownershipType: ASSET_OWNERSHIP_TYPE.OWNED }, { ownershipType: { $exists: false } }],
                 },
             },
             {
@@ -137,9 +144,7 @@ export const assetRepository = {
         ]);
 
         const countsByPlant = new Map(
-            (result?.countsByPlant ?? [])
-                .filter((row) => row._id)
-                .map((row) => [String(row._id), row.count])
+            (result?.countsByPlant ?? []).filter((row) => row._id).map((row) => [String(row._id), row.count])
         );
 
         return {

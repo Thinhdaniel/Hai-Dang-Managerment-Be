@@ -123,6 +123,9 @@ const parseStatus = (value: unknown) => {
         dangmuon: ASSET_STATUS.BORROWING,
         storage: ASSET_STATUS.STORAGE,
         tonkho: ASSET_STATUS.STORAGE,
+        returnedtopartner: ASSET_STATUS.RETURNED_TO_PARTNER,
+        datradoitac: ASSET_STATUS.RETURNED_TO_PARTNER,
+        tradoitac: ASSET_STATUS.RETURNED_TO_PARTNER,
     };
 
     return statusMap[normalizedValue];
@@ -217,8 +220,12 @@ const readWorkbookRows = (fileBuffer: Buffer) => {
 
 const buildReferenceMaps = async () => {
     const [brands, plants] = await Promise.all([
-        Brand.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
-        Plant.find({ isDeleted: { $ne: true } }).select('_id name code').lean(),
+        Brand.find({ isDeleted: { $ne: true } })
+            .select('_id name')
+            .lean(),
+        Plant.find({ isDeleted: { $ne: true } })
+            .select('_id name code')
+            .lean(),
     ]);
 
     return {
@@ -227,7 +234,9 @@ const buildReferenceMaps = async () => {
             byName: new Map(brands.map((brand) => [normalizeLookup(brand.name), String(brand._id)])),
         },
         plants: {
-            byId: new Map(plants.map((plant) => [String(plant._id), { id: String(plant._id), name: String(plant.name) }])),
+            byId: new Map(
+                plants.map((plant) => [String(plant._id), { id: String(plant._id), name: String(plant.name) }])
+            ),
             byName: new Map(plants.map((plant) => [normalizeLookup(plant.name), String(plant._id)])),
             byCode: new Map(plants.map((plant) => [normalizeLookup(plant.code), String(plant._id)])),
             names: new Map(plants.map((plant) => [String(plant._id), String(plant.name)])),
@@ -454,7 +463,8 @@ export const confirmAssetImport = async (fileBuffer: Buffer, userId?: string): P
         }
 
         const publicId = await generateUniqueMachinePublicId(
-            async (candidate) => reservedPublicIds.has(candidate) || Boolean(await assetRepository.existsByPublicId(candidate))
+            async (candidate) =>
+                reservedPublicIds.has(candidate) || Boolean(await assetRepository.existsByPublicId(candidate))
         );
 
         reservedPublicIds.add(publicId);

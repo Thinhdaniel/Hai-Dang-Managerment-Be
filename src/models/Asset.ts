@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ASSET_STATUS } from '@/constant/assetStatus';
+import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 
 const AssetSchema = new mongoose.Schema(
     {
@@ -50,6 +50,11 @@ const AssetSchema = new mongoose.Schema(
         statusNote: {
             type: String,
             trim: true,
+        },
+        ownershipType: {
+            type: String,
+            enum: Object.values(ASSET_OWNERSHIP_TYPE),
+            default: ASSET_OWNERSHIP_TYPE.OWNED,
         },
         brandId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -111,6 +116,7 @@ const AssetSchema = new mongoose.Schema(
 AssetSchema.index({ brandId: 1 });
 AssetSchema.index({ plantId: 1 });
 AssetSchema.index({ status: 1 });
+AssetSchema.index({ ownershipType: 1 });
 AssetSchema.index({ model: 1 });
 AssetSchema.index({ serial: 1 }, { sparse: true });
 

@@ -1,5 +1,6 @@
 import Asset from '@/models/Asset';
 import Maintenance from '@/models/Maintenance';
+import { ASSET_OWNERSHIP_TYPE } from '@/constant/assetStatus';
 import { dashboardRepository } from '@/repositories/dashboard.repository';
 import customResponse from '@/utils/response';
 import { NextFunction, Request, Response } from 'express';
@@ -44,7 +45,10 @@ export const getDashboardOverview = async (req: Request, res: Response, next: Ne
 };
 
 export const getDashboardStats = async (req: Request, res: Response, next: NextFunction) => {
-    const baseFilter = { isDeleted: { $ne: true } };
+    const baseFilter = {
+        isDeleted: { $ne: true },
+        $or: [{ ownershipType: ASSET_OWNERSHIP_TYPE.OWNED }, { ownershipType: { $exists: false } }],
+    };
     const [totalAssets, activeAssets, maintenanceAssets, brokenAssets, borrowingAssets, storageAssets] =
         await Promise.all([
             Asset.countDocuments(baseFilter),
@@ -75,7 +79,12 @@ export const getDashboardStats = async (req: Request, res: Response, next: NextF
 export const getDashboardCharts = async (req: Request, res: Response, next: NextFunction) => {
     const [statusDistributionRaw, maintenanceItems] = await Promise.all([
         Asset.aggregate([
-            { $match: { isDeleted: { $ne: true } } },
+            {
+                $match: {
+                    isDeleted: { $ne: true },
+                    $or: [{ ownershipType: ASSET_OWNERSHIP_TYPE.OWNED }, { ownershipType: { $exists: false } }],
+                },
+            },
             { $group: { _id: '$status', count: { $sum: 1 } } },
             { $project: { _id: 0, status: '$_id', count: 1 } },
         ]),
