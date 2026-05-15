@@ -8,6 +8,7 @@ const withPopulate = (q: any) =>
     q.populate('createdBy', 'fullname email')
      .populate('orderedBy', 'fullname email')
      .populate('receivedBy', 'fullname email')
+     .populate('plantId', 'name code')
      .populate('items.supplierId', 'name');
 
 export const purchaseOrderRepository = {

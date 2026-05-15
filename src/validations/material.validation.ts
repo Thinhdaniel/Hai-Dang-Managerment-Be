@@ -8,6 +8,7 @@ export const createMaterialSchema = z.object({
     unit: zRequiredString('Don vi tinh'),
     description: zOptionalString(),
     minStockLevel: z.number().min(0).optional(),
+    trackInventory: z.boolean().optional(),
     isActive: z.boolean().optional(),
 });
 
@@ -18,5 +19,6 @@ export const updateMaterialSchema = z.object({
     unit: zOptionalString(),
     description: zOptionalString(),
     minStockLevel: z.number().min(0).optional(),
+    trackInventory: z.boolean().optional(),
     isActive: z.boolean().optional(),
 });

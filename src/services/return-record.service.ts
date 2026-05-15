@@ -9,6 +9,13 @@ import mongoose from 'mongoose';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
+const normalizeReturnMaterialName = (value?: string) => value?.trim().replace(/\s+/g, ' ').toLowerCase() || '';
+
+const getReturnItemKey = (item: any) => {
+    if (item.materialId) return String(item.materialId);
+    return normalizeReturnMaterialName(item.materialName);
+};
+
 export const createReturnRecord = async (req: Request, res: Response, next: NextFunction) => {
     const { purchaseOrderId, items, note, returnedAt } = req.body;
 
@@ -25,6 +32,65 @@ export const createReturnRecord = async (req: Request, res: Response, next: Next
 
     // Build items + tính tiền — map supplierId từ PO items
     const poItems: any[] = (po as any).items ?? [];
+    const returnableByKey = new Map<string, number>();
+    const poItemByKey = new Map<string, any>();
+
+    poItems.forEach((item) => {
+        const key = getReturnItemKey(item);
+        if (!key) return;
+
+        const returnableQuantity = Number(item.quantityReceived ?? item.quantityOrdered ?? item.quantityRequested ?? 0);
+        returnableByKey.set(key, Number(((returnableByKey.get(key) ?? 0) + returnableQuantity).toFixed(2)));
+        if (!poItemByKey.has(key)) {
+            poItemByKey.set(key, item);
+        }
+    });
+
+    const existingReturns = await ReturnRecord.find({
+        purchaseOrderId,
+        isDeleted: { $ne: true },
+    })
+        .select('items')
+        .lean();
+
+    const returnedByKey = new Map<string, number>();
+    existingReturns.forEach((record: any) => {
+        (record.items ?? []).forEach((item: any) => {
+            const key = getReturnItemKey(item);
+            if (!key) return;
+            returnedByKey.set(key, Number(((returnedByKey.get(key) ?? 0) + Number(item.quantityReturned ?? 0)).toFixed(2)));
+        });
+    });
+
+    const requestedReturnByKey = new Map<string, number>();
+    items.forEach((item: any) => {
+        const key = getReturnItemKey(item);
+        if (!key) {
+            throw new BadRequestError('Dong tra hang thieu thong tin vat tu');
+        }
+        requestedReturnByKey.set(key, Number(((requestedReturnByKey.get(key) ?? 0) + Number(item.quantityReturned ?? 0)).toFixed(2)));
+    });
+
+    requestedReturnByKey.forEach((requestedQty, key) => {
+        const returnableQty = returnableByKey.get(key) ?? 0;
+        if (returnableQty <= 0) {
+            const itemName = items.find((item: any) => getReturnItemKey(item) === key)?.materialName || key;
+            throw new BadRequestError(`Vat tu "${itemName}" khong nam trong don mua hoac chua co so luong da nhan`);
+        }
+
+        const alreadyReturnedQty = returnedByKey.get(key) ?? 0;
+        const remainingQty = Number((returnableQty - alreadyReturnedQty).toFixed(2));
+        if (requestedQty > remainingQty) {
+            const itemName =
+                poItemByKey.get(key)?.materialName ||
+                items.find((item: any) => getReturnItemKey(item) === key)?.materialName ||
+                key;
+            throw new BadRequestError(
+                `So luong tra cua "${itemName}" vuot qua so luong con duoc tra: con ${remainingQty}, yeu cau ${requestedQty}`
+            );
+        }
+    });
+
     const builtItems = items.map((item: any, idx: number) => {
         const qty = Number(item.quantityReturned ?? 0);
         if (qty <= 0) throw new BadRequestError(`Dòng ${idx + 1}: số lượng trả phải > 0`);
@@ -34,10 +100,7 @@ export const createReturnRecord = async (req: Request, res: Response, next: Next
         const refundWithVat = Number((refundAmount * (1 + vatRate / 100)).toFixed(2));
 
         // Tìm supplierId từ PO item tương ứng (match theo materialId hoặc materialName)
-        const poItem = poItems.find((p: any) =>
-            (item.materialId && String(p.materialId) === String(item.materialId)) ||
-            (p.materialName === item.materialName)
-        );
+        const poItem = poItemByKey.get(getReturnItemKey(item));
 
         return {
             materialId: item.materialId || undefined,

@@ -9,6 +9,13 @@ const POItemSchema = new mongoose.Schema(
         unit: { type: String, trim: true },
         quantityRequested: { type: Number, min: 0, default: 0 },
         quantityOrdered: { type: Number, min: 0, default: 0 },
+        quantityReceived: { type: Number, min: 0, default: 0 },
+        quantityMissing: { type: Number, min: 0, default: 0 },
+        receiveStatus: {
+            type: String,
+            enum: ['pending', 'partially_received', 'received'],
+            default: 'pending',
+        },
         unitPrice: { type: Number, min: 0, default: 0 },
         totalPrice: { type: Number, min: 0, default: 0 },
         vatRate: { type: Number, min: 0, default: 0 },
@@ -19,6 +26,18 @@ const POItemSchema = new mongoose.Schema(
         plantName: { type: String, trim: true },
         proposedBy: { type: String, trim: true },
         purpose: { type: String, trim: true },
+        catalogStatus: {
+            type: String,
+            enum: ['matched', 'unmatched', 'ignored'],
+            default: 'unmatched',
+        },
+        quantityInventoried: { type: Number, min: 0, default: 0 },
+        inventoryStatus: {
+            type: String,
+            enum: ['pending', 'applied', 'skipped'],
+            default: 'pending',
+        },
+        inventorySkipReason: { type: String, trim: true },
         note: { type: String, trim: true },
     },
     { _id: false }
@@ -29,9 +48,10 @@ const PurchaseOrderSchema = new mongoose.Schema(
         orderCode: { type: String, trim: true },
         purchaseRequestIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseRequest' }],
         purchaseRequestCodes: [{ type: String, trim: true }],
+        plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant' },
         status: {
             type: String,
-            enum: ['draft', 'confirmed', 'ordered', 'received', 'cancelled'],
+            enum: ['draft', 'confirmed', 'ordered', 'partially_received', 'received', 'cancelled'],
             default: 'draft',
         },
         items: { type: [POItemSchema], default: [] },
@@ -60,6 +80,7 @@ PurchaseOrderSchema.index(
 );
 PurchaseOrderSchema.index({ status: 1, createdAt: -1 });
 PurchaseOrderSchema.index({ purchaseRequestIds: 1 });
+PurchaseOrderSchema.index({ plantId: 1, status: 1 });
 PurchaseOrderSchema.index({ createdAt: -1 });
 
 const PurchaseOrder = mongoose.model('PurchaseOrder', PurchaseOrderSchema);

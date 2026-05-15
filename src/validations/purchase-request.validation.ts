@@ -21,6 +21,7 @@ const requestItemSchema = z.object({
     supplierId: zObjectId('Nha cung cap').optional(),
     supplierName: zOptionalString(),
     supplierNote: zOptionalString(),
+    catalogStatus: z.enum(['matched', 'unmatched', 'ignored']).optional(),
     note: zOptionalString(),
 });
 

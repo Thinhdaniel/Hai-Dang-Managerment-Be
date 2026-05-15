@@ -29,6 +29,11 @@ const PurchaseRequestItemSchema = new mongoose.Schema(
         estimatedPrice: { type: Number, min: 0 },
         estimatedTotal: { type: Number, min: 0 },
         supplierId: { type: mongoose.Schema.Types.ObjectId, ref: 'Supplier' },
+        catalogStatus: {
+            type: String,
+            enum: ['matched', 'unmatched', 'ignored'],
+            default: 'unmatched',
+        },
         note: { type: String, trim: true },
     },
     { _id: false }

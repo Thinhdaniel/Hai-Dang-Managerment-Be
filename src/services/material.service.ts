@@ -110,17 +110,22 @@ const getLowStockMaterialsData = async (req: Request, category?: string) => {
         .filter((material) => material.lowStock);
 };
 
+const orderMatchesPlant = (order: any, plantId?: string) => {
+    if (!plantId) return true;
+
+    if (toId(order?.plantId) === plantId) return true;
+
+    return (order?.purchaseRequestIds ?? []).some((request: any) => toId(request?.plantId) === plantId);
+};
+
 const getPurchaseOrdersByPlant = async (plantId?: string) => {
-    const orders = await PurchaseOrder.find({ isDeleted: { $ne: true } })
-        .populate('purchaseRequestIds');
+    const orders = await PurchaseOrder.find({ isDeleted: { $ne: true } }).populate('purchaseRequestIds');
 
     if (!plantId) {
         return orders;
     }
 
-    return orders.filter((order: any) =>
-        (order.purchaseRequestIds ?? []).some((request: any) => String(request.plantId) === plantId)
-    );
+    return orders.filter((order: any) => orderMatchesPlant(order, plantId));
 };
 
 const getOrderEffectiveDate = (order: any) => new Date(order.receivedAt || order.orderedAt || order.createdAt);
@@ -371,12 +376,7 @@ const getPurchaseOrdersForReport = async (filters: MaterialReportFilters, materi
         const effectiveDate = getOrderEffectiveDate(order);
         if (!isDateInRange(effectiveDate, filters)) return false;
 
-        if (filters.plantId) {
-            const hasPlant = (order.purchaseRequestIds ?? []).some(
-                (request: any) => String(request.plantId) === filters.plantId
-            );
-            if (!hasPlant) return false;
-        }
+        if (!orderMatchesPlant(order, filters.plantId)) return false;
 
         const orderSupplierId = toId(order.supplierId);
         if (filters.supplierId && orderSupplierId !== filters.supplierId) {

@@ -44,6 +44,7 @@ export const serializeMaterial = (input: any) => {
         unit: material?.unit,
         description: material?.description,
         minStockLevel: material?.minStockLevel ?? 0,
+        trackInventory: material?.trackInventory !== false,
         isActive: material?.isActive !== false,
         totalCurrentStock: typeof material?.totalCurrentStock === 'number' ? material.totalCurrentStock : undefined,
         lowStock:
@@ -100,6 +101,7 @@ const serializePurchaseRequestItem = (input: any) => {
         unit: item?.unit ?? material?.unit,
         proposedBy: item?.proposedBy,
         purpose: item?.purpose,
+        plantId: toId(item?.plantId),
         quantityRequested: item?.quantityRequested ?? 0,
         quantityApproved: item?.quantityApproved,
         quantityOrdered: item?.quantityOrdered,
@@ -116,6 +118,7 @@ const serializePurchaseRequestItem = (input: any) => {
         estimatedTotal: item?.estimatedTotal,
         supplierId: supplier?.id ?? toId(item?.supplierId),
         supplier,
+        catalogStatus: item?.catalogStatus ?? (item?.materialId ? 'matched' : 'unmatched'),
         note: item?.note,
     };
 };
@@ -181,6 +184,9 @@ const serializePurchaseOrderItem = (input: any) => {
         unit: item?.unit,
         quantityRequested: item?.quantityRequested ?? 0,
         quantityOrdered: item?.quantityOrdered ?? 0,
+        quantityReceived: item?.quantityReceived ?? 0,
+        quantityMissing: item?.quantityMissing ?? Math.max(0, Number(item?.quantityOrdered ?? 0) - Number(item?.quantityReceived ?? 0)),
+        receiveStatus: item?.receiveStatus,
         unitPrice: item?.unitPrice ?? 0,
         totalPrice: item?.totalPrice ?? 0,
         vatRate: item?.vatRate ?? 0,
@@ -191,6 +197,10 @@ const serializePurchaseOrderItem = (input: any) => {
         plantName: item?.plantName,
         proposedBy: item?.proposedBy,
         purpose: item?.purpose,
+        catalogStatus: item?.catalogStatus ?? (item?.materialId ? 'matched' : 'unmatched'),
+        quantityInventoried: item?.quantityInventoried ?? 0,
+        inventoryStatus: item?.inventoryStatus ?? 'pending',
+        inventorySkipReason: item?.inventorySkipReason,
         note: item?.note,
     };
 };
@@ -209,6 +219,7 @@ export const serializePurchaseOrder = (input: any) => {
         orderCode: order?.orderCode,
         purchaseRequestIds: Array.isArray(order?.purchaseRequestIds) ? order.purchaseRequestIds.map(toId) : [],
         purchaseRequestCodes: order?.purchaseRequestCodes ?? [],
+        plantId: toId(order?.plantId),
         status: order?.status,
         items: Array.isArray(order?.items) ? order.items.map(serializePurchaseOrderItem) : [],
         totalAmount: order?.totalAmount ?? 0,
@@ -222,6 +233,41 @@ export const serializePurchaseOrder = (input: any) => {
         note: order?.note,
         createdAt: toIso(order?.createdAt),
         updatedAt: toIso(order?.updatedAt),
+    };
+};
+
+export const serializePurchaseShortage = (input: any) => {
+    const shortage = toPlain(input);
+    const quantityMissing = Number(shortage?.quantityMissing ?? 0);
+    const quantityResolved = Number(shortage?.quantityResolved ?? 0);
+
+    return {
+        id: toId(shortage),
+        originalPurchaseOrderId: toId(shortage?.originalPurchaseOrderId),
+        originalPurchaseOrderCode: shortage?.originalPurchaseOrderCode,
+        originalItemIndex: shortage?.originalItemIndex,
+        supplierId: toId(shortage?.supplierId),
+        supplierName: shortage?.supplierName,
+        materialId: toId(shortage?.materialId),
+        materialName: shortage?.materialName,
+        unit: shortage?.unit,
+        quantityMissing,
+        quantityResolved,
+        quantityOutstanding: Math.max(0, quantityMissing - quantityResolved),
+        status: shortage?.status,
+        resolutions: Array.isArray(shortage?.resolutions)
+            ? shortage.resolutions.map((resolution: any) => ({
+                  purchaseOrderId: toId(resolution?.purchaseOrderId),
+                  purchaseOrderCode: resolution?.purchaseOrderCode,
+                  quantity: resolution?.quantity ?? 0,
+                  resolvedBy: toId(resolution?.resolvedBy),
+                  resolvedAt: toIso(resolution?.resolvedAt),
+                  note: resolution?.note,
+              }))
+            : [],
+        note: shortage?.note,
+        createdAt: toIso(shortage?.createdAt),
+        updatedAt: toIso(shortage?.updatedAt),
     };
 };
 

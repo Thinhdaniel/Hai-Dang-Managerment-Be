@@ -27,14 +27,16 @@ const buildFilter = async (query: Request['query']) => {
             $or: [{ name: regex }, { machineCode: regex }, { serial: regex }],
         }).distinct('_id');
 
-        andConditions.push({ $or: [
-            { reason: regex },
-            { note: regex },
-            { fromArea: regex },
-            { toArea: regex },
-            { assetId: { $in: assetIds } },
-            { assetIds: { $in: assetIds } },
-        ] });
+        andConditions.push({
+            $or: [
+                { reason: regex },
+                { note: regex },
+                { fromArea: regex },
+                { toArea: regex },
+                { assetId: { $in: assetIds } },
+                { assetIds: { $in: assetIds } },
+            ],
+        });
     }
 
     if (andConditions.length) {
@@ -65,7 +67,9 @@ const getTransferAssetIds = (transfer: any): string[] => {
     const populatedAssetIds = getTransferAssets(transfer).map((asset: any) => toDocumentId(asset));
     if (populatedAssetIds.length) return populatedAssetIds;
 
-    return [toDocumentId(transfer.assetId)].filter((assetId): assetId is string => Boolean(assetId && assetId !== 'undefined'));
+    return [toDocumentId(transfer.assetId)].filter((assetId): assetId is string =>
+        Boolean(assetId && assetId !== 'undefined')
+    );
 };
 
 const formatAssetLabel = (assets: any[]) => {
@@ -162,7 +166,9 @@ export const exportTransferStockOutXlsx = async (req: Request, res: Response, ne
 };
 
 export const createTransfer = async (req: Request, res: Response, next: NextFunction) => {
-    const requestedAssetIds = Array.from(new Set([...(req.body.assetIds ?? []), req.body.assetId].filter(Boolean).map(String)));
+    const requestedAssetIds = Array.from(
+        new Set([...(req.body.assetIds ?? []), req.body.assetId].filter(Boolean).map(String))
+    );
 
     if (!requestedAssetIds.length) {
         throw new BadRequestError('Vui long chon thiet bi');
@@ -177,7 +183,9 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
     const existingOpenTransfers = await transferRepository.findOpenByAssetIds(requestedAssetIds);
 
     if (existingOpenTransfers.length) {
-        const blockedAssetIds = new Set(existingOpenTransfers.flatMap((transfer: any) => getTransferAssetIds(transfer)));
+        const blockedAssetIds = new Set(
+            existingOpenTransfers.flatMap((transfer: any) => getTransferAssetIds(transfer))
+        );
         const blockedNames = assets
             .filter((asset) => blockedAssetIds.has(String(asset._id)))
             .map((asset) => asset.name)
@@ -193,8 +201,7 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
     const [firstAsset] = assets;
     const hasDifferentSource = assets.some(
         (asset) =>
-            !sameId(asset.plantId, firstAsset.plantId) ||
-            trimLocation(asset.area) !== trimLocation(firstAsset.area)
+            !sameId(asset.plantId, firstAsset.plantId) || trimLocation(asset.area) !== trimLocation(firstAsset.area)
     );
 
     if (hasDifferentSource) {
@@ -299,8 +306,8 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
     const currentTransfer = await transferRepository.findById(transferId);
 
     if (!currentTransfer) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
-    if (!['pending', 'approved'].includes(currentTransfer.status)) {
-        throw new BadRequestError('Chi co the tu choi lenh dieu chuyen dang cho xu ly hoac da duyet');
+    if (currentTransfer.status !== 'pending') {
+        throw new BadRequestError('Chi co the tu choi lenh dieu chuyen dang cho xu ly');
     }
 
     const item = await transferRepository.updateById(transferId, {

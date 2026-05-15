@@ -29,6 +29,10 @@ const MaterialSchema = new mongoose.Schema(
             default: 0,
             min: 0,
         },
+        trackInventory: {
+            type: Boolean,
+            default: true,
+        },
         isActive: {
             type: Boolean,
             default: true,

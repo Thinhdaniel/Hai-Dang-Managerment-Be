@@ -91,6 +91,10 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
 
 const MAIN_PLANT_ID = process.env.MAIN_PLANT_ID || '';
+const PROCUREMENT_PLANT_IDS = (process.env.PROCUREMENT_PLANT_IDS || MAIN_PLANT_ID)
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
 
 const resolveUserPlantId = (req: Request): string => {
     if (!req.user || typeof req.user !== 'object') return '';
@@ -114,6 +118,26 @@ export const requireCS1Director = (req: Request, res: Response, next: NextFuncti
     const hasRole = [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR].includes(req.role as USER_ROLE);
     if (!isCS1 || !hasRole) {
         return next(new UnAuthorizedError('Chi Giam doc hoac Quan tri vien moi co quyen duyet'));
+    }
+    return next();
+};
+
+export const requireProcurementManager = (req: Request, res: Response, next: NextFunction) => {
+    const userPlantId = resolveUserPlantId(req);
+    const hasPlantPermission = Boolean(userPlantId && PROCUREMENT_PLANT_IDS.includes(userPlantId));
+    const hasRole = [USER_ROLE.ADMIN, USER_ROLE.MANAGER, USER_ROLE.DIRECTOR].includes(req.role as USER_ROLE);
+    if (!hasPlantPermission || !hasRole) {
+        return next(new UnAuthorizedError('Chi co so duoc cau hinh mua hang moi co quyen thuc hien'));
+    }
+    return next();
+};
+
+export const requireProcurementDirector = (req: Request, res: Response, next: NextFunction) => {
+    const userPlantId = resolveUserPlantId(req);
+    const hasPlantPermission = Boolean(userPlantId && PROCUREMENT_PLANT_IDS.includes(userPlantId));
+    const hasRole = [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR].includes(req.role as USER_ROLE);
+    if (!hasPlantPermission || !hasRole) {
+        return next(new UnAuthorizedError('Chi Giam doc hoac Quan tri vien tai co so mua hang moi co quyen duyet'));
     }
     return next();
 };

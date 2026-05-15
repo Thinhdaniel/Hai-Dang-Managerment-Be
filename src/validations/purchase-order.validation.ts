@@ -22,6 +22,43 @@ export const updatePurchaseOrderSchema = z.object({
 });
 
 export const receivePurchaseOrderSchema = z.object({
+    items: z
+        .array(
+            z.object({
+                index: z.number().int().min(0),
+                quantityReceived: z.number().min(0),
+                markShortage: z.boolean().optional(),
+                note: zOptionalString(),
+            })
+        )
+        .optional(),
+    shortageAllocations: z
+        .array(
+            z.object({
+                shortageId: zObjectId('No hang'),
+                quantityReceived: z.number().min(0),
+                note: zOptionalString(),
+            })
+        )
+        .optional(),
     receivedAt: zOptionalString(),
     note: zOptionalString(),
+});
+
+export const linkPurchaseOrderItemMaterialSchema = z.object({
+    materialId: zObjectId('Vat tu'),
+});
+
+export const createPurchaseOrderItemMaterialSchema = z.object({
+    code: zOptionalString(),
+    name: zOptionalString(),
+    category: zOptionalString(),
+    unit: zOptionalString(),
+    description: zOptionalString(),
+    minStockLevel: z.number().min(0).optional(),
+    trackInventory: z.boolean().optional(),
+});
+
+export const ignorePurchaseOrderItemInventorySchema = z.object({
+    reason: zOptionalString(),
 });

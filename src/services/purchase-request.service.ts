@@ -59,6 +59,7 @@ const buildFreeFormItems = (rawItems: any[]) => {
             supplierId: item.supplierId || undefined,
             supplierName: item.supplierName?.trim() || undefined,
             supplierNote: item.supplierNote?.trim() || undefined,
+            catalogStatus: item.catalogStatus || (item.materialId ? 'matched' : 'unmatched'),
             estimatedPrice: item.estimatedPrice != null ? Number(item.estimatedPrice) : undefined,
             estimatedTotal: item.estimatedTotal != null ? Number(item.estimatedTotal) : undefined,
             note: item.note?.trim() || undefined,
@@ -102,7 +103,7 @@ const buildPurchaseRequestFilter = (query: Request['query'], req: Request) => {
         }
     }
 
-    if (!isManagerRole(req.role)) {
+    if (req.role !== 'admin') {
         filter.plantId = getUserPlantId(req);
     }
 
@@ -138,7 +139,14 @@ const resolvePurchaseRequestPlantId = async (req: Request, plantId?: string) => 
         throw new BadRequestError('Phieu de xuat mua vat tu phai gan voi mot co so');
     }
 
-    assertPlantAccess(req, resolvedPlantId);
+    if (req.role !== 'admin') {
+        const userPlantId = getUserPlantId(req);
+        if (!userPlantId || userPlantId !== resolvedPlantId) {
+            throw new UnAuthorizedError('Ban chi co the tao phieu mua cho co so cua minh');
+        }
+    } else {
+        assertPlantAccess(req, resolvedPlantId);
+    }
     await ensurePlantExists(resolvedPlantId);
 
     return resolvedPlantId;
@@ -152,6 +160,7 @@ const buildApprovalItems = async (request: any, overrideItems?: any[]) => {
         const override = overrideItems?.[idx];
         return {
             ...plainItem,
+            catalogStatus: plainItem.catalogStatus || (plainItem.materialId ? 'matched' : 'unmatched'),
             quantityApproved: override?.quantityApproved ?? plainItem.quantityRequested,
         };
     });
@@ -282,6 +291,7 @@ export const updatePurchaseRequest = async (req: Request, res: Response, next: N
     }
 
     const patch: Record<string, any> = { plantId, items: nextItems, totalEstimated, totalWithVat, note: nextNote };
+    if (req.body.status) patch.status = req.body.status;
     if (req.body.requestMonth) patch.requestMonth = req.body.requestMonth;
     if (req.body.requestYear) patch.requestYear = req.body.requestYear;
 
