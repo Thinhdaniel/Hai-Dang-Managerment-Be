@@ -25,7 +25,15 @@ const buildFilter = (query: Request['query']) => {
     }
 
     if (query.status) filter.status = query.status;
-    if (query.ownershipType) filter.ownershipType = query.ownershipType;
+    if (query.ownershipType) {
+        if (query.ownershipType === ASSET_OWNERSHIP_TYPE.OWNED) {
+            andConditions.push({
+                $or: [{ ownershipType: ASSET_OWNERSHIP_TYPE.OWNED }, { ownershipType: { $exists: false } }],
+            });
+        } else {
+            filter.ownershipType = query.ownershipType;
+        }
+    }
     if (query.plantId) filter.plantId = query.plantId;
     if (query.name) filter.name = query.name;
     if (query.model) {
