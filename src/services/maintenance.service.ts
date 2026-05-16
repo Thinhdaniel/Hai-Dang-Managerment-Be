@@ -18,6 +18,61 @@ import { notifyAdmins, getActorName } from './notification.helper';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
+const EXTERNAL_REPAIR_MODE = 'external';
+
+const parseReportDateStart = (value: unknown) => {
+    if (!value) return undefined;
+    const date = new Date(String(value));
+    if (Number.isNaN(date.getTime())) return undefined;
+    date.setHours(0, 0, 0, 0);
+    return date;
+};
+
+const parseReportDateEnd = (value: unknown) => {
+    if (!value) return undefined;
+    const date = new Date(String(value));
+    if (Number.isNaN(date.getTime())) return undefined;
+    date.setHours(23, 59, 59, 999);
+    return date;
+};
+
+const getPeriodLabel = (date: Date, groupBy: string) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    if (groupBy === 'day') return `${year}-${month}-${day}`;
+    if (groupBy === 'quarter') return `${year}-Q${Math.floor(date.getMonth() / 3) + 1}`;
+    return `${year}-${month}`;
+};
+
+const calculateExternalCost = (payload: any) => {
+    const externalRepair = payload?.externalRepair ?? {};
+    const itemTotal = Array.isArray(externalRepair.costItems)
+        ? externalRepair.costItems.reduce((sum: number, item: any) => sum + Number(item?.amount ?? 0), 0)
+        : 0;
+    return Number(Number(externalRepair.actualCost ?? payload?.cost ?? itemTotal ?? 0).toFixed(2));
+};
+
+const getNextAssetStatus = (asset: any) =>
+    asset?.ownershipType && asset.ownershipType !== ASSET_OWNERSHIP_TYPE.OWNED
+        ? ASSET_STATUS.BORROWING
+        : ASSET_STATUS.ACTIVE;
+
+const findMaintenanceForAction = async (id: string) => {
+    const item = await Maintenance.findOne({ _id: id, isDeleted: { $ne: true } });
+    if (!item) throw new NotFoundError('Khong tim thay phieu bao tri');
+    return item;
+};
+
+const fetchPopulatedMaintenance = (id: string) =>
+    findOnePopulatedOrThrow({
+        model: Maintenance,
+        filter: { _id: id, isDeleted: { $ne: true } },
+        populate: WORKFLOW_POPULATE.maintenance,
+        notFoundMessage: 'Khong tim thay phieu bao tri',
+    });
+
 const syncMaintenanceStatuses = async () => {
     await Maintenance.updateMany(
         {
@@ -34,6 +89,9 @@ const buildFilter = async (query: Request['query']) => {
 
     if (query.assetId) filter.assetId = query.assetId;
     if (query.type) filter.type = query.type;
+    if (query.status) filter.status = query.status;
+    if (query.repairMode) filter.repairMode = query.repairMode;
+    if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
 
     if (query.startDate || query.endDate) {
         filter.startDate = {};
@@ -104,7 +162,7 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
     }
 
     const approvedTransfer = await Transfer.findOne({
-        assetId: req.body.assetId,
+        $or: [{ assetId: req.body.assetId }, { assetIds: req.body.assetId }],
         status: 'approved',
         isDeleted: { $ne: true },
     });
@@ -112,15 +170,39 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
         throw new BadRequestError('Thiet bi dang trong qua trinh dieu chuyen, khong the tao phieu bao tri');
     }
 
+    const repairMode = req.body.repairMode ?? 'internal';
+    const isExternalRepair = repairMode === EXTERNAL_REPAIR_MODE;
+    const status = isExternalRepair ? 'pending' : req.body.endDate ? 'completed' : 'in_progress';
+    const approvalStatus = isExternalRepair ? 'pending' : 'none';
+    const externalCost = isExternalRepair ? calculateExternalCost(req.body) : req.body.cost;
+
     const item = await Maintenance.create({
         ...req.body,
+        repairMode,
+        approvalStatus,
         createdBy: req.userId,
-        status: req.body.endDate ? 'completed' : 'in_progress',
+        status,
+        cost: externalCost ?? req.body.cost,
+        externalRepair: isExternalRepair
+            ? {
+                  ...req.body.externalRepair,
+                  actualCost: req.body.externalRepair?.actualCost ?? externalCost,
+              }
+            : req.body.externalRepair,
     });
 
-    await Asset.findByIdAndUpdate(req.body.assetId, {
-        status: ASSET_STATUS.MAINTENANCE,
-    });
+    if (!isExternalRepair && status === 'in_progress') {
+        await Asset.findByIdAndUpdate(req.body.assetId, {
+            status: ASSET_STATUS.MAINTENANCE,
+        });
+    }
+
+    if (!isExternalRepair && status === 'completed') {
+        await Asset.findByIdAndUpdate(req.body.assetId, {
+            status: getNextAssetStatus(asset),
+            lastMaintenanceDate: req.body.endDate,
+        });
+    }
 
     const createdItem = await findOnePopulatedOrThrow({
         model: Maintenance,
@@ -154,8 +236,18 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
 };
 
 export const updateMaintenance = async (req: Request, res: Response, next: NextFunction) => {
+    const updatePayload = { ...req.body };
+    if (updatePayload.repairMode === EXTERNAL_REPAIR_MODE || updatePayload.externalRepair) {
+        const externalCost = calculateExternalCost(updatePayload);
+        updatePayload.cost = externalCost;
+        updatePayload.externalRepair = {
+            ...updatePayload.externalRepair,
+            actualCost: updatePayload.externalRepair?.actualCost ?? externalCost,
+        };
+    }
+
     const item = await applyPopulate(
-        Maintenance.findOneAndUpdate({ _id: req.params.id, isDeleted: { $ne: true } }, req.body, {
+        Maintenance.findOneAndUpdate({ _id: req.params.id, isDeleted: { $ne: true } }, updatePayload, {
             new: true,
             runValidators: true,
         }),
@@ -180,6 +272,25 @@ export const deleteMaintenance = async (req: Request, res: Response, next: NextF
 };
 
 export const completeMaintenance = async (req: Request, res: Response, next: NextFunction) => {
+    const current = await findMaintenanceForAction(String(req.params.id));
+    if (current.status === 'cancelled') {
+        throw new BadRequestError('Phieu bao tri da bi huy hoac tu choi');
+    }
+    if (current.repairMode === EXTERNAL_REPAIR_MODE && current.approvalStatus !== 'approved') {
+        throw new BadRequestError('Phieu sua ngoai can duoc duyet truoc khi hoan tat');
+    }
+
+    const externalCost = current.repairMode === EXTERNAL_REPAIR_MODE ? calculateExternalCost(req.body) : req.body.cost;
+    const externalRepair =
+        current.repairMode === EXTERNAL_REPAIR_MODE
+            ? {
+                  ...((current as any).externalRepair?.toObject?.() ?? (current as any).externalRepair ?? {}),
+                  ...req.body.externalRepair,
+                  returnedAt: req.body.externalRepair?.returnedAt ?? req.body.endDate,
+                  actualCost: req.body.externalRepair?.actualCost ?? externalCost,
+              }
+            : (current as any).externalRepair;
+
     const item = await applyPopulate(
         Maintenance.findOneAndUpdate(
             { _id: req.params.id, isDeleted: { $ne: true } },
@@ -187,7 +298,8 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
                 status: 'completed',
                 endDate: req.body.endDate,
                 note: req.body.note,
-                cost: req.body.cost,
+                cost: externalCost,
+                externalRepair,
             },
             { new: true, runValidators: true }
         ),
@@ -197,13 +309,8 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
     if (!item) throw new NotFoundError('Khong tim thay phieu bao tri');
 
     const asset = await Asset.findById(item.assetId);
-    const nextAssetStatus =
-        asset?.ownershipType && asset.ownershipType !== ASSET_OWNERSHIP_TYPE.OWNED
-            ? ASSET_STATUS.BORROWING
-            : ASSET_STATUS.ACTIVE;
-
     await Asset.findByIdAndUpdate(item.assetId, {
-        status: nextAssetStatus,
+        status: getNextAssetStatus(asset),
         lastMaintenanceDate: req.body.endDate,
     });
 
@@ -223,4 +330,146 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
     });
 
     return sendSerializedItem(res, item, serializeMaintenance, 'Hoan thanh bao tri thanh cong');
+};
+
+export const approveMaintenance = async (req: Request, res: Response, next: NextFunction) => {
+    const item = await findMaintenanceForAction(String(req.params.id));
+
+    if (item.repairMode !== EXTERNAL_REPAIR_MODE) {
+        throw new BadRequestError('Chi phieu sua ngoai moi can duyet');
+    }
+    if (item.approvalStatus !== 'pending') {
+        throw new BadRequestError('Phieu sua ngoai khong o trang thai cho duyet');
+    }
+
+    item.approvalStatus = 'approved';
+    item.status = 'in_progress';
+    item.note = req.body.note ?? item.note;
+    (item as any).externalRepair = {
+        ...((item as any).externalRepair?.toObject?.() ?? (item as any).externalRepair ?? {}),
+        approvedBy: req.userId,
+        approvedAt: new Date(),
+    };
+    await item.save();
+
+    await Asset.findByIdAndUpdate(item.assetId, {
+        status: ASSET_STATUS.MAINTENANCE,
+    });
+
+    const populated = await fetchPopulatedMaintenance(String(item._id));
+    return sendSerializedItem(res, populated, serializeMaintenance, 'Da duyet phieu sua ngoai');
+};
+
+export const rejectMaintenance = async (req: Request, res: Response, next: NextFunction) => {
+    const item = await findMaintenanceForAction(String(req.params.id));
+
+    if (item.repairMode !== EXTERNAL_REPAIR_MODE) {
+        throw new BadRequestError('Chi phieu sua ngoai moi can tu choi');
+    }
+    if (item.approvalStatus !== 'pending') {
+        throw new BadRequestError('Phieu sua ngoai khong o trang thai cho duyet');
+    }
+
+    item.approvalStatus = 'rejected';
+    item.status = 'cancelled';
+    (item as any).externalRepair = {
+        ...((item as any).externalRepair?.toObject?.() ?? (item as any).externalRepair ?? {}),
+        rejectedBy: req.userId,
+        rejectedAt: new Date(),
+        rejectReason: req.body.rejectReason,
+    };
+    await item.save();
+
+    const populated = await fetchPopulatedMaintenance(String(item._id));
+    return sendSerializedItem(res, populated, serializeMaintenance, 'Da tu choi phieu sua ngoai');
+};
+
+export const getMaintenanceReport = async (req: Request, res: Response, next: NextFunction) => {
+    const startDate = parseReportDateStart(req.query.startDate);
+    const endDate = parseReportDateEnd(req.query.endDate);
+    const groupBy = ['day', 'month', 'quarter'].includes(String(req.query.groupBy)) ? String(req.query.groupBy) : 'month';
+
+    const completedMatch: Record<string, any> = {
+        isDeleted: { $ne: true },
+        repairMode: EXTERNAL_REPAIR_MODE,
+        status: 'completed',
+    };
+
+    if (startDate || endDate) {
+        completedMatch.endDate = {};
+        if (startDate) completedMatch.endDate.$gte = startDate;
+        if (endDate) completedMatch.endDate.$lte = endDate;
+    }
+
+    const [completedItems, pendingApprovalCount, inProgressCount] = await Promise.all([
+        Maintenance.find(completedMatch).populate({ path: 'assetId', populate: ['plantId', 'brandId'] }),
+        Maintenance.countDocuments({
+            isDeleted: { $ne: true },
+            repairMode: EXTERNAL_REPAIR_MODE,
+            approvalStatus: 'pending',
+        }),
+        Maintenance.countDocuments({
+            isDeleted: { $ne: true },
+            repairMode: EXTERNAL_REPAIR_MODE,
+            status: 'in_progress',
+        }),
+    ]);
+
+    const totalExternalRepairCost = completedItems.reduce((sum: number, item: any) => sum + Number(item.cost ?? 0), 0);
+    const costByPeriod = new Map<string, number>();
+    const costByPlant = new Map<string, { plantId?: string; plantName: string; totalCost: number; count: number }>();
+    const costByAsset = new Map<
+        string,
+        { assetId: string; assetName: string; machineCode?: string; plantName?: string; totalCost: number; count: number }
+    >();
+
+    completedItems.forEach((item: any) => {
+        const cost = Number(item.cost ?? 0);
+        const endDateValue = item.endDate ? new Date(item.endDate) : new Date(item.updatedAt);
+        const period = getPeriodLabel(endDateValue, groupBy);
+        costByPeriod.set(period, Number(((costByPeriod.get(period) ?? 0) + cost).toFixed(2)));
+
+        const asset = item.assetId;
+        const plantId = asset?.plantId?._id ? String(asset.plantId._id) : 'unknown';
+        const plantName = asset?.plantId?.name ?? 'Chua xac dinh';
+        const plantRow = costByPlant.get(plantId) ?? { plantId, plantName, totalCost: 0, count: 0 };
+        plantRow.totalCost = Number((plantRow.totalCost + cost).toFixed(2));
+        plantRow.count += 1;
+        costByPlant.set(plantId, plantRow);
+
+        if (asset?._id) {
+            const assetId = String(asset._id);
+            const assetRow =
+                costByAsset.get(assetId) ??
+                {
+                    assetId,
+                    assetName: asset.name,
+                    machineCode: asset.machineCode,
+                    plantName,
+                    totalCost: 0,
+                    count: 0,
+                };
+            assetRow.totalCost = Number((assetRow.totalCost + cost).toFixed(2));
+            assetRow.count += 1;
+            costByAsset.set(assetId, assetRow);
+        }
+    });
+
+    return sendSuccess(
+        res,
+        {
+            summary: {
+                totalExternalRepairCost: Number(totalExternalRepairCost.toFixed(2)),
+                externalRepairCount: completedItems.length,
+                pendingApprovalCount,
+                inProgressCount,
+            },
+            costByPeriod: Array.from(costByPeriod.entries())
+                .map(([period, totalCost]) => ({ period, totalCost }))
+                .sort((a, b) => a.period.localeCompare(b.period)),
+            costByPlant: Array.from(costByPlant.values()).sort((a, b) => b.totalCost - a.totalCost),
+            topAssets: Array.from(costByAsset.values()).sort((a, b) => b.totalCost - a.totalCost).slice(0, 10),
+        },
+        'Lay bao cao bao tri thanh cong'
+    );
 };

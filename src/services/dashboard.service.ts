@@ -5,7 +5,7 @@ import { dashboardRepository } from '@/repositories/dashboard.repository';
 import customResponse from '@/utils/response';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
-import { format, startOfWeek, subWeeks } from 'date-fns';
+import { format, startOfMonth, startOfWeek, subWeeks } from 'date-fns';
 
 const toIso = (value?: Date | string | null) => {
     if (!value) return undefined;
@@ -13,11 +13,41 @@ const toIso = (value?: Date | string | null) => {
 };
 
 export const getDashboardOverview = async (req: Request, res: Response, next: NextFunction) => {
-    const [summary, facilityStatsRaw, recentActivitiesRaw] = await Promise.all([
+    const monthStart = startOfMonth(new Date());
+    const [summary, facilityStatsRaw, recentActivitiesRaw, externalRepairAgg, externalRepairPendingApproval, externalRepairInProgress] = await Promise.all([
         dashboardRepository.getSummaryMetrics(),
         dashboardRepository.getFacilityStats(),
         dashboardRepository.getRecentActivities(10),
+        Maintenance.aggregate<{ totalCost: number; count: number }>([
+            {
+                $match: {
+                    isDeleted: { $ne: true },
+                    repairMode: 'external',
+                    status: 'completed',
+                    endDate: { $gte: monthStart },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalCost: { $sum: { $ifNull: ['$cost', 0] } },
+                    count: { $sum: 1 },
+                },
+            },
+            { $project: { _id: 0, totalCost: 1, count: 1 } },
+        ]),
+        Maintenance.countDocuments({
+            isDeleted: { $ne: true },
+            repairMode: 'external',
+            approvalStatus: 'pending',
+        }),
+        Maintenance.countDocuments({
+            isDeleted: { $ne: true },
+            repairMode: 'external',
+            status: 'in_progress',
+        }),
     ]);
+    const externalRepairMonth = externalRepairAgg[0] ?? { totalCost: 0, count: 0 };
 
     const facilityStats = facilityStatsRaw.map((item) => ({
         ...item,
@@ -34,6 +64,12 @@ export const getDashboardOverview = async (req: Request, res: Response, next: Ne
         customResponse({
             data: {
                 summary,
+                maintenanceCost: {
+                    externalRepairCostThisMonth: externalRepairMonth.totalCost,
+                    externalRepairCompletedThisMonth: externalRepairMonth.count,
+                    externalRepairPendingApproval,
+                    externalRepairInProgress,
+                },
                 facilityStats,
                 recentActivities,
             },

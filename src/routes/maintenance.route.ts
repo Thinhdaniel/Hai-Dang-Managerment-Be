@@ -6,8 +6,10 @@ import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import { maintenanceService } from '@/services';
 import {
+    approveMaintenanceSchema,
     completeMaintenanceSchema,
     createMaintenanceSchema,
+    rejectMaintenanceSchema,
     updateMaintenanceSchema,
 } from '@/validations/maintenance.validation';
 import { USER_ROLE } from '@/constant/allowedRoles';
@@ -18,6 +20,7 @@ router.use(authenticate);
 
 router.post('/', validator(createMaintenanceSchema), asyncHandler(maintenanceService.createMaintenance));
 router.get('/', asyncHandler(maintenanceService.getAllMaintenances));
+router.get('/report', asyncHandler(maintenanceService.getMaintenanceReport));
 router.get('/asset/:assetId', validateObjectId, asyncHandler(maintenanceService.getMaintenanceByAsset));
 router.get('/:id', validateObjectId, asyncHandler(maintenanceService.getMaintenanceById));
 router.patch(
@@ -37,6 +40,20 @@ router.patch(
     validateObjectId,
     validator(completeMaintenanceSchema),
     asyncHandler(maintenanceService.completeMaintenance)
+);
+router.patch(
+    '/:id/approve',
+    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    validateObjectId,
+    validator(approveMaintenanceSchema),
+    asyncHandler(maintenanceService.approveMaintenance)
+);
+router.patch(
+    '/:id/reject',
+    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    validateObjectId,
+    validator(rejectMaintenanceSchema),
+    asyncHandler(maintenanceService.rejectMaintenance)
 );
 
 export default router;
