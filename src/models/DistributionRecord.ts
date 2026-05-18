@@ -13,6 +13,18 @@ const DistributionRecordItemSchema = new mongoose.Schema(
         vatAmount: { type: Number, min: 0 },
         totalPrice: { type: Number, min: 0 },
         totalWithVat: { type: Number, min: 0 },
+        catalogStatus: {
+            type: String,
+            enum: ['matched', 'unmatched', 'ignored'],
+            default: 'matched',
+        },
+        quantityInventoried: { type: Number, min: 0, default: 0 },
+        inventoryStatus: {
+            type: String,
+            enum: ['pending', 'applied', 'skipped'],
+            default: 'pending',
+        },
+        inventorySkipReason: { type: String, trim: true },
         distributedDate: { type: Date },
         adjustReason: { type: String, trim: true },
         note: { type: String, trim: true },

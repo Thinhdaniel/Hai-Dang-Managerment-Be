@@ -1,23 +1,18 @@
 ﻿import { BadRequestError, NotFoundError, UnAuthorizedError } from '@/errors/customError';
 import DistributionRecord from '@/models/DistributionRecord';
 import InventoryStock from '@/models/InventoryStock';
+import Material from '@/models/Material';
 import StockTransaction from '@/models/StockTransaction';
-import PurchaseOrder from '@/models/PurchaseOrder';
 import PurchaseRequest from '@/models/PurchaseRequest';
 import { distributionRepository } from '@/repositories/distribution.repository';
-import { purchaseOrderRepository } from '@/repositories/purchase-order.repository';
-import { purchaseRequestRepository } from '@/repositories/purchase-request.repository';
 import {
-    applyStockMovement,
-    assertPlantAccess,
-    ensurePlantExists,
     generateDocumentCode,
     getUserPlantId,
     isManagerRole,
     toId,
 } from '@/services/material-workflow.helpers';
 import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
-import { buildDistributionItems, getMaterialsMap } from '@/services/material-domain.helpers';
+import { getMaterialsMap } from '@/services/material-domain.helpers';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -99,6 +94,169 @@ const ensureDistributionAccess = (req: Request, distribution: any) => {
     }
 };
 
+const buildDistributionRecordItems = async (items: any[], session?: mongoose.ClientSession) => {
+    const materialIds = Array.from(new Set((items ?? []).map((item: any) => toId(item.materialId)).filter(Boolean))) as string[];
+    const materialsMap = await getMaterialsMap(materialIds, session);
+
+    return (items ?? []).map((item: any, idx: number) => {
+        const materialId = toId(item.materialId);
+        const material = materialId ? materialsMap.get(materialId) : undefined;
+        const catalogStatus = item.catalogStatus || (material ? 'matched' : 'unmatched');
+
+        if (!material && catalogStatus !== 'ignored') {
+            throw new BadRequestError(`Dong ${idx + 1}: vui long gan vat tu kho hoac chon bo qua ton kho`);
+        }
+
+        const materialName = material?.name || item.materialName?.trim();
+        const unit = item.unit?.trim() || material?.unit;
+        if (!materialName) throw new BadRequestError(`Dong ${idx + 1}: ten vat tu khong duoc de trong`);
+        if (!unit) throw new BadRequestError(`Dong ${idx + 1}: don vi tinh khong duoc de trong`);
+
+        const qty = Number(item.quantity ?? 0);
+        if (qty <= 0) throw new BadRequestError(`Item ${idx + 1}: so luong cap phat phai lon hon 0`);
+
+        const unitPrice = Number(item.unitPrice ?? 0);
+        if (unitPrice < 0) throw new BadRequestError(`Item ${idx + 1}: don gia khong hop le`);
+
+        const vatRate = Number(item.vatRate ?? 0);
+        if (vatRate < 0) throw new BadRequestError(`Item ${idx + 1}: VAT khong hop le`);
+
+        const totalPrice = Number((qty * unitPrice).toFixed(2));
+        const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
+        const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
+        const normalizedCatalogStatus = catalogStatus === 'ignored' ? 'ignored' : material ? 'matched' : 'ignored';
+        const skipInventory = normalizedCatalogStatus === 'ignored';
+
+        return {
+            materialId: material?._id,
+            materialName,
+            unit,
+            quantityRequested: Number(item.quantityRequested ?? qty),
+            quantity: qty,
+            unitPrice,
+            totalPrice,
+            vatRate,
+            vatAmount,
+            totalWithVat,
+            catalogStatus: normalizedCatalogStatus,
+            quantityInventoried: 0,
+            inventoryStatus: skipInventory || !material ? 'skipped' : 'pending',
+            inventorySkipReason:
+                item.inventorySkipReason?.trim() || (skipInventory || !material ? 'Khong theo doi ton kho' : undefined),
+            adjustReason: item.adjustReason?.trim() || undefined,
+            note: item.note?.trim() || undefined,
+        };
+    });
+};
+
+const summarizeDistributionItems = (items: any[]) => ({
+    totalAmount: Number(items.reduce((sum: number, item: any) => sum + Number(item.totalPrice ?? 0), 0).toFixed(2)),
+    totalVatAmount: Number(items.reduce((sum: number, item: any) => sum + Number(item.vatAmount ?? 0), 0).toFixed(2)),
+    totalWithVat: Number(items.reduce((sum: number, item: any) => sum + Number(item.totalWithVat ?? 0), 0).toFixed(2)),
+});
+
+const exportDistributionItemStock = async ({
+    item,
+    plantId,
+    recordId,
+    distributionCode,
+    performedBy,
+    session,
+}: {
+    item: any;
+    plantId: string;
+    recordId: string;
+    distributionCode?: string;
+    performedBy?: string;
+    session: mongoose.ClientSession;
+}) => {
+    const plain = item.toObject ? item.toObject() : { ...item };
+    const qty = Number(plain.quantity ?? 0);
+    if (qty <= 0) return plain;
+
+    const materialIdValue = toId(plain.materialId);
+    if (!materialIdValue) {
+        if (plain.catalogStatus === 'ignored') {
+            return {
+                ...plain,
+                inventoryStatus: 'skipped',
+                inventorySkipReason: plain.inventorySkipReason || 'Khong theo doi ton kho',
+                quantityInventoried: 0,
+            };
+        }
+        throw new BadRequestError(`Dong "${plain.materialName || ''}" chua gan vat tu kho`);
+    }
+
+    const material = await Material.findOne({
+        _id: materialIdValue,
+        isDeleted: { $ne: true },
+        isActive: { $ne: false },
+    }).session(session);
+
+    if (!material) {
+        throw new NotFoundError(`Khong tim thay vat tu "${plain.materialName || materialIdValue}"`);
+    }
+
+    if (plain.catalogStatus === 'ignored' || (material as any).trackInventory === false) {
+        return {
+            ...plain,
+            materialName: plain.materialName || material.name,
+            unit: plain.unit || material.unit,
+            inventoryStatus: 'skipped',
+            inventorySkipReason:
+                plain.inventorySkipReason || ((material as any).trackInventory === false ? 'Vat tu khong theo doi ton kho' : 'Khong theo doi ton kho'),
+            quantityInventoried: 0,
+        };
+    }
+
+    const materialObjectId = new mongoose.Types.ObjectId(materialIdValue);
+    const plantObjectId = new mongoose.Types.ObjectId(plantId);
+    const stock = await (InventoryStock as any)
+        .findOne({ materialId: materialObjectId, plantId: plantObjectId, isDeleted: { $ne: true } })
+        .session(session);
+    const stockBefore = Number(stock?.currentStock ?? 0);
+
+    if (stockBefore < qty) {
+        throw new BadRequestError(
+            `Ton kho khong du cho vat tu "${plain.materialName || material.name}": can ${qty}, con ${stockBefore}`
+        );
+    }
+
+    await (InventoryStock as any).updateOne(
+        { _id: stock._id },
+        { $set: { currentStock: stockBefore - qty } },
+        { session }
+    );
+
+    await StockTransaction.create(
+        [
+            {
+                type: 'export',
+                materialId: materialObjectId,
+                materialName: plain.materialName || material.name,
+                plantId: plantObjectId,
+                quantity: -qty,
+                stockBefore,
+                stockAfter: stockBefore - qty,
+                relatedId: recordId,
+                relatedType: 'distribution',
+                performedBy,
+                note: `Xuat kho cap phat ${distributionCode || ''}`.trim(),
+            },
+        ],
+        { session }
+    );
+
+    return {
+        ...plain,
+        materialName: plain.materialName || material.name,
+        unit: plain.unit || material.unit,
+        quantityInventoried: Number(plain.quantityInventoried ?? 0) + qty,
+        inventoryStatus: 'applied',
+        inventorySkipReason: undefined,
+    };
+};
+
 export const getAllDistributionRecords = async (req: Request, res: Response, next: NextFunction) => {
     const filter = buildDistributionFilter(req.query, req);
     const { page, limit, skip } = getPagination(req.query as Record<string, any>);
@@ -141,7 +299,7 @@ export const getDistributionRecordById = async (req: Request, res: Response, nex
 };
 
 export const createDistributionRecord = async (req: Request, res: Response, next: NextFunction) => {
-    const { supplyRequestId, distributedAt, items, totalAmount, totalVat, totalWithVat, note } = req.body;
+    const { supplyRequestId, distributedAt, items, note } = req.body;
 
     // 1. Validate supply request
     const sr = await PurchaseRequest.findOne({
@@ -173,36 +331,8 @@ export const createDistributionRecord = async (req: Request, res: Response, next
     const toPlantId = toId((sr as any).fromPlantId);
     if (!toPlantId) throw new BadRequestError('Phieu de xuat thieu thong tin co so gui');
 
-    const builtItems = (items ?? []).map((item: any, idx: number) => {
-        const qty = Number(item.quantity ?? 0);
-        if (qty <= 0) throw new BadRequestError(`Item ${idx + 1}: so luong phai lon hon 0`);
-
-        const price = Number(item.unitPrice ?? -1);
-        if (price < 0) throw new BadRequestError(`Item ${idx + 1}: don gia bat buoc (>= 0)`);
-
-        const vatRate = Number(item.vatRate ?? -1);
-        if (vatRate < 0) throw new BadRequestError(`Item ${idx + 1}: VAT bat buoc (>= 0)`);
-
-        // Recalculate — never trust FE
-        const totalPrice = Number((qty * price).toFixed(2));
-        const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
-        const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
-
-        return {
-            materialId: item.materialId,
-            materialName: item.materialName,
-            unit: item.unit,
-            quantityRequested: item.quantityRequested ?? qty,
-            quantity: qty,
-            unitPrice: price,
-            totalPrice,
-            vatRate,
-            vatAmount,
-            totalWithVat,
-            adjustReason: item.adjustReason?.trim() || undefined,
-            note: item.note?.trim() || undefined,
-        };
-    });
+    const builtItems = await buildDistributionRecordItems(items ?? []);
+    const totals = summarizeDistributionItems(builtItems);
 
     const record = await distributionRepository.create({
         distributionCode,
@@ -211,9 +341,9 @@ export const createDistributionRecord = async (req: Request, res: Response, next
         toPlantId,
         status: 'pending',
         items: builtItems,
-        totalAmount: totalAmount ?? 0,
-        totalVatAmount: totalVat ?? 0,
-        totalWithVat: totalWithVat ?? 0,
+        totalAmount: totals.totalAmount,
+        totalVatAmount: totals.totalVatAmount,
+        totalWithVat: totals.totalWithVat,
         distributedAt: distributedAt ? new Date(distributedAt) : undefined,
         note: note?.trim() || undefined,
     });
@@ -259,44 +389,10 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
             session,
         });
 
-        const materialIds: string[] = Array.from(
-            new Set((req.body.items ?? []).map((item: any) => String(item.materialId)).filter(Boolean))
-        );
-        const materialsMap = await getMaterialsMap(materialIds, session);
-
-        const builtItems = (req.body.items ?? []).map((item: any, idx: number) => {
-            const material = materialsMap.get(String(item.materialId));
-            if (!material) throw new BadRequestError(`Khong tim thay vat tu dong ${idx + 1}`);
-
-            const qty = Number(item.quantity ?? 0);
-            if (qty <= 0) throw new BadRequestError(`Item ${idx + 1}: so luong cap phat phai lon hon 0`);
-
-            const unitPrice = Number(item.unitPrice ?? 0);
-            const vatRate = Number(item.vatRate ?? 0);
-            const totalPrice = Number((qty * unitPrice).toFixed(2));
-            const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
-            const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
-
-            return {
-                materialId: material._id,
-                materialName: material.name,
-                unit: item.unit?.trim() || material.unit,
-                quantityRequested: Number(item.quantityRequested ?? qty),
-                quantity: qty,
-                unitPrice,
-                totalPrice,
-                vatRate,
-                vatAmount,
-                totalWithVat,
-                adjustReason: item.adjustReason?.trim() || undefined,
-                note: item.note?.trim() || undefined,
-            };
-        });
+        const builtItems = await buildDistributionRecordItems(req.body.items ?? [], session);
 
         const distributedAt = req.body.distributedAt ? new Date(req.body.distributedAt) : new Date();
-        const totalAmount = Number(builtItems.reduce((sum: number, item: any) => sum + (item.totalPrice ?? 0), 0).toFixed(2));
-        const totalVatAmount = Number(builtItems.reduce((sum: number, item: any) => sum + (item.vatAmount ?? 0), 0).toFixed(2));
-        const totalWithVat = Number(builtItems.reduce((sum: number, item: any) => sum + (item.totalWithVat ?? 0), 0).toFixed(2));
+        const totals = summarizeDistributionItems(builtItems);
 
         const recordData: any = {
             distributionCode,
@@ -308,9 +404,9 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
             targetDepartment: req.body.targetDepartment?.trim() || undefined,
             targetLine: req.body.targetLine?.trim() || undefined,
             items: builtItems,
-            totalAmount,
-            totalVatAmount,
-            totalWithVat,
+            totalAmount: totals.totalAmount,
+            totalVatAmount: totals.totalVatAmount,
+            totalWithVat: totals.totalWithVat,
             distributedBy: req.userId,
             distributedAt,
             note: req.body.note?.trim() || undefined,
@@ -324,20 +420,20 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
         const record = await distributionRepository.create(recordData, session);
 
         if (!isDraft) {
+            const inventoriedItems = [];
             for (const item of builtItems) {
-                await applyStockMovement({
-                    materialId: String(item.materialId),
-                    materialName: item.materialName,
-                    plantId: fromPlantId,
-                    quantity: -Number(item.quantity ?? 0),
-                    type: 'export',
-                    relatedId: String((record as any)._id),
-                    relatedType: 'distribution',
-                    performedBy: req.userId,
-                    note: `Cap phat noi bo ${distributionCode}`,
-                    session,
-                });
+                inventoriedItems.push(
+                    await exportDistributionItemStock({
+                        item,
+                        plantId: fromPlantId,
+                        recordId: String((record as any)._id),
+                        distributionCode,
+                        performedBy: req.userId,
+                        session,
+                    })
+                );
             }
+            await (DistributionRecord as any).updateOne({ _id: (record as any)._id }, { $set: { items: inventoriedItems } }, { session });
         }
 
         await session.commitTransaction();
@@ -372,44 +468,14 @@ export const appendInternalItems = async (req: Request, res: Response, next: Nex
         throw new UnAuthorizedError('Ban khong co quyen chinh sua phieu nay');
     }
 
-    const materialIds = (req.body.items ?? []).map((i: any) => String(i.materialId));
-    const materialsMap = await getMaterialsMap(materialIds);
-
-    const newItems = (req.body.items ?? []).map((item: any, idx: number) => {
-        const material = materialsMap.get(String(item.materialId));
-        if (!material) throw new BadRequestError(`Khong tim thay vat tu dong ${idx + 1}`);
-
-        const qty = Number(item.quantity ?? 0);
-        if (qty <= 0) throw new BadRequestError(`Item ${idx + 1}: so luong phai lon hon 0`);
-
-        const unitPrice = Number(item.unitPrice ?? 0);
-        const vatRate = Number(item.vatRate ?? 0);
-        const totalPrice = Number((qty * unitPrice).toFixed(2));
-        const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
-
-        return {
-            materialId: material._id,
-            materialName: material.name,
-            unit: item.unit?.trim() || material.unit,
-            quantityRequested: Number(item.quantityRequested ?? qty),
-            quantity: qty,
-            unitPrice,
-            totalPrice,
-            vatRate,
-            vatAmount,
-            totalWithVat: Number((totalPrice + vatAmount).toFixed(2)),
-            note: item.note?.trim() || undefined,
-        };
-    });
+    const newItems = await buildDistributionRecordItems(req.body.items ?? []);
 
     const allItems = [...((record as any).items ?? []).map((i: any) => i.toObject ? i.toObject() : i), ...newItems];
-    const totalAmount = Number(allItems.reduce((s: number, i: any) => s + (i.totalPrice ?? 0), 0).toFixed(2));
-    const totalVatAmount = Number(allItems.reduce((s: number, i: any) => s + (i.vatAmount ?? 0), 0).toFixed(2));
-    const totalWithVat = Number(allItems.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0).toFixed(2));
+    const totals = summarizeDistributionItems(allItems);
 
     await (DistributionRecord as any).updateOne(
         { _id: (record as any)._id },
-        { $set: { items: allItems, totalAmount, totalVatAmount, totalWithVat } }
+        { $set: { items: allItems, ...totals } }
     );
 
     const updated = await distributionRepository.findById(String(req.params.id));
@@ -444,27 +510,23 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
         const fromPlantId = toId(record.fromPlantId);
         const now = new Date();
 
+        const inventoriedItems = [];
         for (const item of record.items ?? []) {
-            const qty = Number(item.quantity ?? 0);
-            if (qty <= 0 || !item.materialId) continue;
-
-            await applyStockMovement({
-                materialId: String(item.materialId),
-                materialName: item.materialName,
-                plantId: String(fromPlantId),
-                quantity: -qty,
-                type: 'export',
-                relatedId: String(record._id),
-                relatedType: 'distribution',
-                performedBy: req.userId,
-                note: `Chot phieu cap phat noi bo ${record.distributionCode}`,
-                session,
-            });
+            inventoriedItems.push(
+                await exportDistributionItemStock({
+                    item,
+                    plantId: String(fromPlantId),
+                    recordId: String(record._id),
+                    distributionCode: record.distributionCode,
+                    performedBy: req.userId,
+                    session,
+                })
+            );
         }
 
         await (DistributionRecord as any).updateOne(
             { _id: record._id },
-            { $set: { status: 'confirmed', confirmedBy: req.userId, confirmedAt: now, distributedAt: now } },
+            { $set: { status: 'confirmed', confirmedBy: req.userId, confirmedAt: now, distributedAt: now, items: inventoriedItems } },
             { session }
         );
 
@@ -500,53 +562,25 @@ export const distributeRecord = async (req: Request, res: Response, next: NextFu
             throw new BadRequestError('Phieu cap phat da duoc xu ly hoac dang duoc xu ly boi tien trinh khac');
         }
 
-        const CS1_ID = new mongoose.Types.ObjectId(process.env.MAIN_PLANT_ID || '');
-
+        const mainPlantId = process.env.MAIN_PLANT_ID;
+        if (!mainPlantId) throw new BadRequestError('Chua cau hinh MAIN_PLANT_ID');
+        const inventoriedItems = [];
         for (const item of record.items ?? []) {
-            const qty = Number(item.quantity ?? 0);
-            if (qty <= 0 || !item.materialId) continue;
-
-            const materialId = new mongoose.Types.ObjectId(String(item.materialId));
-
-            const stock = await (InventoryStock as any)
-                .findOne({ materialId, plantId: CS1_ID, isDeleted: { $ne: true } })
-                .session(session);
-
-            const stockBefore = Number(stock?.currentStock ?? 0);
-
-            // FIX 1: Không cho phép xuất kho nếu không đủ tồn kho
-            if (stockBefore < qty) {
-                throw new BadRequestError(
-                    `Ton kho CS1 khong du cho vat tu "${item.materialName || materialId}": can ${qty}, con ${stockBefore}`
-                );
-            }
-
-            const stockAfter = stockBefore - qty;
-
-            await (InventoryStock as any).updateOne(
-                { _id: stock._id },
-                { $set: { currentStock: stockAfter } },
-                { session }
+            inventoriedItems.push(
+                await exportDistributionItemStock({
+                    item,
+                    plantId: mainPlantId,
+                    recordId: String(record._id),
+                    distributionCode: record.distributionCode,
+                    performedBy: req.userId,
+                    session,
+                })
             );
-
-            await StockTransaction.create([{
-                type: 'export',
-                materialId,
-                materialName: item.materialName,
-                plantId: CS1_ID,
-                quantity: -qty,
-                stockBefore,
-                stockAfter,
-                relatedId: record._id,
-                relatedType: 'distribution',
-                performedBy: req.userId,
-                note: `Xuat kho cap phat ${record.distributionCode}`,
-            }], { session });
         }
 
         await (DistributionRecord as any).updateOne(
             { _id: record._id },
-            { $set: { status: 'distributed', distributedBy: req.userId, distributedAt: new Date() } },
+            { $set: { status: 'distributed', distributedBy: req.userId, distributedAt: new Date(), items: inventoriedItems } },
             { session }
         );
 

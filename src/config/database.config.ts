@@ -20,6 +20,9 @@ export const connectDB = async () => {
     // mongoose.connect return promise
     const connection = await mongoose.connect(config.mongoose.url, {
         dbName: config.mongoose.options.dbName,
+        serverSelectionTimeoutMS: config.mongoose.options.serverSelectionTimeoutMS,
+        connectTimeoutMS: config.mongoose.options.connectTimeoutMS,
+        socketTimeoutMS: config.mongoose.options.socketTimeoutMS,
     } as ConnectOptions);
 
     // @event connected: Emitted when this connection successfully connects to the db. May be emitted multiple times in reconnected scenarios
@@ -50,8 +53,9 @@ export const connectDB = async () => {
         setTimeout(() => {
             mongoose.connect(config.mongoose.url, {
                 dbName: config.mongoose.options.dbName,
-                socketTimeoutMS: 3000,
-                connectTimeoutMS: 3000,
+                serverSelectionTimeoutMS: config.mongoose.options.serverSelectionTimeoutMS,
+                socketTimeoutMS: config.mongoose.options.socketTimeoutMS,
+                connectTimeoutMS: config.mongoose.options.connectTimeoutMS,
             } as ConnectOptions);
         }, 3000);
     });

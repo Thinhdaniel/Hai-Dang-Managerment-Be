@@ -1,24 +1,18 @@
 ﻿import { BadRequestError, NotFoundError, UnAuthorizedError } from '@/errors/customError';
-import DistributionRecord from '@/models/DistributionRecord';
 import PurchaseRequest from '@/models/PurchaseRequest';
-import InventoryStock from '@/models/InventoryStock';
-import { distributionRepository } from '@/repositories/distribution.repository';
 import { purchaseRequestRepository } from '@/repositories/purchase-request.repository';
 import {
-    applyStockMovement,
     ensurePlantExists,
     generateDocumentCode,
     getUserPlantId,
     isManagerRole,
     toId,
 } from '@/services/material-workflow.helpers';
-import { buildDistributionItems, getMaterialsMap } from '@/services/material-domain.helpers';
 import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
-import { serializeDistributionRecord, serializePurchaseRequest } from '@/utils/materialSerializers';
-import mongoose from 'mongoose';
+import { serializePurchaseRequest } from '@/utils/materialSerializers';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -205,21 +199,15 @@ export const updateSupplyRequest = async (req: Request, res: Response, next: Nex
     let nextItems = request.items;
 
     if (req.body.items) {
-        const materialIds = req.body.items.map((item: any) => String(item.materialId));
-        const materialsMap = await getMaterialsMap(materialIds);
-
-        nextItems = req.body.items.map((item: any) => {
-            const mat = materialsMap.get(String(item.materialId));
-            if (!mat) throw new BadRequestError(`Khong tim thay vat tu: ${item.materialId}`);
-            return {
-                materialId: mat._id,
-                materialName: mat.name,
-                unit: mat.unit,
-                quantityRequested: Number(item.quantityRequested),
-                quantityApproved: item.quantityApproved !== undefined ? Number(item.quantityApproved) : undefined,
-                note: item.note?.trim() || undefined,
-            };
-        }) as any;
+        nextItems = req.body.items.map((item: any) => ({
+            materialId: item.materialId || undefined,
+            materialName: item.materialName?.trim(),
+            unit: item.unit?.trim(),
+            quantityRequested: Number(item.quantityRequested),
+            quantityApproved: item.quantityApproved !== undefined ? Number(item.quantityApproved) : undefined,
+            catalogStatus: item.materialId ? 'matched' : item.catalogStatus || 'unmatched',
+            note: item.note?.trim() || undefined,
+        })) as any;
     }
 
     const updated = await purchaseRequestRepository.updateById(String(req.params.id), {

@@ -89,8 +89,9 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
 
     const { accessToken } = await issueSession(res, foundedUser);
 
-    foundedUser.lastLoginAt = new Date();
-    await foundedUser.save();
+    void User.updateOne({ _id: foundedUser._id }, { $set: { lastLoginAt: new Date() } }).catch((error) => {
+        console.error('Failed to update lastLoginAt after login:', error);
+    });
 
     return res.status(StatusCodes.OK).json(
         customResponse({

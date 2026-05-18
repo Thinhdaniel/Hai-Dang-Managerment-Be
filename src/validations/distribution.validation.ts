@@ -2,13 +2,16 @@ import { zObjectId, zOptionalString, zRequiredString } from '@/lib/validation';
 import { z } from 'zod';
 
 const distributionItemSchema = z.object({
-    materialId: zObjectId('Vat tu'),
+    materialId: zObjectId('Vat tu').optional(),
+    materialName: zOptionalString(),
     unit: zOptionalString(),
     quantity: z.number().gt(0, { message: 'So luong cap phat phai lon hon 0' }),
     quantityRequested: z.number().min(0).optional(),
     quantityDistributed: z.number().min(0).optional(),
     unitPrice: z.number().min(0).optional(),
     vatRate: z.number().min(0).max(100).optional(),
+    catalogStatus: z.enum(['matched', 'unmatched', 'ignored']).optional(),
+    inventorySkipReason: zOptionalString(),
     adjustReason: zOptionalString(),
     distributedDate: zOptionalString(),
     note: zOptionalString(),

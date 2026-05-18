@@ -11,6 +11,9 @@ const envVarsSchema = z.object({
     RESET_PASSWORD_URL: z.string().optional().describe('Custom URL for password reset page (e.g., https://yourdomain.com/reset-password)'),
     ALLOWED_ORIGINS: z.string().optional().describe('Comma-separated list of allowed CORS origins'),
     MONGODB_URL_DEV: z.string().describe('Local Mongo DB'),
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+    MONGODB_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+    MONGODB_SOCKET_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
     AUTH_BYPASS: z
         .string()
         .optional()
@@ -75,6 +78,9 @@ const config = {
         url: envVars.MONGODB_URL_DEV,
         options: {
             dbName: 'device-management',
+            serverSelectionTimeoutMS: envVars.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
+            connectTimeoutMS: envVars.MONGODB_CONNECT_TIMEOUT_MS,
+            socketTimeoutMS: envVars.MONGODB_SOCKET_TIMEOUT_MS,
         },
         syncIndexes: envVars.SYNC_INDEXES,
     },

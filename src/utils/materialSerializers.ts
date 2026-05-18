@@ -345,6 +345,10 @@ const serializeDistributionRecordItem = (input: any) => {
         vatRate: item?.vatRate,
         vatAmount: item?.vatAmount,
         totalWithVat: item?.totalWithVat,
+        catalogStatus: item?.catalogStatus ?? (item?.materialId ? 'matched' : 'unmatched'),
+        quantityInventoried: item?.quantityInventoried ?? 0,
+        inventoryStatus: item?.inventoryStatus ?? 'pending',
+        inventorySkipReason: item?.inventorySkipReason,
         adjustReason: item?.adjustReason,
         note: item?.note,
     };
