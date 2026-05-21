@@ -340,6 +340,11 @@ const serializeDistributionRecordItem = (input: any) => {
         unit: item?.unit ?? material?.unit,
         quantityRequested: item?.quantityRequested,
         quantity: item?.quantity ?? 0,
+        quantityDistributed: item?.quantityDistributed ?? item?.quantity ?? 0,
+        quantityShortage: item?.quantityShortage ?? 0,
+        sourceRequestItemIndex: item?.sourceRequestItemIndex,
+        sourceShortageId: toId(item?.sourceShortageId),
+        fulfillmentStatus: item?.fulfillmentStatus ?? 'fulfilled',
         unitPrice: item?.unitPrice,
         totalPrice: item?.totalPrice,
         vatRate: item?.vatRate,
@@ -393,6 +398,10 @@ export const serializeDistributionRecord = (input: any) => {
         purchaseOrder,
         supplyRequestId: supplyRequest?.id ?? toId(distribution?.supplyRequestId),
         supplyRequest,
+        isCompensation: distribution?.isCompensation === true,
+        compensationForShortageIds: Array.isArray(distribution?.compensationForShortageIds)
+            ? distribution.compensationForShortageIds.map(toId).filter(Boolean)
+            : [],
         items: Array.isArray(distribution?.items) ? distribution.items.map(serializeDistributionRecordItem) : [],
         status: distribution?.status,
         distributedBy: distributedBy ?? toId(distribution?.distributedBy),
@@ -405,5 +414,55 @@ export const serializeDistributionRecord = (input: any) => {
         note: distribution?.note,
         createdAt: toIso(distribution?.createdAt),
         updatedAt: toIso(distribution?.updatedAt),
+    };
+};
+
+export const serializeSupplyShortage = (input: any) => {
+    const shortage = toPlain(input);
+    const material =
+        shortage?.materialId && typeof shortage.materialId === 'object' && shortage.materialId.name
+            ? serializeMaterial(shortage.materialId)
+            : undefined;
+    const toPlant =
+        shortage?.toPlantId && typeof shortage.toPlantId === 'object' && shortage.toPlantId.name
+            ? serializePlant(shortage.toPlantId)
+            : undefined;
+
+    const quantityShortage = Number(shortage?.quantityShortage ?? 0);
+    const quantityResolved = Number(shortage?.quantityResolved ?? 0);
+
+    return {
+        id: toId(shortage),
+        originalSupplyRequestId: toId(shortage?.originalSupplyRequestId),
+        originalSupplyRequestCode: shortage?.originalSupplyRequestCode,
+        originalDistributionId: toId(shortage?.originalDistributionId),
+        originalDistributionCode: shortage?.originalDistributionCode,
+        originalItemIndex: shortage?.originalItemIndex,
+        toPlantId: toPlant?.id ?? toId(shortage?.toPlantId),
+        toPlant,
+        materialId: material?.id ?? toId(shortage?.materialId),
+        material,
+        materialName: shortage?.materialName,
+        unit: shortage?.unit,
+        quantityRequested: shortage?.quantityRequested ?? 0,
+        quantityDistributed: shortage?.quantityDistributed ?? 0,
+        quantityShortage,
+        quantityResolved,
+        quantityOutstanding: Math.max(0, quantityShortage - quantityResolved),
+        status: shortage?.status,
+        reason: shortage?.reason,
+        resolutions: Array.isArray(shortage?.resolutions)
+            ? shortage.resolutions.map((resolution: any) => ({
+                  distributionId: toId(resolution?.distributionId),
+                  distributionCode: resolution?.distributionCode,
+                  quantity: resolution?.quantity ?? 0,
+                  resolvedBy: toId(resolution?.resolvedBy),
+                  resolvedAt: toIso(resolution?.resolvedAt),
+                  note: resolution?.note,
+              }))
+            : [],
+        note: shortage?.note,
+        createdAt: toIso(shortage?.createdAt),
+        updatedAt: toIso(shortage?.updatedAt),
     };
 };

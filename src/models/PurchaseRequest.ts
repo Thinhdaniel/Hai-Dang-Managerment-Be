@@ -53,7 +53,7 @@ const PurchaseRequestSchema = new mongoose.Schema(
         requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         status: {
             type: String,
-            enum: ['draft', 'pending', 'approved', 'rejected', 'ordered', 'received', 'in_progress', 'distributed'],
+            enum: ['draft', 'pending', 'approved', 'rejected', 'ordered', 'received', 'in_progress', 'partially_distributed', 'distributed'],
             default: 'pending',
         },
         items: { type: [PurchaseRequestItemSchema], default: [] },

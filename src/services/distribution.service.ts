@@ -4,6 +4,7 @@ import InventoryStock from '@/models/InventoryStock';
 import Material from '@/models/Material';
 import StockTransaction from '@/models/StockTransaction';
 import PurchaseRequest from '@/models/PurchaseRequest';
+import SupplyShortage from '@/models/SupplyShortage';
 import { distributionRepository } from '@/repositories/distribution.repository';
 import {
     generateDocumentCode,
@@ -94,6 +95,8 @@ const ensureDistributionAccess = (req: Request, distribution: any) => {
     }
 };
 
+const getRequestedQuantity = (item: any) => Number(item?.quantityApproved ?? item?.quantityRequested ?? 0);
+
 const buildDistributionRecordItems = async (items: any[], session?: mongoose.ClientSession) => {
     const materialIds = Array.from(new Set((items ?? []).map((item: any) => toId(item.materialId)).filter(Boolean))) as string[];
     const materialsMap = await getMaterialsMap(materialIds, session);
@@ -103,7 +106,10 @@ const buildDistributionRecordItems = async (items: any[], session?: mongoose.Cli
         const material = materialId ? materialsMap.get(materialId) : undefined;
         const catalogStatus = item.catalogStatus || (material ? 'matched' : 'unmatched');
 
-        if (!material && catalogStatus !== 'ignored') {
+        const qty = Number(item.quantity ?? 0);
+        const fulfillmentStatus = item.fulfillmentStatus === 'not_supplied' || qty === 0 ? 'not_supplied' : item.fulfillmentStatus;
+
+        if (!material && catalogStatus !== 'ignored' && fulfillmentStatus !== 'not_supplied') {
             throw new BadRequestError(`Dong ${idx + 1}: vui long gan vat tu kho hoac chon bo qua ton kho`);
         }
 
@@ -112,8 +118,10 @@ const buildDistributionRecordItems = async (items: any[], session?: mongoose.Cli
         if (!materialName) throw new BadRequestError(`Dong ${idx + 1}: ten vat tu khong duoc de trong`);
         if (!unit) throw new BadRequestError(`Dong ${idx + 1}: don vi tinh khong duoc de trong`);
 
-        const qty = Number(item.quantity ?? 0);
-        if (qty <= 0) throw new BadRequestError(`Item ${idx + 1}: so luong cap phat phai lon hon 0`);
+        if (qty < 0) throw new BadRequestError(`Item ${idx + 1}: so luong cap phat khong hop le`);
+        if (qty === 0 && fulfillmentStatus !== 'not_supplied') {
+            throw new BadRequestError(`Item ${idx + 1}: so luong cap phat phai lon hon 0 hoac danh dau khong cap duoc`);
+        }
 
         const unitPrice = Number(item.unitPrice ?? 0);
         if (unitPrice < 0) throw new BadRequestError(`Item ${idx + 1}: don gia khong hop le`);
@@ -124,15 +132,22 @@ const buildDistributionRecordItems = async (items: any[], session?: mongoose.Cli
         const totalPrice = Number((qty * unitPrice).toFixed(2));
         const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
         const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
-        const normalizedCatalogStatus = catalogStatus === 'ignored' ? 'ignored' : material ? 'matched' : 'ignored';
-        const skipInventory = normalizedCatalogStatus === 'ignored';
+        const normalizedCatalogStatus = catalogStatus === 'ignored' || fulfillmentStatus === 'not_supplied' ? 'ignored' : material ? 'matched' : 'ignored';
+        const skipInventory = normalizedCatalogStatus === 'ignored' || qty === 0;
+        const quantityRequested = Number(item.quantityRequested ?? qty);
+        const quantityShortage = Number(item.quantityShortage ?? Math.max(0, quantityRequested - qty));
 
         return {
             materialId: material?._id,
             materialName,
             unit,
-            quantityRequested: Number(item.quantityRequested ?? qty),
+            quantityRequested,
             quantity: qty,
+            quantityDistributed: qty,
+            quantityShortage,
+            sourceRequestItemIndex: item.sourceRequestItemIndex,
+            sourceShortageId: toId(item.sourceShortageId),
+            fulfillmentStatus: fulfillmentStatus || (quantityShortage > 0 ? 'partial' : 'fulfilled'),
             unitPrice,
             totalPrice,
             vatRate,
@@ -149,11 +164,188 @@ const buildDistributionRecordItems = async (items: any[], session?: mongoose.Cli
     });
 };
 
+const applySupplyRequestFulfillment = (items: any[], requestItems: any[]) => {
+    const hasExplicitIndexes = items.some((item) => item.sourceRequestItemIndex !== undefined && item.sourceRequestItemIndex !== null);
+    const grouped = new Map<number, any[]>();
+
+    items.forEach((item, idx) => {
+        const sourceIndex = hasExplicitIndexes ? Number(item.sourceRequestItemIndex ?? idx) : idx;
+        item.sourceRequestItemIndex = sourceIndex;
+        grouped.set(sourceIndex, [...(grouped.get(sourceIndex) ?? []), item]);
+    });
+
+    for (const [sourceIndex, rows] of grouped.entries()) {
+        const requestItem = requestItems[sourceIndex];
+        const requestedQty = getRequestedQuantity(requestItem) || Math.max(...rows.map((row) => Number(row.quantityRequested ?? 0)));
+        const distributedQty = rows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
+
+        if (requestedQty > 0 && distributedQty > requestedQty) {
+            throw new BadRequestError(
+                `Dong ${sourceIndex + 1}: so luong cap phat (${distributedQty}) vuot qua so luong duyet (${requestedQty})`
+            );
+        }
+
+        const shortageQty = Number(Math.max(0, requestedQty - distributedQty).toFixed(2));
+        const status = distributedQty <= 0 ? 'not_supplied' : shortageQty > 0 ? 'partial' : 'fulfilled';
+
+        rows.forEach((row, rowIndex) => {
+            row.quantityRequested = requestedQty;
+            row.quantityDistributed = Number(row.quantity ?? 0);
+            row.quantityShortage = rowIndex === 0 ? shortageQty : 0;
+            row.fulfillmentStatus = status;
+        });
+    }
+
+    return items;
+};
+
 const summarizeDistributionItems = (items: any[]) => ({
     totalAmount: Number(items.reduce((sum: number, item: any) => sum + Number(item.totalPrice ?? 0), 0).toFixed(2)),
     totalVatAmount: Number(items.reduce((sum: number, item: any) => sum + Number(item.vatAmount ?? 0), 0).toFixed(2)),
     totalWithVat: Number(items.reduce((sum: number, item: any) => sum + Number(item.totalWithVat ?? 0), 0).toFixed(2)),
 });
+
+const createSupplyShortagesForDistribution = async ({
+    supplyRequest,
+    distribution,
+    items,
+    session,
+}: {
+    supplyRequest: any;
+    distribution: any;
+    items: any[];
+    session?: mongoose.ClientSession;
+}) => {
+    const requestItems = (supplyRequest as any).items ?? [];
+    const toPlantId = toId((supplyRequest as any).fromPlantId) || toId((supplyRequest as any).plantId);
+    if (!toPlantId) return;
+
+    const grouped = new Map<number, any[]>();
+    items.forEach((item, idx) => {
+        const sourceIndex = Number(item.sourceRequestItemIndex ?? idx);
+        grouped.set(sourceIndex, [...(grouped.get(sourceIndex) ?? []), item]);
+    });
+
+    for (const [sourceIndex, rows] of grouped.entries()) {
+        const requestItem = requestItems[sourceIndex];
+        if (!requestItem) continue;
+
+        const quantityRequested = getRequestedQuantity(requestItem);
+        const quantityDistributed = Number(rows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0).toFixed(2));
+        const quantityShortage = Number(Math.max(0, quantityRequested - quantityDistributed).toFixed(2));
+
+        if (quantityShortage <= 0) continue;
+
+        const firstRow = rows.find((row) => row.materialName || row.materialId) ?? rows[0];
+        const reason = rows.find((row) => row.adjustReason || row.note)?.adjustReason || rows.find((row) => row.adjustReason || row.note)?.note;
+
+        await SupplyShortage.updateOne(
+            {
+                originalSupplyRequestId: (supplyRequest as any)._id,
+                originalItemIndex: sourceIndex,
+                originalDistributionId: (distribution as any)._id,
+                isDeleted: { $ne: true },
+            },
+            {
+                $setOnInsert: {
+                    originalSupplyRequestId: (supplyRequest as any)._id,
+                    originalSupplyRequestCode: (supplyRequest as any).requestCode,
+                    originalDistributionId: (distribution as any)._id,
+                    originalDistributionCode: (distribution as any).distributionCode,
+                    originalItemIndex: sourceIndex,
+                    toPlantId,
+                    materialId: toId(firstRow?.materialId) || toId(requestItem?.materialId),
+                    materialName: firstRow?.materialName || requestItem?.materialName,
+                    unit: firstRow?.unit || requestItem?.unit,
+                    quantityRequested,
+                    quantityDistributed,
+                    quantityShortage,
+                    quantityResolved: 0,
+                    status: 'outstanding',
+                    reason,
+                    note: firstRow?.note,
+                },
+            },
+            { upsert: true, session }
+        );
+    }
+};
+
+const refreshSupplyRequestFulfillmentStatus = async (supplyRequestId?: string, session?: mongoose.ClientSession) => {
+    if (!supplyRequestId) return;
+
+    const openQuery = SupplyShortage.countDocuments({
+        originalSupplyRequestId: supplyRequestId,
+        status: { $in: ['outstanding', 'partially_settled'] },
+        isDeleted: { $ne: true },
+    });
+    if (session) openQuery.session(session);
+    const openCount = await openQuery;
+
+    await PurchaseRequest.updateOne(
+        { _id: supplyRequestId },
+        { $set: { status: openCount > 0 ? 'partially_distributed' : 'distributed' } },
+        { session }
+    );
+};
+
+const applySupplyShortageResolutions = async ({
+    record,
+    performedBy,
+    session,
+}: {
+    record: any;
+    performedBy?: string;
+    session: mongoose.ClientSession;
+}) => {
+    if (!(record as any).isCompensation) return;
+
+    const supplyRequestIds = new Set<string>();
+    for (const item of (record as any).items ?? []) {
+        const sourceShortageId = toId(item.sourceShortageId);
+        const quantity = Number(item.quantity ?? 0);
+        if (!sourceShortageId || quantity <= 0) continue;
+
+        const shortage = await SupplyShortage.findOne({
+            _id: sourceShortageId,
+            status: { $in: ['outstanding', 'partially_settled'] },
+            isDeleted: { $ne: true },
+        }).session(session);
+
+        if (!shortage) {
+            throw new BadRequestError(`Dong cap bu khong ton tai hoac da hoan tat`);
+        }
+
+        const outstanding = Number(shortage.quantityShortage ?? 0) - Number(shortage.quantityResolved ?? 0);
+        if (quantity > outstanding) {
+            throw new BadRequestError(`So luong cap bu cho "${shortage.materialName}" vuot qua so luong con thieu`);
+        }
+
+        shortage.quantityResolved = Number((Number(shortage.quantityResolved ?? 0) + quantity).toFixed(2));
+        shortage.status =
+            shortage.quantityResolved >= Number(shortage.quantityShortage ?? 0)
+                ? 'settled'
+                : shortage.quantityResolved > 0
+                  ? 'partially_settled'
+                  : 'outstanding';
+        shortage.resolutions.push({
+            distributionId: (record as any)._id,
+            distributionCode: (record as any).distributionCode,
+            quantity,
+            resolvedBy: performedBy,
+            resolvedAt: new Date(),
+            note: item.note,
+        });
+
+        await shortage.save({ session });
+        const requestId = toId(shortage.originalSupplyRequestId);
+        if (requestId) supplyRequestIds.add(requestId);
+    }
+
+    for (const supplyRequestId of supplyRequestIds) {
+        await refreshSupplyRequestFulfillmentStatus(supplyRequestId, session);
+    }
+};
 
 const exportDistributionItemStock = async ({
     item,
@@ -314,6 +506,7 @@ export const createDistributionRecord = async (req: Request, res: Response, next
     // 2. Kiểm tra chưa có distribution từ SR này
     const existing = await (DistributionRecord as any).findOne({
         supplyRequestId: sr._id,
+        isCompensation: { $ne: true },
         isDeleted: { $ne: true },
     });
     if (existing) throw new BadRequestError(`De xuat nay da co phieu cap phat: ${existing.distributionCode}`);
@@ -331,7 +524,10 @@ export const createDistributionRecord = async (req: Request, res: Response, next
     const toPlantId = toId((sr as any).fromPlantId);
     if (!toPlantId) throw new BadRequestError('Phieu de xuat thieu thong tin co so gui');
 
-    const builtItems = await buildDistributionRecordItems(items ?? []);
+    const builtItems = applySupplyRequestFulfillment(
+        await buildDistributionRecordItems(items ?? []),
+        ((sr as any).items ?? []) as any[]
+    );
     const totals = summarizeDistributionItems(builtItems);
 
     const record = await distributionRepository.create({
@@ -350,6 +546,7 @@ export const createDistributionRecord = async (req: Request, res: Response, next
 
     // 4. Cập nhật SR status
     await PurchaseRequest.updateOne({ _id: sr._id }, { $set: { status: 'in_progress' } });
+    await createSupplyShortagesForDistribution({ supplyRequest: sr, distribution: record, items: builtItems });
 
     const created = await distributionRepository.findById(String((record as any)._id));
 
@@ -366,6 +563,100 @@ export const createDistributionRecord = async (req: Request, res: Response, next
         customResponse({
             data: serializeDistributionRecord(created),
             message: 'Tao phieu cap phat thanh cong',
+            status: StatusCodes.CREATED,
+            success: true,
+        })
+    );
+};
+
+export const createCompensationDistributionRecord = async (req: Request, res: Response, next: NextFunction) => {
+    const { shortageIds, distributedAt, items, note } = req.body;
+    const uniqueShortageIds = Array.from(new Set<string>((shortageIds ?? []).map(String)));
+
+    const shortages = await SupplyShortage.find({
+        _id: { $in: uniqueShortageIds },
+        status: { $in: ['outstanding', 'partially_settled'] },
+        isDeleted: { $ne: true },
+    });
+
+    if (shortages.length !== uniqueShortageIds.length) {
+        throw new BadRequestError('Mot so dong cap bu khong ton tai hoac da hoan tat');
+    }
+
+    const toPlantIds = new Set(shortages.map((shortage: any) => toId(shortage.toPlantId)).filter(Boolean));
+    if (toPlantIds.size !== 1) throw new BadRequestError('Chi co the tao mot phieu cap bu cho cung mot co so nhan');
+
+    const supplyRequestIds = new Set(shortages.map((shortage: any) => toId(shortage.originalSupplyRequestId)).filter(Boolean));
+    if (supplyRequestIds.size !== 1) throw new BadRequestError('Chi co the tao mot phieu cap bu cho cung mot de xuat goc');
+
+    const shortagesById = new Map(shortages.map((shortage: any) => [String(shortage._id), shortage]));
+    const normalizedItems = (items ?? []).map((item: any, idx: number) => {
+        const sourceShortageId = toId(item.sourceShortageId) || uniqueShortageIds[idx];
+        const shortage = sourceShortageId ? shortagesById.get(sourceShortageId) : undefined;
+        if (!shortage) throw new BadRequestError(`Dong ${idx + 1}: chua gan dong cap bu`);
+
+        const outstanding = Number(shortage.quantityShortage ?? 0) - Number(shortage.quantityResolved ?? 0);
+        return {
+            ...item,
+            sourceShortageId,
+            materialId: item.materialId || toId(shortage.materialId),
+            materialName: item.materialName || shortage.materialName,
+            unit: item.unit || shortage.unit,
+            quantityRequested: outstanding,
+            sourceRequestItemIndex: shortage.originalItemIndex,
+        };
+    });
+
+    const quantityByShortage = new Map<string, number>();
+    normalizedItems.forEach((item: any) => {
+        const key = String(item.sourceShortageId);
+        quantityByShortage.set(key, Number((Number(quantityByShortage.get(key) ?? 0) + Number(item.quantity ?? 0)).toFixed(2)));
+    });
+
+    for (const [shortageId, quantity] of quantityByShortage.entries()) {
+        const shortage = shortagesById.get(shortageId);
+        const outstanding = Number(shortage.quantityShortage ?? 0) - Number(shortage.quantityResolved ?? 0);
+        if (quantity > outstanding) {
+            throw new BadRequestError(`So luong cap bu cho "${shortage.materialName}" vuot qua so luong con thieu`);
+        }
+    }
+
+    const distributionCode = await generateDocumentCode({
+        model: DistributionRecord,
+        field: 'distributionCode',
+        prefix: 'CPB',
+    });
+
+    const mainPlantId = process.env.MAIN_PLANT_ID;
+    if (!mainPlantId) throw new BadRequestError('Chua cau hinh MAIN_PLANT_ID');
+
+    const builtItems = await buildDistributionRecordItems(normalizedItems);
+    const totals = summarizeDistributionItems(builtItems);
+    const [firstShortage] = shortages as any[];
+
+    const record = await distributionRepository.create({
+        distributionCode,
+        distributionType: 'facility_transfer',
+        isCompensation: true,
+        compensationForShortageIds: uniqueShortageIds,
+        supplyRequestId: firstShortage.originalSupplyRequestId,
+        fromPlantId: mainPlantId,
+        toPlantId: firstShortage.toPlantId,
+        status: 'pending',
+        items: builtItems,
+        totalAmount: totals.totalAmount,
+        totalVatAmount: totals.totalVatAmount,
+        totalWithVat: totals.totalWithVat,
+        distributedAt: distributedAt ? new Date(distributedAt) : undefined,
+        note: note?.trim() || undefined,
+    });
+
+    const created = await distributionRepository.findById(String((record as any)._id));
+
+    return res.status(StatusCodes.CREATED).json(
+        customResponse({
+            data: serializeDistributionRecord(created),
+            message: 'Tao phieu cap bu thanh cong',
             status: StatusCodes.CREATED,
             success: true,
         })
@@ -524,6 +815,8 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
             );
         }
 
+        await applySupplyShortageResolutions({ record, performedBy: req.userId, session });
+
         await (DistributionRecord as any).updateOne(
             { _id: record._id },
             { $set: { status: 'confirmed', confirmedBy: req.userId, confirmedAt: now, distributedAt: now, items: inventoriedItems } },
@@ -650,10 +943,7 @@ export const confirmDistributionRecord = async (req: Request, res: Response, nex
 
     const supplyRequestId = toId((record as any).supplyRequestId);
     if (supplyRequestId) {
-        await PurchaseRequest.updateOne(
-            { _id: supplyRequestId },
-            { $set: { status: 'distributed' } }
-        );
+        await refreshSupplyRequestFulfillmentStatus(supplyRequestId);
     }
 
     const updated = await distributionRepository.findById(String(req.params.id));
@@ -743,7 +1033,21 @@ export const exportRangeDistributionXlsx = async (req: Request, res: Response, n
         throw new BadRequestError('Khong co phieu cap phat nao trong khoang thoi gian nay');
     }
 
-    const plains = records.map(serializeDistributionRecord);
+    const recordIds = records.map((record: any) => String(record._id));
+    const shortages = await SupplyShortage.find({
+        originalDistributionId: { $in: recordIds },
+        isDeleted: { $ne: true },
+    }).lean();
+    const shortagesByDistribution = new Map<string, any[]>();
+    shortages.forEach((shortage: any) => {
+        const key = String(shortage.originalDistributionId);
+        shortagesByDistribution.set(key, [...(shortagesByDistribution.get(key) ?? []), shortage]);
+    });
+
+    const plains = records.map((record: any) => ({
+        ...serializeDistributionRecord(record),
+        supplyShortages: shortagesByDistribution.get(String(record._id)) ?? [],
+    }));
 
     const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
     const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
@@ -774,7 +1078,15 @@ export const exportDistributionXlsx = async (req: Request, res: Response, next: 
     }
 
     // Convert to plain object so generator reads fields correctly (not Mongoose proxies)
-    const plain = serializeDistributionRecord(record);
+    const shortages = await SupplyShortage.find({
+        originalDistributionId: (record as any)._id,
+        isDeleted: { $ne: true },
+    }).lean();
+
+    const plain = {
+        ...serializeDistributionRecord(record),
+        supplyShortages: shortages,
+    };
 
     const { generateDistributionXlsx } = await import('@/utils/generateDistributionXlsx');
     const buffer = await generateDistributionXlsx(plain);

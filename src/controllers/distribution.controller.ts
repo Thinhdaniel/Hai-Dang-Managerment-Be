@@ -11,6 +11,9 @@ export const getDistributionRecordById = asyncHandler(async (req: Request, res: 
 export const createDistributionRecord = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await distributionService.createDistributionRecord(req, res, next);
 });
+export const createCompensationDistributionRecord = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await distributionService.createCompensationDistributionRecord(req, res, next);
+});
 export const createInternalDistributionRecord = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await distributionService.createInternalDistributionRecord(req, res, next);
 });

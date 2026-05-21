@@ -5,6 +5,7 @@ import validator from '@/middlewares/validator';
 import * as distributionController from '@/controllers/distribution.controller';
 import {
     confirmDistributionSchema,
+    createCompensationDistributionRecordSchema,
     createDistributionRecordSchema,
     createInternalDistributionRecordSchema,
     createInternalDraftSchema,
@@ -20,6 +21,7 @@ router.use(authenticate);
 router.get('/', distributionController.getAllDistributionRecords);
 router.get('/export-range-xlsx', distributionController.exportRangeDistributionXlsx);
 router.post('/', requireCS1Manager, validator(createDistributionRecordSchema), distributionController.createDistributionRecord);
+router.post('/compensations', requireCS1Manager, validator(createCompensationDistributionRecordSchema), distributionController.createCompensationDistributionRecord);
 router.post('/internal', requirePlantManager, validator(createInternalDraftSchema), distributionController.createInternalDistributionRecord);
 router.post('/:id/internal/items', requirePlantManager, validateObjectId, validator(appendInternalItemsSchema), distributionController.appendInternalItems);
 router.patch('/:id/internal/finalize', requirePlantManager, validateObjectId, validator(finalizeInternalDraftSchema), distributionController.finalizeInternalDraft);

@@ -13,6 +13,18 @@ const STATUS_LABEL: Record<string, string> = {
     confirmed: 'Hoàn thành',
 };
 
+const FULFILLMENT_LABEL: Record<string, string> = {
+    fulfilled: 'Cấp đủ',
+    partial: 'Cấp thiếu',
+    not_supplied: 'Không cấp',
+};
+
+const INVENTORY_LABEL: Record<string, string> = {
+    pending: 'Chưa trừ kho',
+    applied: 'Đã trừ kho',
+    skipped: 'Không theo dõi tồn',
+};
+
 const resolveUser = (v: any): string => {
     if (!v) return '-';
     if (typeof v === 'string') return v;
@@ -23,9 +35,7 @@ const resolveUser = (v: any): string => {
  * Xuất nhiều phiếu cấp phát vào 1 sheet duy nhất.
  * Mỗi dòng = 1 vật tư, thông tin phiếu lặp lại trên mỗi dòng.
  *
- * Cột:
- * STT | Mã phiếu | Loại | Ngày cấp phát | Kho xuất | Kho nhận / Bộ phận | Chuyền | Người cấp phát | Người nhận
- *   | Tên vật tư | ĐVT | SL yêu cầu | SL thực xuất | Đơn giá | Thành tiền | VAT% | Tiền VAT | Tổng tiền | Ghi chú
+ * Mỗi dòng = 1 vật tư, thông tin phiếu lặp lại trên mỗi dòng.
  */
 export const generateRangeDistributionXlsx = async (
     distributions: any[],
@@ -43,36 +53,43 @@ export const generateRangeDistributionXlsx = async (
     });
 
     ws.columns = [
-        { width: 5 },   // A: STT
-        { width: 16 },  // B: Mã phiếu
-        { width: 12 },  // C: Loại
-        { width: 14 },  // D: Ngày cấp phát
-        { width: 18 },  // E: Kho xuất
-        { width: 18 },  // F: Kho nhận / Bộ phận
-        { width: 14 },  // G: Chuyền
-        { width: 18 },  // H: Người cấp phát
-        { width: 18 },  // I: Người nhận
-        { width: 26 },  // J: Tên vật tư
-        { width: 8 },   // K: ĐVT
-        { width: 10 },  // L: SL yêu cầu
-        { width: 10 },  // M: SL thực xuất
-        { width: 12 },  // N: Đơn giá
-        { width: 14 },  // O: Thành tiền
-        { width: 7 },   // P: VAT%
-        { width: 14 },  // Q: Tiền VAT
-        { width: 14 },  // R: Tổng tiền
-        { width: 20 },  // S: Ghi chú
+        { width: 5 },
+        { width: 16 },
+        { width: 15 },
+        { width: 16 },
+        { width: 16 },
+        { width: 14 },
+        { width: 18 },
+        { width: 18 },
+        { width: 14 },
+        { width: 18 },
+        { width: 18 },
+        { width: 24 },
+        { width: 28 },
+        { width: 8 },
+        { width: 10 },
+        { width: 10 },
+        { width: 10 },
+        { width: 10 },
+        { width: 14 },
+        { width: 16 },
+        { width: 12 },
+        { width: 14 },
+        { width: 7 },
+        { width: 14 },
+        { width: 14 },
+        { width: 24 },
     ];
 
     // ── Row 1: Tiêu đề ────────────────────────────────────────────────────────
-    ws.mergeCells('A1:S1');
+    ws.mergeCells('A1:Z1');
     const titleCell = ws.getCell('A1');
     titleCell.value = 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG';
     titleCell.font = { name: FONT, size: 12, bold: true };
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
     ws.getRow(1).height = 22;
 
-    ws.mergeCells('A2:S2');
+    ws.mergeCells('A2:Z2');
     const subtitleCell = ws.getCell('A2');
     subtitleCell.value = `TỔNG HỢP PHIẾU CẤP PHÁT VẬT TƯ - ${label}`;
     subtitleCell.font = { name: FONT, size: 13, bold: true };
@@ -81,11 +98,32 @@ export const generateRangeDistributionXlsx = async (
 
     // ── Row 4: Header cột ─────────────────────────────────────────────────────
     const HEADERS = [
-        'STT', 'Mã phiếu', 'Loại', 'Ngày cấp phát',
-        'Kho xuất', 'Kho nhận / Bộ phận', 'Chuyền may',
-        'Người cấp phát', 'Người nhận',
-        'Tên vật tư', 'ĐVT', 'SL yêu cầu', 'SL thực xuất',
-        'Đơn giá', 'Thành tiền', 'VAT%', 'Tiền VAT', 'Tổng tiền', 'Ghi chú',
+        'STT',
+        'Mã phiếu',
+        'Mã đề xuất',
+        'Loại',
+        'Trạng thái phiếu',
+        'Ngày cấp phát',
+        'Kho xuất',
+        'Kho nhận / Bộ phận',
+        'Chuyền may',
+        'Người cấp phát',
+        'Người nhận',
+        'Vật tư đề xuất',
+        'Vật tư cấp thực tế',
+        'ĐVT',
+        'SL đề xuất',
+        'SL duyệt',
+        'SL thực cấp',
+        'SL thiếu',
+        'Tình trạng cấp',
+        'Trạng thái kho',
+        'Đơn giá',
+        'Thành tiền',
+        'VAT%',
+        'Tiền VAT',
+        'Tổng tiền',
+        'Ghi chú / lý do',
     ];
     const headerRow = ws.getRow(4);
     headerRow.height = 30;
@@ -118,8 +156,9 @@ export const generateRangeDistributionXlsx = async (
         const receiver = isInternal
             ? (dist.requesterName || '-')
             : resolveUser(dist.confirmedBy);
-        const loai = isInternal ? 'Nội bộ' : 'Liên cơ sở';
+        const loai = isInternal ? 'Nội bộ' : dist.isCompensation ? 'Cấp bù' : 'Liên cơ sở';
         const status = STATUS_LABEL[dist.status] || dist.status;
+        const srCode = dist.supplyRequest?.requestCode || '';
 
         const items: any[] = dist.items || [];
 
@@ -128,9 +167,9 @@ export const generateRangeDistributionXlsx = async (
             const row = ws.getRow(rowIdx++);
             stt++;
             const vals = [
-                stt, dist.distributionCode || '-', loai, issueDate,
+                stt, dist.distributionCode || '-', srCode, loai, status, issueDate,
                 fromName, toName, targetLine, distributedBy, receiver,
-                '-', '-', '-', '-', '-', '-', '-', '-', '-', status,
+                '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-',
             ];
             vals.forEach((v, vi) => {
                 const c = row.getCell(vi + 1);
@@ -145,11 +184,15 @@ export const generateRangeDistributionXlsx = async (
         for (const item of items) {
             stt++;
             const qty = Number(item.quantity ?? 0);
-            const qtyReq = Number(item.quantityRequested ?? qty);
+            const sourceIndex = Number(item.sourceRequestItemIndex ?? 0);
+            const sourceItem = dist.supplyRequest?.items?.[sourceIndex];
+            const qtyOriginal = Number(sourceItem?.quantityRequested ?? item.quantityRequested ?? qty);
+            const qtyApproved = Number(sourceItem?.quantityApproved ?? item.quantityRequested ?? qty);
+            const qtyShortage = Number(item.quantityShortage ?? Math.max(0, qtyApproved - qty));
             const unitPrice = Number(item.unitPrice ?? 0);
             const totalPrice = Number(item.totalPrice ?? qty * unitPrice);
             const vatRate = Number(item.vatRate ?? 0);
-            const vatAmount = Number(item.vatAmount ?? totalPrice * vatRate / 100);
+            const vatAmount = Number(item.vatAmount ?? (totalPrice * vatRate) / 100);
             const totalWithVat = Number(item.totalWithVat ?? totalPrice + vatAmount);
 
             grandTotal += totalPrice;
@@ -160,23 +203,30 @@ export const generateRangeDistributionXlsx = async (
             const vals: any[] = [
                 stt,
                 dist.distributionCode || '-',
+                srCode,
                 loai,
+                status,
                 issueDate,
                 fromName,
                 isInternal ? (dist.targetDepartment || fromName) : (dist.toPlant?.name || '-'),
                 targetLine,
                 distributedBy,
                 receiver,
+                sourceItem?.materialName || item.materialName || item.material?.name || '-',
                 item.materialName || item.material?.name || '-',
                 item.unit || item.material?.unit || '-',
-                qtyReq,
+                qtyOriginal,
+                qtyApproved,
                 qty,
+                qtyShortage,
+                FULFILLMENT_LABEL[item.fulfillmentStatus] || item.fulfillmentStatus || (qtyShortage > 0 ? 'Cấp thiếu' : 'Cấp đủ'),
+                INVENTORY_LABEL[item.inventoryStatus] || item.inventoryStatus || '',
                 unitPrice,
                 totalPrice,
                 vatRate,
                 vatAmount,
                 totalWithVat,
-                item.adjustReason || item.note || '',
+                item.adjustReason || item.note || item.inventorySkipReason || '',
             ];
 
             vals.forEach((v, vi) => {
@@ -184,13 +234,12 @@ export const generateRangeDistributionXlsx = async (
                 c.value = v;
                 c.font = { name: FONT, size: 11 };
                 c.border = border;
-                // Căn phải các cột số: L(11), M(12), N(13), O(14), P(15), Q(16), R(17)
                 if (vi === 0) {
                     c.alignment = { horizontal: 'center', vertical: 'middle' };
-                } else if (vi >= 11 && vi <= 17) {
+                } else if (vi >= 14 && vi <= 24) {
                     c.alignment = { horizontal: 'right', vertical: 'middle' };
-                    if (vi !== 15) c.numFmt = '#,##0'; // VAT% không format tiền
-                } else if (vi === 9 || vi === 18) {
+                    if (vi !== 18 && vi !== 19 && vi !== 22) c.numFmt = '#,##0';
+                } else if ([11, 12, 18, 19, 25].includes(vi)) {
                     c.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
                 } else {
                     c.alignment = { horizontal: 'left', vertical: 'middle' };
@@ -200,14 +249,14 @@ export const generateRangeDistributionXlsx = async (
     }
 
     // ── Dòng tổng cộng ────────────────────────────────────────────────────────
-    ws.mergeCells(`A${rowIdx}:N${rowIdx}`);
+    ws.mergeCells(`A${rowIdx}:U${rowIdx}`);
     const sumLabelCell = ws.getCell(`A${rowIdx}`);
     sumLabelCell.value = 'TONG CONG';
     sumLabelCell.font = { name: FONT, size: 11, bold: true };
     sumLabelCell.alignment = { horizontal: 'center', vertical: 'middle' };
     sumLabelCell.border = border;
 
-    const sumData: [number, number][] = [[15, grandTotal], [17, grandVat], [18, grandWithVat]];
+    const sumData: [number, number][] = [[22, grandTotal], [24, grandVat], [25, grandWithVat]];
     sumData.forEach(([col, val]) => {
         const c = ws.getCell(rowIdx, col);
         c.value = val;
@@ -217,7 +266,7 @@ export const generateRangeDistributionXlsx = async (
         c.border = border;
     });
     // Fill border cho các ô còn lại trong dòng tổng
-    [16, 19].forEach((col) => { ws.getCell(rowIdx, col).border = border; });
+    [23, 26].forEach((col) => { ws.getCell(rowIdx, col).border = border; });
 
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);

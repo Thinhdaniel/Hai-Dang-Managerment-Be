@@ -5,9 +5,13 @@ const distributionItemSchema = z.object({
     materialId: zObjectId('Vat tu').optional(),
     materialName: zOptionalString(),
     unit: zOptionalString(),
-    quantity: z.number().gt(0, { message: 'So luong cap phat phai lon hon 0' }),
+    quantity: z.number().min(0, { message: 'So luong cap phat khong hop le' }),
     quantityRequested: z.number().min(0).optional(),
     quantityDistributed: z.number().min(0).optional(),
+    quantityShortage: z.number().min(0).optional(),
+    sourceRequestItemIndex: z.number().int().min(0).optional(),
+    sourceShortageId: zObjectId('Dong cap bu').optional(),
+    fulfillmentStatus: z.enum(['fulfilled', 'partial', 'not_supplied']).optional(),
     unitPrice: z.number().min(0).optional(),
     vatRate: z.number().min(0).max(100).optional(),
     catalogStatus: z.enum(['matched', 'unmatched', 'ignored']).optional(),
@@ -25,6 +29,13 @@ export const createDistributionRecordSchema = z.object({
     distributedAt: zOptionalString(),
     items: z.array(distributionItemSchema).min(1, { message: 'Phai co it nhat 1 vat tu' }),
     status: z.enum(['pending', 'distributed']).optional(),
+    note: zOptionalString(),
+});
+
+export const createCompensationDistributionRecordSchema = z.object({
+    shortageIds: z.array(zObjectId('Dong can cap bu')).min(1, { message: 'Phai chon it nhat 1 dong can cap bu' }),
+    distributedAt: zOptionalString(),
+    items: z.array(distributionItemSchema).min(1, { message: 'Phai co it nhat 1 vat tu cap bu' }),
     note: zOptionalString(),
 });
 

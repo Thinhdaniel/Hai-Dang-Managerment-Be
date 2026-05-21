@@ -8,6 +8,14 @@ const DistributionRecordItemSchema = new mongoose.Schema(
         quantity: { type: Number, required: true, min: 0 }, // backward compat
         quantityRequested: { type: Number, min: 0 },
         quantityDistributed: { type: Number, min: 0 },
+        quantityShortage: { type: Number, min: 0, default: 0 },
+        sourceRequestItemIndex: { type: Number, min: 0 },
+        sourceShortageId: { type: mongoose.Schema.Types.ObjectId, ref: 'SupplyShortage' },
+        fulfillmentStatus: {
+            type: String,
+            enum: ['fulfilled', 'partial', 'not_supplied'],
+            default: 'fulfilled',
+        },
         unitPrice: { type: Number, min: 0 },
         vatRate: { type: Number, min: 0, default: 0 },
         vatAmount: { type: Number, min: 0 },
@@ -59,6 +67,15 @@ const DistributionRecordSchema = new mongoose.Schema(
         supplyRequestId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'PurchaseRequest',
+        },
+        isCompensation: {
+            type: Boolean,
+            default: false,
+        },
+        compensationForShortageIds: {
+            type: [mongoose.Schema.Types.ObjectId],
+            ref: 'SupplyShortage',
+            default: [],
         },
         items: {
             type: [DistributionRecordItemSchema],
