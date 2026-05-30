@@ -154,11 +154,20 @@ export const serializeMaintenance = (input: any) => {
         maintenance?.assetId && typeof maintenance.assetId === 'object' && maintenance.assetId.name
             ? serializeAsset(maintenance.assetId)
             : undefined;
+    const maintenancePlant =
+        maintenance?.plantId && typeof maintenance.plantId === 'object' && maintenance.plantId.name
+            ? serializePlant(maintenance.plantId)
+            : undefined;
 
     return {
         id: toId(maintenance),
         assetId: asset?.id ?? toId(maintenance?.assetId),
         asset,
+        // Snapshot cơ sở tại thời điểm phát sinh bảo trì
+        plantId: maintenancePlant?.id ?? toId(maintenance?.plantId),
+        plantName: maintenance?.plantName,
+        areaAtCreation: maintenance?.areaAtCreation,
+        plantIdBackfilled: maintenance?.plantIdBackfilled,
         type: maintenance?.type,
         repairMode: maintenance?.repairMode ?? 'internal',
         status: maintenance?.status,

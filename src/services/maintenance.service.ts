@@ -2,7 +2,9 @@ import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
 import Maintenance from '@/models/Maintenance';
+import Plant from '@/models/Plant';
 import Transfer from '@/models/Transfer';
+import TransferHistory from '@/models/TransferHistory';
 import { getPagination } from '@/utils/pagination';
 import { serializeMaintenance } from '@/utils/serializers';
 import {
@@ -19,6 +21,86 @@ import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
 const EXTERNAL_REPAIR_MODE = 'external';
+
+// ─── Plant snapshot helper ────────────────────────────────────────────────────
+
+type PlantSnapshot = {
+    plantId?: unknown;
+    plantName?: string;
+    areaAtCreation?: string;
+    plantSnapshotSource: 'backfilled_from_transfer_history' | 'backfilled_from_current_asset' | 'unknown';
+    plantIdBackfilled: true;
+};
+
+/**
+ * Thử xác định cơ sở tại thời điểm bảo trì cho record cũ thiếu snapshot.
+ * Trả về null nếu record đã có plantId (không cần backfill).
+ * Ưu tiên TransferHistory, fallback asset hiện tại, cuối cùng là 'unknown'.
+ */
+const resolveMaintenancePlantSnapshot = async (maintenance: any): Promise<PlantSnapshot | null> => {
+    if (maintenance.plantId) return null;
+
+    const assetId = maintenance.assetId?._id ?? maintenance.assetId;
+    if (!assetId) {
+        return { plantSnapshotSource: 'unknown', plantIdBackfilled: true };
+    }
+
+    const referenceDate: Date = maintenance.endDate ?? maintenance.startDate ?? maintenance.createdAt ?? new Date();
+
+    const historyList = await TransferHistory.find({
+        machineId: assetId,
+        isDeleted: { $ne: true },
+    })
+        .sort({ createdAt: 1 })
+        .lean();
+
+    if (historyList.length) {
+        const historiesBefore = (historyList as any[]).filter((h) => new Date(h.createdAt) <= referenceDate);
+
+        let targetPlantId: any;
+        let targetPlantName: string | undefined;
+
+        if (historiesBefore.length) {
+            // Bản ghi gần nhất trước mốc → máy đã ở toPlantId của bản ghi đó
+            const latest = historiesBefore[historiesBefore.length - 1] as any;
+            targetPlantId = latest.toPlantId;
+            targetPlantName = latest.toPlant;
+        } else {
+            // Tất cả transfer đều SAU mốc → plant lúc đó = fromPlantId của transfer đầu tiên
+            const earliest = historyList[0] as any;
+            targetPlantId = earliest.fromPlantId;
+            targetPlantName = earliest.fromPlant;
+        }
+
+        if (targetPlantId) {
+            if (!targetPlantName) {
+                const plant = await Plant.findById(targetPlantId).select('name').lean();
+                targetPlantName = (plant as any)?.name;
+            }
+            return {
+                plantId: targetPlantId,
+                plantName: targetPlantName,
+                plantSnapshotSource: 'backfilled_from_transfer_history',
+                plantIdBackfilled: true,
+            };
+        }
+    }
+
+    // Fallback: asset.plantId hiện tại (đánh dấu để phân biệt với snapshot chính xác)
+    const asset = await Asset.findById(assetId).populate('plantId').lean();
+    if (asset?.plantId) {
+        const assetPlant = (asset as any).plantId;
+        return {
+            plantId: assetPlant?._id ?? asset.plantId,
+            plantName: assetPlant?.name,
+            areaAtCreation: (asset as any).area,
+            plantSnapshotSource: 'backfilled_from_current_asset',
+            plantIdBackfilled: true,
+        };
+    }
+
+    return { plantSnapshotSource: 'unknown', plantIdBackfilled: true };
+};
 
 const parseReportDateStart = (value: unknown) => {
     if (!value) return undefined;
@@ -155,7 +237,7 @@ export const getMaintenanceById = async (req: Request, res: Response, next: Next
 };
 
 export const createMaintenance = async (req: Request, res: Response, next: NextFunction) => {
-    const asset = await Asset.findOne({ _id: req.body.assetId, isDeleted: { $ne: true } });
+    const asset = await Asset.findOne({ _id: req.body.assetId, isDeleted: { $ne: true } }).populate('plantId');
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
     if (asset.status === ASSET_STATUS.RETURNED_TO_PARTNER) {
         throw new BadRequestError('Thiet bi da tra doi tac, khong the tao phieu bao tri moi');
@@ -176,6 +258,12 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
     const approvalStatus = isExternalRepair ? 'pending' : 'none';
     const externalCost = isExternalRepair ? calculateExternalCost(req.body) : req.body.cost;
 
+    // Snapshot cơ sở tại thời điểm tạo — không được thay đổi khi máy điều chuyển sau này
+    const assetPlant = (asset as any).plantId;
+    const plantIdSnapshot =
+        assetPlant?._id ?? (asset.plantId && typeof asset.plantId !== 'object' ? asset.plantId : undefined);
+    const plantNameSnapshot: string | undefined = assetPlant?.name;
+
     const item = await Maintenance.create({
         ...req.body,
         repairMode,
@@ -183,6 +271,11 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
         createdBy: req.userId,
         status,
         cost: externalCost ?? req.body.cost,
+        plantId: plantIdSnapshot ?? undefined,
+        plantName: plantNameSnapshot ?? undefined,
+        areaAtCreation: asset.area ?? undefined,
+        plantSnapshotSource: 'created_from_asset',
+        plantIdBackfilled: false,
         externalRepair: isExternalRepair
             ? {
                   ...req.body.externalRepair,
@@ -237,6 +330,13 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
 
 export const updateMaintenance = async (req: Request, res: Response, next: NextFunction) => {
     const updatePayload = { ...req.body };
+    // Bảo vệ snapshot cơ sở — không cho phép client ghi đè
+    delete updatePayload.plantId;
+    delete updatePayload.plantName;
+    delete updatePayload.areaAtCreation;
+    delete updatePayload.plantSnapshotSource;
+    delete updatePayload.plantIdBackfilled;
+
     if (updatePayload.repairMode === EXTERNAL_REPAIR_MODE || updatePayload.externalRepair) {
         const externalCost = calculateExternalCost(updatePayload);
         updatePayload.cost = externalCost;
@@ -244,6 +344,17 @@ export const updateMaintenance = async (req: Request, res: Response, next: NextF
             ...updatePayload.externalRepair,
             actualCost: updatePayload.externalRepair?.actualCost ?? externalCost,
         };
+    }
+
+    // Load existing để kiểm tra snapshot — không cho phép findOneAndUpdate inline
+    // vì cần dữ liệu record trước khi quyết định có backfill hay không
+    const existing = await Maintenance.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
+    if (!existing) throw new NotFoundError('Khong tim thay phieu bao tri');
+
+    // Nếu record cũ thiếu plantId, backfill ngay lần update này
+    if (!(existing as any).plantId) {
+        const snapshot = await resolveMaintenancePlantSnapshot(existing);
+        if (snapshot) Object.assign(updatePayload, snapshot);
     }
 
     const item = await applyPopulate(
@@ -387,7 +498,9 @@ export const rejectMaintenance = async (req: Request, res: Response, next: NextF
 export const getMaintenanceReport = async (req: Request, res: Response, next: NextFunction) => {
     const startDate = parseReportDateStart(req.query.startDate);
     const endDate = parseReportDateEnd(req.query.endDate);
-    const groupBy = ['day', 'month', 'quarter'].includes(String(req.query.groupBy)) ? String(req.query.groupBy) : 'month';
+    const groupBy = ['day', 'month', 'quarter'].includes(String(req.query.groupBy))
+        ? String(req.query.groupBy)
+        : 'month';
 
     const completedMatch: Record<string, any> = {
         isDeleted: { $ne: true },
@@ -402,7 +515,9 @@ export const getMaintenanceReport = async (req: Request, res: Response, next: Ne
     }
 
     const [completedItems, pendingApprovalCount, inProgressCount] = await Promise.all([
-        Maintenance.find(completedMatch).populate({ path: 'assetId', populate: ['plantId', 'brandId'] }),
+        Maintenance.find(completedMatch)
+            .populate({ path: 'assetId', populate: ['brandId'] })
+            .populate({ path: 'plantId' }),
         Maintenance.countDocuments({
             isDeleted: { $ne: true },
             repairMode: EXTERNAL_REPAIR_MODE,
@@ -420,7 +535,14 @@ export const getMaintenanceReport = async (req: Request, res: Response, next: Ne
     const costByPlant = new Map<string, { plantId?: string; plantName: string; totalCost: number; count: number }>();
     const costByAsset = new Map<
         string,
-        { assetId: string; assetName: string; machineCode?: string; plantName?: string; totalCost: number; count: number }
+        {
+            assetId: string;
+            assetName: string;
+            machineCode?: string;
+            plantName?: string;
+            totalCost: number;
+            count: number;
+        }
     >();
 
     completedItems.forEach((item: any) => {
@@ -430,8 +552,16 @@ export const getMaintenanceReport = async (req: Request, res: Response, next: Ne
         costByPeriod.set(period, Number(((costByPeriod.get(period) ?? 0) + cost).toFixed(2)));
 
         const asset = item.assetId;
-        const plantId = asset?.plantId?._id ? String(asset.plantId._id) : 'unknown';
-        const plantName = asset?.plantId?.name ?? 'Chua xac dinh';
+        // Dùng snapshot cơ sở từ maintenance record (đúng nghiệp vụ)
+        // Bản ghi cũ chưa backfill hiển thị là 'unknown' — chạy backfill để khắc phục
+        const maintenancePlantId: string | undefined = (item as any).plantId?._id
+            ? String((item as any).plantId._id)
+            : (item as any).plantId
+              ? String((item as any).plantId)
+              : undefined;
+        const maintenancePlantName: string | undefined = (item as any).plantName || (item as any).plantId?.name;
+        const plantId = maintenancePlantId ?? 'unknown';
+        const plantName = maintenancePlantName ?? 'Chưa xác định';
         const plantRow = costByPlant.get(plantId) ?? { plantId, plantName, totalCost: 0, count: 0 };
         plantRow.totalCost = Number((plantRow.totalCost + cost).toFixed(2));
         plantRow.count += 1;
@@ -439,16 +569,14 @@ export const getMaintenanceReport = async (req: Request, res: Response, next: Ne
 
         if (asset?._id) {
             const assetId = String(asset._id);
-            const assetRow =
-                costByAsset.get(assetId) ??
-                {
-                    assetId,
-                    assetName: asset.name,
-                    machineCode: asset.machineCode,
-                    plantName,
-                    totalCost: 0,
-                    count: 0,
-                };
+            const assetRow = costByAsset.get(assetId) ?? {
+                assetId,
+                assetName: asset.name,
+                machineCode: asset.machineCode,
+                plantName,
+                totalCost: 0,
+                count: 0,
+            };
             assetRow.totalCost = Number((assetRow.totalCost + cost).toFixed(2));
             assetRow.count += 1;
             costByAsset.set(assetId, assetRow);
@@ -468,7 +596,9 @@ export const getMaintenanceReport = async (req: Request, res: Response, next: Ne
                 .map(([period, totalCost]) => ({ period, totalCost }))
                 .sort((a, b) => a.period.localeCompare(b.period)),
             costByPlant: Array.from(costByPlant.values()).sort((a, b) => b.totalCost - a.totalCost),
-            topAssets: Array.from(costByAsset.values()).sort((a, b) => b.totalCost - a.totalCost).slice(0, 10),
+            topAssets: Array.from(costByAsset.values())
+                .sort((a, b) => b.totalCost - a.totalCost)
+                .slice(0, 10),
         },
         'Lay bao cao bao tri thanh cong'
     );

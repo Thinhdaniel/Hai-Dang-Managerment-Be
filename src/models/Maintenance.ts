@@ -120,6 +120,32 @@ const MaintenanceSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
         },
+        // Snapshot cơ sở tại thời điểm tạo bảo trì — không được thay đổi khi máy điều chuyển
+        plantId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Plant',
+        },
+        plantName: {
+            type: String,
+            trim: true,
+        },
+        areaAtCreation: {
+            type: String,
+            trim: true,
+        },
+        plantSnapshotSource: {
+            type: String,
+            enum: [
+                'created_from_asset',
+                'backfilled_from_transfer_history',
+                'backfilled_from_current_asset',
+                'unknown',
+            ],
+        },
+        plantIdBackfilled: {
+            type: Boolean,
+            default: false,
+        },
         isDeleted: {
             type: Boolean,
             default: false,
@@ -139,6 +165,7 @@ MaintenanceSchema.index({ status: 1 });
 MaintenanceSchema.index({ type: 1 });
 MaintenanceSchema.index({ repairMode: 1 });
 MaintenanceSchema.index({ approvalStatus: 1 });
+MaintenanceSchema.index({ plantId: 1 });
 
 const Maintenance = mongoose.model('Maintenance', MaintenanceSchema);
 

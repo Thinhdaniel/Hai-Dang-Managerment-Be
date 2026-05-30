@@ -51,7 +51,9 @@ const parseFacilityCostFilters = (query: Request['query']): FacilityCostFilters 
     plantId: query.plantId ? String(query.plantId) : undefined,
     startDate: parseDateStart(query.startDate),
     endDate: parseDateEnd(query.endDate),
-    groupBy: ['day', 'month', 'quarter'].includes(String(query.groupBy)) ? (String(query.groupBy) as ReportGroupBy) : 'month',
+    groupBy: ['day', 'month', 'quarter'].includes(String(query.groupBy))
+        ? (String(query.groupBy) as ReportGroupBy)
+        : 'month',
 });
 
 const getPeriodLabel = (date: Date, groupBy: ReportGroupBy) => {
@@ -90,7 +92,11 @@ const getMaintenanceCost = (item: any) => {
     return roundMoney(Number(item.cost ?? item.externalRepair?.actualCost ?? costItemsTotal ?? 0));
 };
 
-const getOrCreatePlantRow = (rows: Map<string, FacilityCostPlantRow>, plantId?: string, plantName = 'Chua xac dinh') => {
+const getOrCreatePlantRow = (
+    rows: Map<string, FacilityCostPlantRow>,
+    plantId?: string,
+    plantName = 'Chưa xác định'
+) => {
     const key = plantId || 'unknown';
     const existing = rows.get(key);
 
@@ -138,15 +144,16 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         distributionMatch.toPlantId = new mongoose.Types.ObjectId(filters.plantId);
     }
 
-    const assetIds = await getAssetIdsForPlant(filters.plantId);
+    // Báo cáo chi phí bảo trì: lọc theo cơ sở TẠI THỜI ĐIỂM PHÁT SINH (maintenance.plantId)
+    // không lọc theo cơ sở hiện tại của máy để tránh bug chi phí lịch sử bị trôi
     const maintenanceMatch: Record<string, any> = {
         isDeleted: { $ne: true },
         repairMode: EXTERNAL_REPAIR_MODE,
         status: COMPLETED_STATUS,
     };
 
-    if (assetIds) {
-        maintenanceMatch.assetId = { $in: assetIds };
+    if (filters.plantId) {
+        maintenanceMatch.plantId = new mongoose.Types.ObjectId(filters.plantId);
     }
 
     if (filters.startDate || filters.endDate) {
@@ -155,9 +162,12 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         if (filters.endDate) maintenanceMatch.endDate.$lte = filters.endDate;
     }
 
+    // Đếm pending/in-progress: vẫn dùng assetId theo plant hiện tại (operational view)
+    const assetIds = await getAssetIdsForPlant(filters.plantId);
+
     const [distributions, completedRepairs, pendingApprovalCount, inProgressCount] = await Promise.all([
         DistributionRecord.find(distributionMatch).populate('toPlantId').lean(),
-        Maintenance.find(maintenanceMatch).populate({ path: 'assetId', populate: ['plantId'] }).lean(),
+        Maintenance.find(maintenanceMatch).populate({ path: 'assetId' }).populate({ path: 'plantId' }).lean(),
         Maintenance.countDocuments({
             isDeleted: { $ne: true },
             repairMode: EXTERNAL_REPAIR_MODE,
@@ -185,14 +195,18 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
 
         const cost = getDistributionCost(record);
         const plantId = record.toPlantId?._id ? String(record.toPlantId._id) : undefined;
-        const plantName = record.toPlantId?.name ?? 'Chua xac dinh';
+        const plantName = record.toPlantId?.name ?? 'Chưa xác định';
         const plantRow = getOrCreatePlantRow(plantRows, plantId, plantName);
         plantRow.materialDistributionCost = roundMoney(plantRow.materialDistributionCost + cost);
         plantRow.distributionCount += 1;
 
         const period = getPeriodLabel(effectiveDate, filters.groupBy);
-        const periodRow =
-            periodRows.get(period) ?? { period, materialDistributionCost: 0, externalRepairCost: 0, totalCost: 0 };
+        const periodRow = periodRows.get(period) ?? {
+            period,
+            materialDistributionCost: 0,
+            externalRepairCost: 0,
+            totalCost: 0,
+        };
         periodRow.materialDistributionCost = roundMoney(periodRow.materialDistributionCost + cost);
         periodRows.set(period, periodRow);
     });
@@ -200,8 +214,18 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
     completedRepairs.forEach((item: any) => {
         const cost = getMaintenanceCost(item);
         const asset = item.assetId;
-        const plantId = asset?.plantId?._id ? String(asset.plantId._id) : undefined;
-        const plantName = asset?.plantId?.name ?? 'Chua xac dinh';
+
+        // Dùng snapshot cơ sở từ maintenance record — đây là nguồn đúng nghiệp vụ
+        // Fallback "Chưa xác định" cho bản ghi cũ chưa có snapshot (chạy backfill để khắc phục)
+        const maintenancePlantId: string | undefined = item.plantId?._id
+            ? String(item.plantId._id)
+            : item.plantId
+              ? String(item.plantId)
+              : undefined;
+        const maintenancePlantName: string | undefined = item.plantName || item.plantId?.name;
+
+        const plantId = maintenancePlantId;
+        const plantName = maintenancePlantName ?? 'Chưa xác định';
         const plantRow = getOrCreatePlantRow(plantRows, plantId, plantName);
         plantRow.externalRepairCost = roundMoney(plantRow.externalRepairCost + cost);
         plantRow.externalRepairCount += 1;
@@ -214,8 +238,12 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
 
         const effectiveDate = new Date(item.endDate || item.updatedAt);
         const period = getPeriodLabel(effectiveDate, filters.groupBy);
-        const periodRow =
-            periodRows.get(period) ?? { period, materialDistributionCost: 0, externalRepairCost: 0, totalCost: 0 };
+        const periodRow = periodRows.get(period) ?? {
+            period,
+            materialDistributionCost: 0,
+            externalRepairCost: 0,
+            totalCost: 0,
+        };
         periodRow.externalRepairCost = roundMoney(periodRow.externalRepairCost + cost);
         periodRows.set(period, periodRow);
     });
@@ -246,16 +274,14 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
                 const asset = item.assetId;
                 if (!asset?._id) return map;
                 const assetId = String(asset._id);
-                const current =
-                    map.get(assetId) ??
-                    {
-                        assetId,
-                        assetName: asset.name,
-                        machineCode: asset.machineCode,
-                        plantName: asset.plantId?.name,
-                        totalCost: 0,
-                        count: 0,
-                    };
+                const current = map.get(assetId) ?? {
+                    assetId,
+                    assetName: asset.name,
+                    machineCode: asset.machineCode,
+                    plantName: item.plantName || item.plantId?.name || asset.plantId?.name,
+                    totalCost: 0,
+                    count: 0,
+                };
                 current.totalCost = roundMoney(current.totalCost + getMaintenanceCost(item));
                 current.count += 1;
                 map.set(assetId, current);
@@ -275,7 +301,9 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         )
         .values();
 
-    const topExternalRepairAssets = Array.from(topAssets).sort((a, b) => b.totalCost - a.totalCost).slice(0, 10);
+    const topExternalRepairAssets = Array.from(topAssets)
+        .sort((a, b) => b.totalCost - a.totalCost)
+        .slice(0, 10);
     const materialDistributionCost = costByPlant.reduce((sum, row) => sum + row.materialDistributionCost, 0);
     const externalRepairCost = costByPlant.reduce((sum, row) => sum + row.externalRepairCost, 0);
     const externalRepairAssetCount = new Set(
@@ -287,7 +315,9 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
             materialDistributionCost: roundMoney(materialDistributionCost),
             externalRepairCost: roundMoney(externalRepairCost),
             totalFacilityCost: roundMoney(materialDistributionCost + externalRepairCost),
-            distributionRecordCount: distributions.filter((record: any) => isDateInRange(getDistributionDate(record), filters)).length,
+            distributionRecordCount: distributions.filter((record: any) =>
+                isDateInRange(getDistributionDate(record), filters)
+            ).length,
             externalRepairCount: completedRepairs.length,
             externalRepairAssetCount,
             pendingApprovalCount,

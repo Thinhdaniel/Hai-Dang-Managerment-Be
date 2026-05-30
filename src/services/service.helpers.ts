@@ -9,7 +9,7 @@ type PopulateOption = string | { path: string; populate?: readonly string[] };
 type SerializeFn<TInput, TOutput> = (input: TInput) => TOutput;
 
 export const WORKFLOW_POPULATE = {
-    maintenance: [{ path: 'assetId', populate: ['brandId', 'plantId'] }],
+    maintenance: [{ path: 'assetId', populate: ['brandId', 'plantId'] }, 'plantId'],
     transfer: [
         { path: 'assetId', populate: ['brandId', 'plantId'] },
         { path: 'assetIds', populate: ['brandId', 'plantId'] },
