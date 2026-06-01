@@ -23,6 +23,7 @@ const POItemSchema = new mongoose.Schema(
         totalWithVat: { type: Number, min: 0, default: 0 },
         supplierId: { type: mongoose.Schema.Types.ObjectId, ref: 'Supplier' },
         supplierName: { type: String, trim: true },
+        plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant' },
         plantName: { type: String, trim: true },
         proposedBy: { type: String, trim: true },
         purpose: { type: String, trim: true },

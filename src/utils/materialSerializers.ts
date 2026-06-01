@@ -90,9 +90,13 @@ export const serializeSupplier = (input: any) => {
 const serializePurchaseRequestItem = (input: any) => {
     const item = toPlain(input);
     const material =
-        item?.materialId && typeof item.materialId === 'object' && item.materialId.name ? serializeMaterial(item.materialId) : undefined;
+        item?.materialId && typeof item.materialId === 'object' && item.materialId.name
+            ? serializeMaterial(item.materialId)
+            : undefined;
     const supplier =
-        item?.supplierId && typeof item.supplierId === 'object' && item.supplierId.name ? serializeSupplier(item.supplierId) : undefined;
+        item?.supplierId && typeof item.supplierId === 'object' && item.supplierId.name
+            ? serializeSupplier(item.supplierId)
+            : undefined;
 
     return {
         materialId: material?.id ?? toId(item?.materialId),
@@ -185,7 +189,9 @@ const serializePurchaseOrderItem = (input: any) => {
         quantityRequested: item?.quantityRequested ?? 0,
         quantityOrdered: item?.quantityOrdered ?? 0,
         quantityReceived: item?.quantityReceived ?? 0,
-        quantityMissing: item?.quantityMissing ?? Math.max(0, Number(item?.quantityOrdered ?? 0) - Number(item?.quantityReceived ?? 0)),
+        quantityMissing:
+            item?.quantityMissing ??
+            Math.max(0, Number(item?.quantityOrdered ?? 0) - Number(item?.quantityReceived ?? 0)),
         receiveStatus: item?.receiveStatus,
         unitPrice: item?.unitPrice ?? 0,
         totalPrice: item?.totalPrice ?? 0,
@@ -193,7 +199,10 @@ const serializePurchaseOrderItem = (input: any) => {
         vatAmount: item?.vatAmount ?? 0,
         totalWithVat: item?.totalWithVat ?? 0,
         supplierId: toId(item?.supplierId),
-        supplierName: item?.supplierName ?? (item?.supplierId && typeof item.supplierId === 'object' ? item.supplierId.name : undefined),
+        supplierName:
+            item?.supplierName ??
+            (item?.supplierId && typeof item.supplierId === 'object' ? item.supplierId.name : undefined),
+        plantId: toId(item?.plantId),
         plantName: item?.plantName,
         proposedBy: item?.proposedBy,
         purpose: item?.purpose,
@@ -207,12 +216,18 @@ const serializePurchaseOrderItem = (input: any) => {
 
 export const serializePurchaseOrder = (input: any) => {
     const order = toPlain(input);
-    const createdBy = order?.createdBy && typeof order.createdBy === 'object' && order.createdBy.email
-        ? serializeUser(order.createdBy) : undefined;
-    const orderedBy = order?.orderedBy && typeof order.orderedBy === 'object' && order.orderedBy.email
-        ? serializeUser(order.orderedBy) : undefined;
-    const receivedBy = order?.receivedBy && typeof order.receivedBy === 'object' && order.receivedBy.email
-        ? serializeUser(order.receivedBy) : undefined;
+    const createdBy =
+        order?.createdBy && typeof order.createdBy === 'object' && order.createdBy.email
+            ? serializeUser(order.createdBy)
+            : undefined;
+    const orderedBy =
+        order?.orderedBy && typeof order.orderedBy === 'object' && order.orderedBy.email
+            ? serializeUser(order.orderedBy)
+            : undefined;
+    const receivedBy =
+        order?.receivedBy && typeof order.receivedBy === 'object' && order.receivedBy.email
+            ? serializeUser(order.receivedBy)
+            : undefined;
 
     return {
         id: toId(order),
@@ -308,9 +323,13 @@ export const serializeStockTransaction = (input: any) => {
 export const serializeInventoryStock = (input: any) => {
     const stock = toPlain(input);
     const material =
-        stock?.materialId && typeof stock.materialId === 'object' && stock.materialId.name ? serializeMaterial(stock.materialId) : undefined;
+        stock?.materialId && typeof stock.materialId === 'object' && stock.materialId.name
+            ? serializeMaterial(stock.materialId)
+            : undefined;
     const plant =
-        stock?.plantId && typeof stock.plantId === 'object' && stock.plantId.name ? serializePlant(stock.plantId) : undefined;
+        stock?.plantId && typeof stock.plantId === 'object' && stock.plantId.name
+            ? serializePlant(stock.plantId)
+            : undefined;
 
     const currentStock = stock?.currentStock ?? 0;
     const minStockLevel = stock?.minStockLevel ?? material?.minStockLevel ?? 0;
@@ -331,7 +350,9 @@ export const serializeInventoryStock = (input: any) => {
 const serializeDistributionRecordItem = (input: any) => {
     const item = toPlain(input);
     const material =
-        item?.materialId && typeof item.materialId === 'object' && item.materialId.name ? serializeMaterial(item.materialId) : undefined;
+        item?.materialId && typeof item.materialId === 'object' && item.materialId.name
+            ? serializeMaterial(item.materialId)
+            : undefined;
 
     return {
         materialId: material?.id ?? toId(item?.materialId),
@@ -370,15 +391,21 @@ export const serializeDistributionRecord = (input: any) => {
             ? serializePlant(distribution.toPlantId)
             : undefined;
     const purchaseOrder =
-        distribution?.purchaseOrderId && typeof distribution.purchaseOrderId === 'object' && distribution.purchaseOrderId.orderCode
+        distribution?.purchaseOrderId &&
+        typeof distribution.purchaseOrderId === 'object' &&
+        distribution.purchaseOrderId.orderCode
             ? serializePurchaseOrder(distribution.purchaseOrderId)
             : undefined;
     const supplyRequest =
-        distribution?.supplyRequestId && typeof distribution.supplyRequestId === 'object' && distribution.supplyRequestId.requestCode
+        distribution?.supplyRequestId &&
+        typeof distribution.supplyRequestId === 'object' &&
+        distribution.supplyRequestId.requestCode
             ? serializePurchaseRequest(distribution.supplyRequestId)
             : undefined;
     const distributedBy =
-        distribution?.distributedBy && typeof distribution.distributedBy === 'object' && distribution.distributedBy.email
+        distribution?.distributedBy &&
+        typeof distribution.distributedBy === 'object' &&
+        distribution.distributedBy.email
             ? serializeUser(distribution.distributedBy)
             : undefined;
     const confirmedBy =

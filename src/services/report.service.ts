@@ -134,6 +134,17 @@ const getAssetIdsForPlant = async (plantId?: string) => {
     return assets.map((asset: any) => asset._id);
 };
 
+const buildMaintenancePlantScope = (plantId?: string, assetIds?: mongoose.Types.ObjectId[]) => {
+    if (!plantId) return {};
+
+    const plantObjectId = new mongoose.Types.ObjectId(plantId);
+    const legacyAssetFallback = assetIds?.length ? [{ plantId: null, assetId: { $in: assetIds } }] : [];
+
+    return {
+        $or: [{ plantId: plantObjectId }, ...legacyAssetFallback],
+    };
+};
+
 const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
     const distributionMatch: Record<string, any> = {
         isDeleted: { $ne: true },
@@ -162,8 +173,10 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         if (filters.endDate) maintenanceMatch.endDate.$lte = filters.endDate;
     }
 
-    // Đếm pending/in-progress: vẫn dùng assetId theo plant hiện tại (operational view)
+    // Đếm pending/in-progress theo snapshot cơ sở của maintenance record.
+    // Fallback assetId chỉ dành cho dữ liệu cũ chưa có plantId snapshot.
     const assetIds = await getAssetIdsForPlant(filters.plantId);
+    const maintenancePlantScope = buildMaintenancePlantScope(filters.plantId, assetIds);
 
     const [distributions, completedRepairs, pendingApprovalCount, inProgressCount] = await Promise.all([
         DistributionRecord.find(distributionMatch).populate('toPlantId').lean(),
@@ -172,13 +185,13 @@ const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
             isDeleted: { $ne: true },
             repairMode: EXTERNAL_REPAIR_MODE,
             approvalStatus: 'pending',
-            ...(assetIds ? { assetId: { $in: assetIds } } : {}),
+            ...maintenancePlantScope,
         }),
         Maintenance.countDocuments({
             isDeleted: { $ne: true },
             repairMode: EXTERNAL_REPAIR_MODE,
             status: 'in_progress',
-            ...(assetIds ? { assetId: { $in: assetIds } } : {}),
+            ...maintenancePlantScope,
         }),
     ]);
 
@@ -336,7 +349,7 @@ export const getFacilityCostSummary = async (req: Request, res: Response) => {
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: report,
-            message: 'Lay bao cao chi phi co so thanh cong',
+            message: 'Lay bao cao chi phi van hanh thanh cong',
             status: StatusCodes.OK,
             success: true,
         })
@@ -364,50 +377,60 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
         });
     };
 
-    const wsOverview = wb.addWorksheet('Tong hop');
+    const wsOverview = wb.addWorksheet('Tong quan chi phi');
     wsOverview.columns = [{ width: 36 }, { width: 24 }];
     wsOverview.addRow(['Chi tieu', 'Gia tri']);
-    wsOverview.addRow(['Chi phi cap phat vat tu', report.summary.materialDistributionCost]);
+    wsOverview.addRow(['Chi phi vat tu da cap phat', report.summary.materialDistributionCost]);
     wsOverview.addRow(['Chi phi sua ngoai', report.summary.externalRepairCost]);
-    wsOverview.addRow(['Tong chi phi co so', report.summary.totalFacilityCost]);
-    wsOverview.addRow(['So phieu cap phat', report.summary.distributionRecordCount]);
+    wsOverview.addRow(['Tong chi phi van hanh', report.summary.totalFacilityCost]);
+    wsOverview.addRow(['So phieu cap phat vat tu', report.summary.distributionRecordCount]);
     wsOverview.addRow(['So phieu sua ngoai hoan tat', report.summary.externalRepairCount]);
     wsOverview.addRow(['So may sua ngoai', report.summary.externalRepairAssetCount]);
     wsOverview.addRow(['Phieu sua ngoai cho duyet', report.summary.pendingApprovalCount]);
-    wsOverview.addRow(['Phieu sua ngoai dang sua', report.summary.inProgressCount]);
+    wsOverview.addRow(['Phieu sua ngoai dang xu ly', report.summary.inProgressCount]);
     styleWorksheet(wsOverview);
 
     const wsPlant = wb.addWorksheet('Theo co so');
     wsPlant.columns = [
         { header: 'Co so', key: 'plantName', width: 28 },
-        { header: 'Cap phat vat tu', key: 'materialDistributionCost', width: 18, style: { numFmt: '#,##0' } },
-        { header: 'Sua ngoai', key: 'externalRepairCost', width: 18, style: { numFmt: '#,##0' } },
-        { header: 'Tong chi phi', key: 'totalCost', width: 18, style: { numFmt: '#,##0' } },
+        {
+            header: 'Chi phi vat tu da cap phat',
+            key: 'materialDistributionCost',
+            width: 26,
+            style: { numFmt: '#,##0' },
+        },
+        { header: 'Chi phi sua ngoai', key: 'externalRepairCost', width: 20, style: { numFmt: '#,##0' } },
+        { header: 'Tong chi phi van hanh', key: 'totalCost', width: 22, style: { numFmt: '#,##0' } },
         { header: 'Ty trong sua ngoai (%)', key: 'repairSharePercent', width: 18 },
-        { header: 'So phieu cap phat', key: 'distributionCount', width: 16 },
+        { header: 'So phieu cap phat vat tu', key: 'distributionCount', width: 22 },
         { header: 'So phieu sua ngoai', key: 'externalRepairCount', width: 16 },
         { header: 'So may sua ngoai', key: 'externalRepairAssetCount', width: 16 },
     ];
     report.costByPlant.forEach((row) => wsPlant.addRow(row));
     styleWorksheet(wsPlant);
 
-    const wsPeriod = wb.addWorksheet('Theo ky');
+    const wsPeriod = wb.addWorksheet('Theo thoi gian');
     wsPeriod.columns = [
         { header: 'Ky', key: 'period', width: 16 },
-        { header: 'Cap phat vat tu', key: 'materialDistributionCost', width: 18, style: { numFmt: '#,##0' } },
-        { header: 'Sua ngoai', key: 'externalRepairCost', width: 18, style: { numFmt: '#,##0' } },
-        { header: 'Tong chi phi', key: 'totalCost', width: 18, style: { numFmt: '#,##0' } },
+        {
+            header: 'Chi phi vat tu da cap phat',
+            key: 'materialDistributionCost',
+            width: 26,
+            style: { numFmt: '#,##0' },
+        },
+        { header: 'Chi phi sua ngoai', key: 'externalRepairCost', width: 20, style: { numFmt: '#,##0' } },
+        { header: 'Tong chi phi van hanh', key: 'totalCost', width: 22, style: { numFmt: '#,##0' } },
     ];
     report.costByPeriod.forEach((row) => wsPeriod.addRow(row));
     styleWorksheet(wsPeriod);
 
-    const wsAssets = wb.addWorksheet('Top may sua ngoai');
+    const wsAssets = wb.addWorksheet('Theo may');
     wsAssets.columns = [
         { header: 'May', key: 'assetName', width: 28 },
         { header: 'Ma may', key: 'machineCode', width: 16 },
         { header: 'Co so', key: 'plantName', width: 24 },
-        { header: 'Tong chi phi', key: 'totalCost', width: 18, style: { numFmt: '#,##0' } },
-        { header: 'So lan sua', key: 'count', width: 12 },
+        { header: 'Chi phi sua ngoai', key: 'totalCost', width: 20, style: { numFmt: '#,##0' } },
+        { header: 'So lan sua ngoai', key: 'count', width: 16 },
     ];
     report.topExternalRepairAssets.forEach((row) => wsAssets.addRow(row));
     styleWorksheet(wsAssets);
@@ -415,7 +438,7 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
     const buffer = await wb.xlsx.writeBuffer();
     const startStr = req.query.startDate ? String(req.query.startDate).replace(/-/g, '') : 'all';
     const endStr = req.query.endDate ? String(req.query.endDate).replace(/-/g, '') : 'all';
-    const filename = `BaoCaoChiPhiCoSo_${startStr}_${endStr}.xlsx`;
+    const filename = `BaoCaoChiPhiVanHanh_${startStr}_${endStr}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(Buffer.from(buffer));

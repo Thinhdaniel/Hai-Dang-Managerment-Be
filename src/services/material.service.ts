@@ -86,7 +86,11 @@ const getStockTotalsByMaterial = async (materialIds: string[], plantId?: string)
 };
 
 const getLowStockMaterialsData = async (req: Request, category?: string) => {
-    const plantId = isManagerRole(req.role) ? (req.query.plantId ? String(req.query.plantId) : undefined) : getUserPlantId(req);
+    const plantId = isManagerRole(req.role)
+        ? req.query.plantId
+            ? String(req.query.plantId)
+            : undefined
+        : getUserPlantId(req);
     const materials = await materialRepository.findMany({
         isDeleted: { $ne: true },
         isActive: { $ne: false },
@@ -114,6 +118,7 @@ const orderMatchesPlant = (order: any, plantId?: string) => {
     if (!plantId) return true;
 
     if (toId(order?.plantId) === plantId) return true;
+    if ((order?.items ?? []).some((item: any) => toId(item?.plantId) === plantId)) return true;
 
     return (order?.purchaseRequestIds ?? []).some((request: any) => toId(request?.plantId) === plantId);
 };
@@ -220,14 +225,53 @@ const getPeriodLabel = (date: Date, groupBy: ReportGroupBy) => {
     return `${year}-${month}`;
 };
 
+const getSourcePurchaseRequest = (order: any, item: any) => {
+    const requestId = toId(item.purchaseRequestId);
+    const requests = order?.purchaseRequestIds ?? [];
+    if (requestId) {
+        const request = requests.find((entry: any) => toId(entry) === requestId);
+        if (request) return request;
+    }
+    return requests.length === 1 ? requests[0] : undefined;
+};
+
+const getSourcePurchaseRequestItem = (order: any, item: any) => {
+    const request = getSourcePurchaseRequest(order, item);
+    const requestItems = request?.items ?? [];
+    const materialId = toId(item.materialId);
+
+    // Legacy PO items created before item-level plantId only keep PR id/name/material.
+    // Prefer materialId, then materialName as a best-effort fallback for old data.
+    return (
+        requestItems.find((entry: any) => materialId && toId(entry.materialId) === materialId) ??
+        requestItems.find((entry: any) => entry.materialName && entry.materialName === item.materialName)
+    );
+};
+
+const getReportOrderItemPlantId = (order: any, item: any) => {
+    const itemPlantId = toId(item.plantId);
+    if (itemPlantId) return itemPlantId;
+
+    const sourceItem = getSourcePurchaseRequestItem(order, item);
+    const sourceItemPlantId = toId(sourceItem?.plantId);
+    if (sourceItemPlantId) return sourceItemPlantId;
+
+    // Fallback for legacy data before item-level plantId existed.
+    const sourceRequest = getSourcePurchaseRequest(order, item);
+    return toId(sourceRequest?.plantId) || toId(order?.plantId);
+};
+
 const itemMatchesReportFilters = (
     item: any,
     filters: MaterialReportFilters,
     materialIds?: Set<string>,
-    fallbackSupplierId?: string
+    fallbackSupplierId?: string,
+    order?: any
 ) => {
     const itemMaterialId = toId(item.materialId);
     if (materialIds && (!itemMaterialId || !materialIds.has(itemMaterialId))) return false;
+
+    if (filters.plantId && getReportOrderItemPlantId(order, item) !== filters.plantId) return false;
 
     if (filters.supplierId) {
         const supplierId = toId(item.supplierId) || fallbackSupplierId;
@@ -239,7 +283,7 @@ const itemMatchesReportFilters = (
 
 const getReportOrderItems = (order: any, filters: MaterialReportFilters, materialIds?: Set<string>) =>
     ((order.items ?? []) as any[]).filter((item) =>
-        itemMatchesReportFilters(item, filters, materialIds, toId(order.supplierId))
+        itemMatchesReportFilters(item, filters, materialIds, toId(order.supplierId), order)
     );
 
 const sumItemsAmount = (items: any[], key: 'totalWithVat' | 'totalPrice' = 'totalWithVat') =>
@@ -307,61 +351,91 @@ const buildReturnReportMatch = (filters: MaterialReportFilters, purchaseOrderIds
     return match;
 };
 
-const buildReturnItemMatch = (filters: MaterialReportFilters, materialIds?: Set<string>) => {
-    const match: Record<string, any> = {};
+const returnItemMatchesPurchaseItem = (returnItem: any, purchaseItem: any) => {
+    const returnMaterialId = toId(returnItem.materialId);
+    const purchaseMaterialId = toId(purchaseItem.materialId);
+    if (returnMaterialId && purchaseMaterialId) return returnMaterialId === purchaseMaterialId;
+    return Boolean(
+        returnItem.materialName && purchaseItem.materialName && returnItem.materialName === purchaseItem.materialName
+    );
+};
 
-    if (materialIds) {
-        match['items.materialId'] = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
-    }
+const returnItemMatchesReportScope = (
+    returnItem: any,
+    filters: MaterialReportFilters,
+    materialIds: Set<string> | undefined,
+    reportItems: any[],
+    fallbackSupplierId?: string
+) => {
+    const itemMaterialId = toId(returnItem.materialId);
+    if (materialIds && (!itemMaterialId || !materialIds.has(itemMaterialId))) return false;
 
     if (filters.supplierId) {
-        match['items.supplierId'] = new mongoose.Types.ObjectId(filters.supplierId);
+        const supplierId = toId(returnItem.supplierId) || fallbackSupplierId;
+        if (supplierId !== filters.supplierId) return false;
     }
 
-    return match;
+    return reportItems.some((purchaseItem) => returnItemMatchesPurchaseItem(returnItem, purchaseItem));
 };
 
 const getRefundByPurchaseOrder = async (
     ReturnRecord: any,
     filters: MaterialReportFilters,
-    purchaseOrderIds: any[],
+    purchaseOrders: any[],
     materialIds?: Set<string>
 ): Promise<Map<string, number>> => {
+    const purchaseOrderIds = purchaseOrders.map((order: any) => order._id);
     if (!purchaseOrderIds.length) return new Map<string, number>();
 
-    const itemMatch = buildReturnItemMatch(filters, materialIds);
-    const rows = await ReturnRecord.aggregate([
-        { $match: buildReturnReportMatch(filters, purchaseOrderIds) },
-        { $unwind: '$items' },
-        ...(Object.keys(itemMatch).length ? [{ $match: itemMatch }] : []),
-        { $group: { _id: '$purchaseOrderId', totalRefund: { $sum: '$items.refundWithVat' } } },
-    ]);
+    const reportItemsByOrder = new Map(
+        purchaseOrders.map((order: any) => [String(order._id), getReportOrderItems(order, filters, materialIds)])
+    );
+    const rows = await ReturnRecord.find(buildReturnReportMatch(filters, purchaseOrderIds)).lean();
+    const refundByOrder = new Map<string, number>();
 
-    return new Map<string, number>(rows.map((row: any) => [String(row._id), Number(row.totalRefund ?? 0)]));
+    rows.forEach((record: any) => {
+        const orderId = String(record.purchaseOrderId);
+        const reportItems = reportItemsByOrder.get(orderId) ?? [];
+        const total = (record.items ?? []).reduce((sum: number, item: any) => {
+            if (!returnItemMatchesReportScope(item, filters, materialIds, reportItems, toId(record.supplierId)))
+                return sum;
+            return sum + Number(item.refundWithVat ?? 0);
+        }, 0);
+        if (total > 0) refundByOrder.set(orderId, Number(((refundByOrder.get(orderId) ?? 0) + total).toFixed(2)));
+    });
+
+    return refundByOrder;
 };
 
 const getRefundBySupplier = async (
     ReturnRecord: any,
     filters: MaterialReportFilters,
-    purchaseOrderIds: any[],
+    purchaseOrders: any[],
     materialIds?: Set<string>
 ): Promise<Map<string, number>> => {
+    const purchaseOrderIds = purchaseOrders.map((order: any) => order._id);
     if (!purchaseOrderIds.length) return new Map<string, number>();
 
-    const itemMatch = buildReturnItemMatch(filters, materialIds);
-    const rows = await ReturnRecord.aggregate([
-        { $match: buildReturnReportMatch(filters, purchaseOrderIds) },
-        { $unwind: '$items' },
-        ...(Object.keys(itemMatch).length ? [{ $match: itemMatch }] : []),
-        {
-            $group: {
-                _id: '$items.supplierId',
-                totalRefund: { $sum: '$items.refundWithVat' },
-            },
-        },
-    ]);
+    const reportItemsByOrder = new Map(
+        purchaseOrders.map((order: any) => [String(order._id), getReportOrderItems(order, filters, materialIds)])
+    );
+    const rows = await ReturnRecord.find(buildReturnReportMatch(filters, purchaseOrderIds)).lean();
+    const refundBySupplier = new Map<string, number>();
 
-    return new Map<string, number>(rows.map((row: any) => [String(row._id), Number(row.totalRefund ?? 0)]));
+    rows.forEach((record: any) => {
+        const reportItems = reportItemsByOrder.get(String(record.purchaseOrderId)) ?? [];
+        (record.items ?? []).forEach((item: any) => {
+            if (!returnItemMatchesReportScope(item, filters, materialIds, reportItems, toId(record.supplierId))) return;
+            const supplierId = toId(item.supplierId) || toId(record.supplierId);
+            if (!supplierId) return;
+            refundBySupplier.set(
+                supplierId,
+                Number(((refundBySupplier.get(supplierId) ?? 0) + Number(item.refundWithVat ?? 0)).toFixed(2))
+            );
+        });
+    });
+
+    return refundBySupplier;
 };
 
 const getPurchaseOrdersForReport = async (filters: MaterialReportFilters, materialIds?: Set<string>) => {
@@ -376,17 +450,15 @@ const getPurchaseOrdersForReport = async (filters: MaterialReportFilters, materi
         const effectiveDate = getOrderEffectiveDate(order);
         if (!isDateInRange(effectiveDate, filters)) return false;
 
-        if (!orderMatchesPlant(order, filters.plantId)) return false;
-
         const orderSupplierId = toId(order.supplierId);
         if (filters.supplierId && orderSupplierId !== filters.supplierId) {
-            const hasItemSupplier = (order.items ?? []).some((item: any) => toId(item.supplierId) === filters.supplierId);
+            const hasItemSupplier = (order.items ?? []).some(
+                (item: any) => toId(item.supplierId) === filters.supplierId
+            );
             if (!hasItemSupplier) return false;
         }
 
-        if (materialIds && getReportOrderItems(order, filters, materialIds).length === 0) return false;
-
-        return true;
+        return getReportOrderItems(order, filters, materialIds).length > 0;
     });
 };
 
@@ -454,15 +526,19 @@ export const getMaterialById = async (req: Request, res: Response, next: NextFun
     }
 
     const stockPlantFilter = buildPlantScopeFilter(req);
-    const inventoryStocks = await (InventoryStock as any).find({
-        materialId: req.params.id,
-        isDeleted: { $ne: true },
-        ...stockPlantFilter,
-    })
+    const inventoryStocks = await (InventoryStock as any)
+        .find({
+            materialId: req.params.id,
+            isDeleted: { $ne: true },
+            ...stockPlantFilter,
+        })
         .populate('materialId')
         .populate('plantId');
 
-    const totalCurrentStock = inventoryStocks.reduce((sum: number, stock: any) => sum + Number(stock.currentStock ?? 0), 0);
+    const totalCurrentStock = inventoryStocks.reduce(
+        (sum: number, stock: any) => sum + Number(stock.currentStock ?? 0),
+        0
+    );
 
     return res.status(StatusCodes.OK).json(
         customResponse({
@@ -574,28 +650,44 @@ export const getMaterialReportsSummary = async (req: Request, res: Response, nex
     const requestFilter: Record<string, any> = {
         isDeleted: { $ne: true },
         status: 'pending',
-        ...(filters.plantId ? { plantId: filters.plantId } : {}),
     };
     if (filters.startDate || filters.endDate) {
         requestFilter.createdAt = {};
         if (filters.startDate) requestFilter.createdAt.$gte = filters.startDate;
         if (filters.endDate) requestFilter.createdAt.$lte = filters.endDate;
     }
+    const pendingRequestFilter: Record<string, any> = { ...requestFilter };
+    const materialObjectIds = materialIds
+        ? Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id))
+        : undefined;
+    if (filters.plantId) {
+        const plantObjectId = new mongoose.Types.ObjectId(filters.plantId);
+        const itemElemMatch: Record<string, any> = { plantId: plantObjectId };
+        if (materialObjectIds) itemElemMatch.materialId = { $in: materialObjectIds };
 
-    const [totalMaterials, pendingRequestCount, lowStockMaterials, purchaseOrders, ReturnRecord, DistributionRecord] = await Promise.all([
-        Material.countDocuments(materialCountFilter),
-        PurchaseRequest.countDocuments({
-            ...requestFilter,
-            ...(materialIds ? { 'items.materialId': { $in: Array.from(materialIds) } } : {}),
-        }),
-        getLowStockMaterialsData(req),
-        getPurchaseOrdersForReport(filters, materialIds),
-        import('@/models/ReturnRecord').then((m) => m.default),
-        import('@/models/DistributionRecord').then((m) => m.default),
-    ]);
+        pendingRequestFilter.$or = [
+            { items: { $elemMatch: itemElemMatch } },
+            {
+                plantId: plantObjectId,
+                'items.plantId': { $exists: false },
+                ...(materialObjectIds ? { 'items.materialId': { $in: materialObjectIds } } : {}),
+            },
+        ];
+    } else if (materialObjectIds) {
+        pendingRequestFilter['items.materialId'] = { $in: materialObjectIds };
+    }
 
-    const orderIds = purchaseOrders.map((order: any) => order._id);
-    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, orderIds, materialIds);
+    const [totalMaterials, pendingRequestCount, lowStockMaterials, purchaseOrders, ReturnRecord, DistributionRecord] =
+        await Promise.all([
+            Material.countDocuments(materialCountFilter),
+            PurchaseRequest.countDocuments(pendingRequestFilter),
+            getLowStockMaterialsData(req),
+            getPurchaseOrdersForReport(filters, materialIds),
+            import('@/models/ReturnRecord').then((m) => m.default),
+            import('@/models/DistributionRecord').then((m) => m.default),
+        ]);
+
+    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, purchaseOrders, materialIds);
 
     const distributionMatch: Record<string, any> = {
         isDeleted: { $ne: true },
@@ -608,14 +700,24 @@ export const getMaterialReportsSummary = async (req: Request, res: Response, nex
         if (filters.endDate) distributionMatch.createdAt.$lte = filters.endDate;
     }
     if (materialIds) {
-        distributionMatch['items.materialId'] = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+        distributionMatch['items.materialId'] = {
+            $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)),
+        };
     }
 
     const distributionAgg = await DistributionRecord.aggregate([
         { $match: distributionMatch },
         { $unwind: '$items' },
         ...(materialIds
-            ? [{ $match: { 'items.materialId': { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) } } }]
+            ? [
+                  {
+                      $match: {
+                          'items.materialId': {
+                              $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)),
+                          },
+                      },
+                  },
+              ]
             : []),
         {
             $group: {
@@ -635,12 +737,15 @@ export const getMaterialReportsSummary = async (req: Request, res: Response, nex
     const distributionRecordCount = Number(distributionAgg[0]?.count?.length ?? 0);
     const totalEstimated = purchaseOrders.reduce((sum, order: any) => {
         const items = getReportOrderItems(order, filters, materialIds);
-        return sum + items.reduce((itemSum, item) => {
-            const qty = Number(item.quantityRequested ?? item.quantityOrdered ?? 0);
-            const price = Number(item.unitPrice ?? 0);
-            const vatRate = Number(item.vatRate ?? 0);
-            return itemSum + Number((qty * price * (1 + vatRate / 100)).toFixed(2));
-        }, 0);
+        return (
+            sum +
+            items.reduce((itemSum, item) => {
+                const qty = Number(item.quantityRequested ?? item.quantityOrdered ?? 0);
+                const price = Number(item.unitPrice ?? 0);
+                const vatRate = Number(item.vatRate ?? 0);
+                return itemSum + Number((qty * price * (1 + vatRate / 100)).toFixed(2));
+            }, 0)
+        );
     }, 0);
 
     return res.status(StatusCodes.OK).json(
@@ -677,32 +782,29 @@ export const getMaterialCostByPeriodReport = async (req: Request, res: Response,
     ]);
 
     // Map poId → totalRefundWithVat
-    const refundMap = await getRefundByPurchaseOrder(
-        ReturnRecord,
-        filters,
-        purchaseOrders.map((order: any) => order._id),
-        materialIds
-    );
+    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, purchaseOrders, materialIds);
 
-    const groupedData = purchaseOrders.reduce(
-        (result: Record<string, number>, order: any) => {
-            const orderDate = getOrderEffectiveDate(order);
-            const key = getPeriodLabel(orderDate, filters.groupBy);
-            const items = getReportOrderItems(order, filters, materialIds);
+    const groupedData = purchaseOrders.reduce((result: Record<string, number>, order: any) => {
+        const orderDate = getOrderEffectiveDate(order);
+        const key = getPeriodLabel(orderDate, filters.groupBy);
+        const items = getReportOrderItems(order, filters, materialIds);
 
-            const net = sumItemsAmount(items, 'totalWithVat') - (refundMap.get(String(order._id)) ?? 0);
-            result[key] = Number(((result[key] ?? 0) + Math.max(0, net)).toFixed(2));
-            return result;
-        },
-        {}
-    );
+        const net = sumItemsAmount(items, 'totalWithVat') - (refundMap.get(String(order._id)) ?? 0);
+        result[key] = Number(((result[key] ?? 0) + Math.max(0, net)).toFixed(2));
+        return result;
+    }, {});
 
     const data = Object.entries(groupedData)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([label, totalAmount]) => ({ period: label, totalAmount }));
 
     return res.status(StatusCodes.OK).json(
-        customResponse({ data, message: 'Lay bao cao chi phi theo ky thanh cong', status: StatusCodes.OK, success: true })
+        customResponse({
+            data,
+            message: 'Lay bao cao chi phi theo ky thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
     );
 };
 
@@ -715,19 +817,18 @@ export const getMaterialReportBySupplier = async (req: Request, res: Response, n
     ]);
 
     // Refund theo supplierId ở item level (chính xác khi PO có nhiều NCC)
-    const refundBySupplier = await getRefundBySupplier(
-        ReturnRecord,
-        filters,
-        purchaseOrders.map((order: any) => order._id),
-        materialIds
-    );
+    const refundBySupplier = await getRefundBySupplier(ReturnRecord, filters, purchaseOrders, materialIds);
 
-    const groupedData: Record<string, { supplierId?: string; supplierName: string; totalAmount: number; orderCount: Set<string> }> = {};
+    const groupedData: Record<
+        string,
+        { supplierId?: string; supplierName: string; totalAmount: number; orderCount: Set<string> }
+    > = {};
 
     purchaseOrders.forEach((order: any) => {
         getReportOrderItems(order, filters, materialIds).forEach((item: any) => {
             const supplierId = toId(item.supplierId) || toId(order.supplierId);
-            const supplierName = getItemSupplierName(item) || order.supplierName || order.supplierId?.name || 'Chua gan nha cung cap';
+            const supplierName =
+                getItemSupplierName(item) || order.supplierName || order.supplierId?.name || 'Chua gan nha cung cap';
             const key = supplierId || supplierName;
             if (!groupedData[key]) {
                 groupedData[key] = { supplierId, supplierName, totalAmount: 0, orderCount: new Set() };
@@ -741,13 +842,20 @@ export const getMaterialReportBySupplier = async (req: Request, res: Response, n
         .map(({ supplierId, supplierName, totalAmount, orderCount }) => ({
             supplierId,
             supplierName,
-            totalAmount: Number(Math.max(0, totalAmount - (supplierId ? (refundBySupplier.get(supplierId) ?? 0) : 0)).toFixed(2)),
+            totalAmount: Number(
+                Math.max(0, totalAmount - (supplierId ? (refundBySupplier.get(supplierId) ?? 0) : 0)).toFixed(2)
+            ),
             orderCount: orderCount.size,
         }))
         .sort((a, b) => b.totalAmount - a.totalAmount);
 
     return res.status(StatusCodes.OK).json(
-        customResponse({ data, message: 'Lay bao cao chi phi theo nha cung cap thanh cong', status: StatusCodes.OK, success: true })
+        customResponse({
+            data,
+            message: 'Lay bao cao chi phi theo nha cung cap thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
     );
 };
 
@@ -759,12 +867,7 @@ export const getMaterialPriceComparisonReport = async (req: Request, res: Respon
         import('@/models/ReturnRecord').then((m) => m.default),
     ]);
 
-    const refundMap = await getRefundByPurchaseOrder(
-        ReturnRecord,
-        filters,
-        purchaseOrders.map((order: any) => order._id),
-        materialIds
-    );
+    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, purchaseOrders, materialIds);
 
     const data = purchaseOrders.map((order: any) => {
         const items = getReportOrderItems(order, filters, materialIds);
@@ -806,7 +909,6 @@ export const getMaterialPriceComparisonReport = async (req: Request, res: Respon
         })
     );
 };
-
 
 export const getTopMaterials = async (req: Request, res: Response, next: NextFunction) => {
     const filters = buildReportFilters(req.query);
@@ -908,10 +1010,7 @@ export const exportMaterialCatalogExcel = async (req: Request, res: Response, ne
     });
     ws.getRow(1).height = 22;
 
-    const materials = await materialRepository.findMany(
-        { isDeleted: { $ne: true } },
-        { sort: 'name', limit: 10000 }
-    );
+    const materials = await materialRepository.findMany({ isDeleted: { $ne: true } }, { sort: 'name', limit: 10000 });
 
     materials.forEach((m: any) => {
         ws.addRow({
@@ -955,7 +1054,14 @@ export const downloadMaterialImportTemplate = async (req: Request, res: Response
     // Sample rows
     [
         { code: 'VT001', name: 'Chỉ may trắng', category: 'Kim chỉ', unit: 'Cuộn', minStockLevel: 50, description: '' },
-        { code: 'VT002', name: 'Dầu máy may', category: 'Dầu nhớt', unit: 'Lít', minStockLevel: 10, description: 'Dầu bôi trơn' },
+        {
+            code: 'VT002',
+            name: 'Dầu máy may',
+            category: 'Dầu nhớt',
+            unit: 'Lít',
+            minStockLevel: 10,
+            description: 'Dầu bôi trơn',
+        },
     ].forEach((row) => ws.addRow(row));
 
     // Note sheet
@@ -991,9 +1097,23 @@ export const importMaterialExcel = async (req: Request, res: Response, next: Nex
     const ws = wb.worksheets[0];
     if (!ws) throw new BadRequestError('File Excel không hợp lệ');
 
-    type RowResult = { row: number; code: string; name: string; action: 'created' | 'updated' | 'error'; reason?: string };
+    type RowResult = {
+        row: number;
+        code: string;
+        name: string;
+        action: 'created' | 'updated' | 'error';
+        reason?: string;
+    };
     const results: RowResult[] = [];
-    const dataRows: Array<{ rowNum: number; code: string; name: string; category: string; unit: string; minStockLevel: number; description: string }> = [];
+    const dataRows: Array<{
+        rowNum: number;
+        code: string;
+        name: string;
+        category: string;
+        unit: string;
+        minStockLevel: number;
+        description: string;
+    }> = [];
 
     ws.eachRow((row, rowNum) => {
         if (rowNum === 1) return;
@@ -1023,12 +1143,16 @@ export const importMaterialExcel = async (req: Request, res: Response, next: Nex
 
         try {
             const existing = code
-                ? await Material.findOne({ code, isDeleted: { $ne: true } }).select('_id').lean()
+                ? await Material.findOne({ code, isDeleted: { $ne: true } })
+                      .select('_id')
+                      .lean()
                 : null;
 
             if (existing) {
                 await materialRepository.updateById(String(existing._id), {
-                    name, category: category || undefined, unit,
+                    name,
+                    category: category || undefined,
+                    unit,
                     minStockLevel: minStockLevel || 0,
                     description: description || undefined,
                     updatedBy: req.userId,
@@ -1037,15 +1161,25 @@ export const importMaterialExcel = async (req: Request, res: Response, next: Nex
             } else {
                 // Check duplicate name if no code
                 if (!code) {
-                    const dupName = await Material.findOne({ name, isDeleted: { $ne: true } }).select('_id').lean();
+                    const dupName = await Material.findOne({ name, isDeleted: { $ne: true } })
+                        .select('_id')
+                        .lean();
                     if (dupName) {
-                        results.push({ row: rowNum, code, name, action: 'error', reason: 'Tên vật tư đã tồn tại (không có mã để phân biệt)' });
+                        results.push({
+                            row: rowNum,
+                            code,
+                            name,
+                            action: 'error',
+                            reason: 'Tên vật tư đã tồn tại (không có mã để phân biệt)',
+                        });
                         continue;
                     }
                 }
                 await materialRepository.create({
                     code: code || undefined,
-                    name, category: category || undefined, unit,
+                    name,
+                    category: category || undefined,
+                    unit,
                     minStockLevel: minStockLevel || 0,
                     description: description || undefined,
                     isActive: true,
@@ -1111,9 +1245,26 @@ const parseMaterialImportRows = async (fileBuffer: Buffer): Promise<MaterialImpo
         rows.push({
             rowNumber: rowNum,
             isValid: errors.length === 0,
-            values: { code, name, category, unit, minStockLevel: isNaN(minStockLevel) ? 0 : minStockLevel, description },
+            values: {
+                code,
+                name,
+                category,
+                unit,
+                minStockLevel: isNaN(minStockLevel) ? 0 : minStockLevel,
+                description,
+            },
             errors,
-            payload: errors.length === 0 ? { code: code || undefined, name, category: category || undefined, unit, minStockLevel: minStockLevel || 0, description: description || undefined } : undefined,
+            payload:
+                errors.length === 0
+                    ? {
+                          code: code || undefined,
+                          name,
+                          category: category || undefined,
+                          unit,
+                          minStockLevel: minStockLevel || 0,
+                          description: description || undefined,
+                      }
+                    : undefined,
         });
     });
 
@@ -1121,7 +1272,9 @@ const parseMaterialImportRows = async (fileBuffer: Buffer): Promise<MaterialImpo
 
     // Kiểm tra trùng mã trong file
     const codeCount = new Map<string, number>();
-    rows.forEach((r) => { if (r.values.code) codeCount.set(r.values.code, (codeCount.get(r.values.code) ?? 0) + 1); });
+    rows.forEach((r) => {
+        if (r.values.code) codeCount.set(r.values.code, (codeCount.get(r.values.code) ?? 0) + 1);
+    });
     rows.forEach((r) => {
         if (r.values.code && (codeCount.get(r.values.code) ?? 0) > 1) {
             r.errors.push('Mã vật tư bị trùng trong file');
@@ -1134,7 +1287,9 @@ const parseMaterialImportRows = async (fileBuffer: Buffer): Promise<MaterialImpo
     const codes = rows.filter((r) => r.payload?.code).map((r) => r.payload!.code);
     const existingMap = new Map<string, string>();
     if (codes.length) {
-        const existing = await Material.find({ code: { $in: codes }, isDeleted: { $ne: true } }).select('_id code').lean();
+        const existing = await Material.find({ code: { $in: codes }, isDeleted: { $ne: true } })
+            .select('_id code')
+            .lean();
         existing.forEach((m: any) => existingMap.set(m.code, String(m._id)));
     }
 
@@ -1149,9 +1304,13 @@ const parseMaterialImportRows = async (fileBuffer: Buffer): Promise<MaterialImpo
     });
 
     // Kiểm tra trùng tên trong DB cho rows không có mã (sẽ tạo mới)
-    const namesToCheck = rows.filter((r) => r.action === 'create' && !r.payload?.code && r.payload?.name).map((r) => r.payload!.name);
+    const namesToCheck = rows
+        .filter((r) => r.action === 'create' && !r.payload?.code && r.payload?.name)
+        .map((r) => r.payload!.name);
     if (namesToCheck.length) {
-        const dupNames = await Material.find({ name: { $in: namesToCheck }, isDeleted: { $ne: true } }).select('name').lean();
+        const dupNames = await Material.find({ name: { $in: namesToCheck }, isDeleted: { $ne: true } })
+            .select('name')
+            .lean();
         const dupNameSet = new Set(dupNames.map((m: any) => m.name));
         rows.forEach((r) => {
             if (r.action === 'create' && !r.payload?.code && r.payload?.name && dupNameSet.has(r.payload.name)) {
@@ -1165,7 +1324,10 @@ const parseMaterialImportRows = async (fileBuffer: Buffer): Promise<MaterialImpo
 
     // Kiểm tra trùng tên trong chính file (rows không có mã)
     const nameInFileCount = new Map<string, number>();
-    rows.forEach((r) => { if (!r.values.code && r.values.name) nameInFileCount.set(r.values.name, (nameInFileCount.get(r.values.name) ?? 0) + 1); });
+    rows.forEach((r) => {
+        if (!r.values.code && r.values.name)
+            nameInFileCount.set(r.values.name, (nameInFileCount.get(r.values.name) ?? 0) + 1);
+    });
     rows.forEach((r) => {
         if (!r.values.code && r.values.name && (nameInFileCount.get(r.values.name) ?? 0) > 1) {
             r.errors.push('Tên vật tư bị trùng trong file (không có mã)');
@@ -1206,17 +1368,27 @@ export const confirmMaterialImport = async (req: Request, res: Response, next: N
     if (!req.file) throw new BadRequestError('Vui lòng chọn file Excel');
 
     const rows = await parseMaterialImportRows(req.file.buffer);
-    let created = 0, updated = 0, errors = 0;
+    let created = 0,
+        updated = 0,
+        errors = 0;
 
     for (const row of rows) {
-        if (!row.payload || !row.isValid) { errors++; continue; }
+        if (!row.payload || !row.isValid) {
+            errors++;
+            continue;
+        }
         try {
             if (row.action === 'update' && row.payload._existingId) {
                 const { _existingId, ...data } = row.payload;
                 await materialRepository.updateById(_existingId, { ...data, updatedBy: req.userId });
                 updated++;
             } else {
-                await materialRepository.create({ ...row.payload, isActive: true, createdBy: req.userId, updatedBy: req.userId });
+                await materialRepository.create({
+                    ...row.payload,
+                    isActive: true,
+                    createdBy: req.userId,
+                    updatedBy: req.userId,
+                });
                 created++;
             }
         } catch {
@@ -1259,7 +1431,15 @@ export const getDistributionCostReport = async (req: Request, res: Response, nex
         { $match: matchStage },
         { $unwind: '$items' },
         ...(materialIds
-            ? [{ $match: { 'items.materialId': { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) } } }]
+            ? [
+                  {
+                      $match: {
+                          'items.materialId': {
+                              $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)),
+                          },
+                      },
+                  },
+              ]
             : []),
         {
             $group: {
@@ -1285,7 +1465,15 @@ export const getDistributionCostReport = async (req: Request, res: Response, nex
         { $match: matchStage },
         { $unwind: '$items' },
         ...(materialIds
-            ? [{ $match: { 'items.materialId': { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) } } }]
+            ? [
+                  {
+                      $match: {
+                          'items.materialId': {
+                              $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)),
+                          },
+                      },
+                  },
+              ]
             : []),
         {
             $group: {
@@ -1300,7 +1488,11 @@ export const getDistributionCostReport = async (req: Request, res: Response, nex
         },
         {
             $group: {
-                _id: { year: '$_id.year', month: '$_id.month', ...(filters.plantId ? { plantId: '$_id.plantId' } : {}) },
+                _id: {
+                    year: '$_id.year',
+                    month: '$_id.month',
+                    ...(filters.plantId ? { plantId: '$_id.plantId' } : {}),
+                },
                 totalWithVat: { $sum: '$totalWithVat' },
                 count: { $sum: 1 },
             },
@@ -1340,26 +1532,40 @@ const exportMaterialReportExcelLegacy = async (req: Request, res: Response, next
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Material Report';
 
-    const dateLabel = startDate && endDate
-        ? `${new Date(startDate).toLocaleDateString('vi-VN')} - ${new Date(endDate).toLocaleDateString('vi-VN')}`
-        : 'Tất cả';
+    const dateLabel =
+        startDate && endDate
+            ? `${new Date(startDate).toLocaleDateString('vi-VN')} - ${new Date(endDate).toLocaleDateString('vi-VN')}`
+            : 'Tất cả';
 
     // ── Sheet 1: Tổng quan ──────────────────────────────────────────────────
     const summaryReq = { ...req, query: { ...req.query } } as Request;
     const summaryData = await (async () => {
         const now = new Date();
         const monthStart = startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1);
-        const monthEnd = endDate ? (() => { const d = new Date(endDate); d.setHours(23,59,59,999); return d; })() : new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        const monthEnd = endDate
+            ? (() => {
+                  const d = new Date(endDate);
+                  d.setHours(23, 59, 59, 999);
+                  return d;
+              })()
+            : new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
         const [totalMaterials, pendingRequestCount, lowStockMaterials, purchaseOrders] = await Promise.all([
             Material.countDocuments({ isDeleted: { $ne: true }, isActive: { $ne: false } }),
-            PurchaseRequest.countDocuments({ isDeleted: { $ne: true }, status: 'pending', ...(plantId ? { plantId } : {}) }),
+            PurchaseRequest.countDocuments({
+                isDeleted: { $ne: true },
+                status: 'pending',
+                ...(plantId ? { plantId } : {}),
+            }),
             getLowStockMaterialsData(summaryReq),
             getPurchaseOrdersByPlant(plantId),
         ]);
 
         const totalCost = purchaseOrders
-            .filter((o) => { const d = getOrderEffectiveDate(o); return d >= monthStart && d <= monthEnd; })
+            .filter((o) => {
+                const d = getOrderEffectiveDate(o);
+                return d >= monthStart && d <= monthEnd;
+            })
             .reduce((s, o: any) => s + (o.totalAmount ?? 0), 0);
 
         return { totalMaterials, pendingRequestCount, lowStockCount: lowStockMaterials.length, totalCost };
@@ -1379,7 +1585,10 @@ const exportMaterialReportExcelLegacy = async (req: Request, res: Response, next
     // ── Sheet 2: Chi phí theo kỳ ────────────────────────────────────────────
     const purchaseOrders = await getPurchaseOrdersByPlant(plantId);
     const ws2 = wb.addWorksheet('Chi phí theo kỳ');
-    ws2.columns = [{ header: 'Kỳ', key: 'period', width: 15 }, { header: 'Tổng chi phí (₫)', key: 'totalAmount', width: 20 }];
+    ws2.columns = [
+        { header: 'Kỳ', key: 'period', width: 15 },
+        { header: 'Tổng chi phí (₫)', key: 'totalAmount', width: 20 },
+    ];
     const costMap: Record<string, number> = {};
     purchaseOrders.forEach((o: any) => {
         const d = getOrderEffectiveDate(o);
@@ -1388,20 +1597,32 @@ const exportMaterialReportExcelLegacy = async (req: Request, res: Response, next
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         costMap[key] = Number(((costMap[key] ?? 0) + (o.totalAmount ?? 0)).toFixed(2));
     });
-    Object.entries(costMap).sort(([a], [b]) => a.localeCompare(b)).forEach(([period, totalAmount]) => {
-        ws2.addRow({ period, totalAmount });
-    });
+    Object.entries(costMap)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .forEach(([period, totalAmount]) => {
+            ws2.addRow({ period, totalAmount });
+        });
 
     // ── Sheet 3: Top vật tư tiêu thụ ───────────────────────────────────────
     const StockTransaction = (await import('@/models/StockTransaction')).default;
     const txFilter: Record<string, any> = { isDeleted: { $ne: true }, type: 'export' };
     if (plantId) txFilter.plantId = new mongoose.Types.ObjectId(plantId);
     if (startDate) txFilter.createdAt = { ...txFilter.createdAt, $gte: new Date(startDate) };
-    if (endDate) { const e = new Date(endDate); e.setHours(23,59,59,999); txFilter.createdAt = { ...txFilter.createdAt, $lte: e }; }
+    if (endDate) {
+        const e = new Date(endDate);
+        e.setHours(23, 59, 59, 999);
+        txFilter.createdAt = { ...txFilter.createdAt, $lte: e };
+    }
 
     const topAgg = await StockTransaction.aggregate([
         { $match: txFilter },
-        { $group: { _id: '$materialId', totalQty: { $sum: { $abs: '$quantity' } }, materialName: { $first: '$materialName' } } },
+        {
+            $group: {
+                _id: '$materialId',
+                totalQty: { $sum: { $abs: '$quantity' } },
+                materialName: { $first: '$materialName' },
+            },
+        },
         { $sort: { totalQty: -1 } },
         { $limit: 20 },
         { $lookup: { from: 'materials', localField: '_id', foreignField: '_id', as: 'm' } },
@@ -1417,7 +1638,13 @@ const exportMaterialReportExcelLegacy = async (req: Request, res: Response, next
         { header: 'SL xuất', key: 'qty', width: 12 },
     ];
     topAgg.forEach((row: any, i: number) => {
-        ws3.addRow({ stt: i + 1, code: row.m?.code || '', name: row.m?.name || row.materialName || '', unit: row.m?.unit || '', qty: row.totalQty });
+        ws3.addRow({
+            stt: i + 1,
+            code: row.m?.code || '',
+            name: row.m?.name || row.materialName || '',
+            unit: row.m?.unit || '',
+            qty: row.totalQty,
+        });
     });
 
     // ── Sheet 4: Chi phí theo NCC ───────────────────────────────────────────
@@ -1435,9 +1662,11 @@ const exportMaterialReportExcelLegacy = async (req: Request, res: Response, next
         supplierMap[key].count += 1;
         supplierMap[key].total = Number((supplierMap[key].total + (o.totalAmount ?? 0)).toFixed(2));
     });
-    Object.values(supplierMap).sort((a, b) => b.total - a.total).forEach((s) => {
-        ws4.addRow({ name: s.name, count: s.count, total: s.total });
-    });
+    Object.values(supplierMap)
+        .sort((a, b) => b.total - a.total)
+        .forEach((s) => {
+            ws4.addRow({ name: s.name, count: s.count, total: s.total });
+        });
 
     // ── Sheet 5: So sánh giá ────────────────────────────────────────────────
     const ws5 = wb.addWorksheet('So sánh giá');
@@ -1508,8 +1737,7 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
     };
 
     const purchaseOrders = await getPurchaseOrdersForReport(filters, materialIds);
-    const orderIds = purchaseOrders.map((order: any) => order._id);
-    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, orderIds, materialIds);
+    const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, purchaseOrders, materialIds);
 
     const purchaseRows = purchaseOrders.map((order: any) => {
         const items = getReportOrderItems(order, filters, materialIds);
@@ -1553,7 +1781,8 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
 
     const txFilter: Record<string, any> = { isDeleted: { $ne: true }, type: 'export' };
     if (filters.plantId) txFilter.plantId = new mongoose.Types.ObjectId(filters.plantId);
-    if (materialIds) txFilter.materialId = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    if (materialIds)
+        txFilter.materialId = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
     if (filters.startDate || filters.endDate) {
         txFilter.createdAt = {};
         if (filters.startDate) txFilter.createdAt.$gte = filters.startDate;
@@ -1562,7 +1791,13 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
 
     const topAgg = await StockTransaction.aggregate([
         { $match: txFilter },
-        { $group: { _id: '$materialId', totalQty: { $sum: { $abs: '$quantity' } }, materialName: { $first: '$materialName' } } },
+        {
+            $group: {
+                _id: '$materialId',
+                totalQty: { $sum: { $abs: '$quantity' } },
+                materialName: { $first: '$materialName' },
+            },
+        },
         { $sort: { totalQty: -1 } },
         { $limit: 50 },
         { $lookup: { from: 'materials', localField: '_id', foreignField: '_id', as: 'material' } },
@@ -1580,7 +1815,9 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
         if (filters.endDate) distributionMatch.createdAt.$lte = filters.endDate;
     }
     if (materialIds) {
-        distributionMatch['items.materialId'] = { $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)) };
+        distributionMatch['items.materialId'] = {
+            $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)),
+        };
     }
 
     const distributions = await DistributionRecord.find(distributionMatch)
@@ -1588,9 +1825,10 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
         .populate('toPlantId')
         .lean();
 
+    const distributionItemFilters = { ...filters, plantId: undefined };
     const distributionRows = distributions.flatMap((record: any) =>
         (record.items ?? [])
-            .filter((item: any) => itemMatchesReportFilters(item, filters, materialIds))
+            .filter((item: any) => itemMatchesReportFilters(item, distributionItemFilters, materialIds))
             .map((item: any) => ({
                 code: record.distributionCode || '',
                 type: record.distributionType,
@@ -1610,10 +1848,15 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
     purchaseOrders.forEach((order: any) => {
         getReportOrderItems(order, filters, materialIds).forEach((item: any) => {
             const supplierKey =
-                toId(item.supplierId) || toId(order.supplierId) || getItemSupplierName(item) || order.supplierName || 'unknown';
+                toId(item.supplierId) ||
+                toId(order.supplierId) ||
+                getItemSupplierName(item) ||
+                order.supplierName ||
+                'unknown';
             if (!supplierMap[supplierKey]) {
                 supplierMap[supplierKey] = {
-                    supplier: getItemSupplierName(item) || order.supplierName || order.supplierId?.name || 'Chua xac dinh',
+                    supplier:
+                        getItemSupplierName(item) || order.supplierName || order.supplierId?.name || 'Chua xac dinh',
                     count: new Set(),
                     total: 0,
                 };
@@ -1630,31 +1873,33 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
     const totalDistributionCost = distributionRows.reduce((sum, row) => sum + row.totalWithVat, 0);
     const lowStockMaterials = await getLowStockMaterialsData(req);
 
-    const wsOverview = wb.addWorksheet('Tong quan');
+    const wsOverview = wb.addWorksheet('Tong quan vat tu');
     wsOverview.columns = [{ width: 34 }, { width: 24 }];
     wsOverview.addRow(['Chi tieu', 'Gia tri']);
     wsOverview.addRow(['Ky bao cao', dateLabel]);
     wsOverview.addRow(['Ngay xuat', new Date().toLocaleString('vi-VN')]);
-    wsOverview.addRow(['Tong chi phi mua hang', totalPurchaseCost]);
+    wsOverview.addRow(['Chi phi mua vat tu', totalPurchaseCost]);
     wsOverview.addRow(['Tong hoan tra', totalRefund]);
-    wsOverview.addRow(['Chi phi mua net', Math.max(0, totalPurchaseCost - totalRefund)]);
-    wsOverview.addRow(['Tong chi phi cap phat', totalDistributionCost]);
-    wsOverview.addRow(['So don mua hang', purchaseRows.length]);
+    wsOverview.addRow(['Net sau hoan tra', Math.max(0, totalPurchaseCost - totalRefund)]);
+    wsOverview.addRow(['Gia tri cap phat vat tu', totalDistributionCost]);
+    wsOverview.addRow(['So don mua vat tu', purchaseRows.length]);
     wsOverview.addRow(['So dong cap phat', distributionRows.length]);
     wsOverview.addRow(['Vat tu duoi nguong', lowStockMaterials.length]);
     styleWorksheet(wsOverview);
 
-    const wsCost = wb.addWorksheet('Chi phi theo ky');
+    const wsCost = wb.addWorksheet('Mua vat tu theo ky');
     wsCost.columns = [
         { header: 'Ky', key: 'period', width: 18 },
-        { header: 'Chi phi net', key: 'totalAmount', width: 20, style: { numFmt: '#,##0' } },
+        { header: 'Chi phi mua vat tu net', key: 'totalAmount', width: 24, style: { numFmt: '#,##0' } },
     ];
-    Object.entries(costMap).sort(([a], [b]) => a.localeCompare(b)).forEach(([period, totalAmount]) => {
-        wsCost.addRow({ period, totalAmount });
-    });
+    Object.entries(costMap)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .forEach(([period, totalAmount]) => {
+            wsCost.addRow({ period, totalAmount });
+        });
     styleWorksheet(wsCost);
 
-    const wsPurchase = wb.addWorksheet('Mua hang');
+    const wsPurchase = wb.addWorksheet('Mua vat tu');
     wsPurchase.columns = [
         { header: 'Ma PO', key: 'code', width: 18 },
         { header: 'Nha cung cap', key: 'supplier', width: 28 },
@@ -1666,13 +1911,13 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
         { header: 'Thuc te', key: 'actualTotal', width: 18, style: { numFmt: '#,##0' } },
         { header: 'Hoan tra', key: 'refund', width: 18, style: { numFmt: '#,##0' } },
         { header: 'Net', key: 'netActual', width: 18, style: { numFmt: '#,##0' } },
-        { header: 'Chenh lech', key: 'variance', width: 18, style: { numFmt: '#,##0' } },
+        { header: 'Lech gia', key: 'variance', width: 18, style: { numFmt: '#,##0' } },
         { header: 'So dong VT', key: 'itemCount', width: 12 },
     ];
     purchaseRows.forEach((row) => wsPurchase.addRow(row));
     styleWorksheet(wsPurchase);
 
-    const wsDistribution = wb.addWorksheet('Cap phat');
+    const wsDistribution = wb.addWorksheet('Cap phat vat tu');
     wsDistribution.columns = [
         { header: 'Ma phieu', key: 'code', width: 18 },
         { header: 'Loai', key: 'type', width: 18 },
@@ -1714,7 +1959,7 @@ export const exportMaterialReportExcel = async (req: Request, res: Response, nex
     wsSupplier.columns = [
         { header: 'Nha cung cap', key: 'supplier', width: 32 },
         { header: 'So don', key: 'orderCount', width: 12 },
-        { header: 'Tong tien', key: 'total', width: 20, style: { numFmt: '#,##0' } },
+        { header: 'Tong tien mua vat tu', key: 'total', width: 22, style: { numFmt: '#,##0' } },
     ];
     Object.values(supplierMap)
         .sort((a, b) => b.total - a.total)

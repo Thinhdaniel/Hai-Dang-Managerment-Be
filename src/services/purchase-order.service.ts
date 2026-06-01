@@ -23,7 +23,7 @@ const calcItem = (item: any) => {
     const price = Number(item.unitPrice ?? 0);
     const totalPrice = Number((qty * price).toFixed(2));
     const vatRate = Number(item.vatRate ?? 0);
-    const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
+    const vatAmount = Number(((totalPrice * vatRate) / 100).toFixed(2));
     const quantityReceived = Number(item.quantityReceived ?? 0);
     const quantityMissing = Math.max(0, Number((qty - quantityReceived).toFixed(2)));
     const receiveStatus = quantityReceived <= 0 ? 'pending' : quantityMissing > 0 ? 'partially_received' : 'received';
@@ -128,7 +128,11 @@ const applyReceiptStock = async ({
     const stockAfter = stockBefore + quantity;
 
     if (existing) {
-        await (InventoryStock as any).updateOne({ _id: existing._id }, { $set: { currentStock: stockAfter } }, { session });
+        await (InventoryStock as any).updateOne(
+            { _id: existing._id },
+            { $set: { currentStock: stockAfter } },
+            { session }
+        );
     } else {
         await (InventoryStock as any).create([{ materialId, plantId, currentStock: stockAfter }], { session });
     }
@@ -233,7 +237,8 @@ const upsertShortageForItem = async ({
     }
 
     const quantityResolved = Number(existing?.quantityResolved ?? 0);
-    const status = quantityResolved <= 0 ? 'outstanding' : quantityResolved < quantityMissing ? 'partially_settled' : 'settled';
+    const status =
+        quantityResolved <= 0 ? 'outstanding' : quantityResolved < quantityMissing ? 'partially_settled' : 'settled';
     const payload = {
         originalPurchaseOrderId: order._id,
         originalPurchaseOrderCode: order.orderCode,
@@ -265,7 +270,10 @@ const syncOriginalOrderAfterShortageResolution = async ({
     quantity: number;
     session: mongoose.ClientSession;
 }) => {
-    const originalOrder = await PurchaseOrder.findOne({ _id: shortage.originalPurchaseOrderId, isDeleted: { $ne: true } }).session(session);
+    const originalOrder = await PurchaseOrder.findOne({
+        _id: shortage.originalPurchaseOrderId,
+        isDeleted: { $ne: true },
+    }).session(session);
     if (!originalOrder) return;
 
     const items = [...((originalOrder as any).items ?? [])].map((item: any) =>
@@ -279,7 +287,8 @@ const syncOriginalOrderAfterShortageResolution = async ({
     const currentReceived = Number(item.quantityReceived ?? 0);
     item.quantityReceived = Math.min(ordered, currentReceived + quantity);
     item.quantityMissing = Math.max(0, Number((ordered - item.quantityReceived).toFixed(2)));
-    item.receiveStatus = item.quantityReceived <= 0 ? 'pending' : item.quantityMissing > 0 ? 'partially_received' : 'received';
+    item.receiveStatus =
+        item.quantityReceived <= 0 ? 'pending' : item.quantityMissing > 0 ? 'partially_received' : 'received';
     items[index] = item;
 
     const status = getOrderReceiveStatus(items, (originalOrder as any).status);
@@ -303,7 +312,11 @@ const buildFilter = (query: Request['query'], req: Request) => {
     if (query.startDate || query.endDate) {
         filter.createdAt = {};
         if (query.startDate) filter.createdAt.$gte = new Date(String(query.startDate));
-        if (query.endDate) { const d = new Date(String(query.endDate)); d.setHours(23,59,59,999); filter.createdAt.$lte = d; }
+        if (query.endDate) {
+            const d = new Date(String(query.endDate));
+            d.setHours(23, 59, 59, 999);
+            filter.createdAt.$lte = d;
+        }
     }
     if (req.role !== 'admin') {
         filter.plantId = getUserPlantId(req);
@@ -318,21 +331,27 @@ export const getAllPurchaseOrders = async (req: Request, res: Response, next: Ne
         purchaseOrderRepository.findMany(filter, { sort: '-createdAt', skip, limit }),
         purchaseOrderRepository.countDocuments(filter),
     ]);
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: buildPaginatedResponse(orders.map(serializePurchaseOrder), total, page, limit),
-        message: 'Lay danh sach don dat hang thanh cong',
-        status: StatusCodes.OK, success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: buildPaginatedResponse(orders.map(serializePurchaseOrder), total, page, limit),
+            message: 'Lay danh sach don dat hang thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const getPurchaseOrderById = async (req: Request, res: Response, next: NextFunction) => {
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: serializePurchaseOrder(order),
-        message: 'Lay chi tiet don dat hang thanh cong',
-        status: StatusCodes.OK, success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializePurchaseOrder(order),
+            message: 'Lay chi tiet don dat hang thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const getOutstandingPurchaseShortages = async (req: Request, res: Response, next: NextFunction) => {
@@ -352,13 +371,18 @@ export const getOutstandingPurchaseShortages = async (req: Request, res: Respons
         filter.materialId = req.query.materialId;
     }
 
-    const shortages = await PurchaseShortage.find(filter).sort('-createdAt').limit(Number(req.query.limit ?? 200));
+    const shortages = await PurchaseShortage.find(filter)
+        .sort('-createdAt')
+        .limit(Number(req.query.limit ?? 200));
 
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: shortages.map(serializePurchaseShortage),
-        message: 'Lay danh sach no hang nha cung cap thanh cong',
-        status: StatusCodes.OK, success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: shortages.map(serializePurchaseShortage),
+            message: 'Lay danh sach no hang nha cung cap thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const createPurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
@@ -368,7 +392,9 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     const requests = await PurchaseRequest.find({
         _id: { $in: purchaseRequestIds },
         isDeleted: { $ne: true },
-    }).populate('plantId', 'name').lean();
+    })
+        .populate('plantId', 'name')
+        .lean();
 
     if (requests.length !== purchaseRequestIds.length) {
         throw new BadRequestError('Mot so phieu de xuat khong ton tai');
@@ -381,7 +407,9 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
         );
     }
 
-    const requestPlantIds = [...new Set(requests.map((r: any) => String(r.plantId?._id ?? r.plantId ?? '')).filter(Boolean))];
+    const requestPlantIds = [
+        ...new Set(requests.map((r: any) => String(r.plantId?._id ?? r.plantId ?? '')).filter(Boolean)),
+    ];
     if (requestPlantIds.length !== 1) {
         throw new BadRequestError('Chi co the tao don hang tu cac phieu cung mot co so');
     }
@@ -403,12 +431,16 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
 
     // Gom items — populate plantId để lấy plantName
     const isValidId = (v: any) => v && v !== 'undefined' && v !== 'null' && String(v).length === 24;
-    const allPlantIds = [...new Set([
-        ...requests.map((r: any) => String(r.plantId?._id ?? r.plantId ?? '')).filter(isValidId),
-        ...requests.flatMap((r: any) => (r.items ?? []).map((i: any) => String(i.plantId ?? '')).filter(isValidId)),
-    ])];
+    const allPlantIds = [
+        ...new Set([
+            ...requests.map((r: any) => String(r.plantId?._id ?? r.plantId ?? '')).filter(isValidId),
+            ...requests.flatMap((r: any) => (r.items ?? []).map((i: any) => String(i.plantId ?? '')).filter(isValidId)),
+        ]),
+    ];
     const Plant = (await import('@/models/Plant')).default;
-    const plantDocs = await Plant.find({ _id: { $in: allPlantIds } }).select('name').lean();
+    const plantDocs = await Plant.find({ _id: { $in: allPlantIds } })
+        .select('name')
+        .lean();
     const plantNameMap = new Map(plantDocs.map((p: any) => [String(p._id), p.name as string]));
 
     // Gá»™p items
@@ -418,28 +450,31 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
         const prPlantName = plantNameMap.get(prPlantId) || '';
         for (const item of req_.items ?? []) {
             const itemPlantId = isValidId(item.plantId) ? String(item.plantId) : '';
-            const itemPlantName = itemPlantId ? (plantNameMap.get(itemPlantId) || prPlantName) : prPlantName;
-            items.push(calcItem({
-                purchaseRequestId: req_._id,
-                purchaseRequestCode: req_.requestCode,
-                materialId: item.materialId || undefined,
-                materialName: item.materialName || '',
-                unit: item.unit || '',
-                quantityRequested: item.quantityRequested ?? 0,
-                quantityOrdered: item.quantityOrdered ?? item.quantityRequested ?? 0,
-                quantityReceived: item.quantityReceived ?? 0,
-                unitPrice: item.unitPrice ?? 0,
-                vatRate: item.vatRate != null ? (item.vatRate > 1 ? item.vatRate : item.vatRate * 100) : 0,
-                supplierId: item.supplierId || undefined,
-                supplierName: item.supplierName || '',
-                plantName: itemPlantName,
-                proposedBy: item.proposedBy || '',
-                purpose: item.purpose || '',
-                catalogStatus: item.catalogStatus || (item.materialId ? 'matched' : 'unmatched'),
-                quantityInventoried: 0,
-                inventoryStatus: item.materialId ? 'pending' : 'pending',
-                note: item.note || '',
-            }));
+            const itemPlantName = itemPlantId ? plantNameMap.get(itemPlantId) || prPlantName : prPlantName;
+            items.push(
+                calcItem({
+                    purchaseRequestId: req_._id,
+                    purchaseRequestCode: req_.requestCode,
+                    materialId: item.materialId || undefined,
+                    materialName: item.materialName || '',
+                    unit: item.unit || '',
+                    quantityRequested: item.quantityRequested ?? 0,
+                    quantityOrdered: item.quantityOrdered ?? item.quantityRequested ?? 0,
+                    quantityReceived: item.quantityReceived ?? 0,
+                    unitPrice: item.unitPrice ?? 0,
+                    vatRate: item.vatRate != null ? (item.vatRate > 1 ? item.vatRate : item.vatRate * 100) : 0,
+                    supplierId: item.supplierId || undefined,
+                    supplierName: item.supplierName || '',
+                    plantId: itemPlantId || prPlantId || undefined,
+                    plantName: itemPlantName,
+                    proposedBy: item.proposedBy || '',
+                    purpose: item.purpose || '',
+                    catalogStatus: item.catalogStatus || (item.materialId ? 'matched' : 'unmatched'),
+                    quantityInventoried: 0,
+                    inventoryStatus: item.materialId ? 'pending' : 'pending',
+                    note: item.note || '',
+                })
+            );
         }
     }
 
@@ -451,19 +486,22 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     let createdId = '';
     try {
         await session.withTransaction(async () => {
-            const order = await purchaseOrderRepository.create({
-                orderCode,
-                plantId: orderPlantId,
-                purchaseRequestIds: requests.map((r: any) => r._id),
-                purchaseRequestCodes: requests.map((r: any) => r.requestCode),
-                status: 'draft',
-                items,
-                supplierId: orderSupplier.supplierId,
-                supplierName: orderSupplier.supplierName,
-                ...totals,
-                createdBy: req.userId,
-                note: note?.trim() || undefined,
-            }, session);
+            const order = await purchaseOrderRepository.create(
+                {
+                    orderCode,
+                    plantId: orderPlantId,
+                    purchaseRequestIds: requests.map((r: any) => r._id),
+                    purchaseRequestCodes: requests.map((r: any) => r.requestCode),
+                    status: 'draft',
+                    items,
+                    supplierId: orderSupplier.supplierId,
+                    supplierName: orderSupplier.supplierName,
+                    ...totals,
+                    createdBy: req.userId,
+                    note: note?.trim() || undefined,
+                },
+                session
+            );
             createdId = String((order as any)._id);
 
             // Cáº­p nháº­t PurchaseRequest â†’ ordered
@@ -488,11 +526,14 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
         message: `${actorName} đã tạo đơn đặt hàng ${(created as any)?.orderCode || ''}`,
     });
 
-    return res.status(StatusCodes.CREATED).json(customResponse({
-        data: serializePurchaseOrder(created),
-        message: 'Tao don dat hang thanh cong',
-        status: StatusCodes.CREATED, success: true,
-    }));
+    return res.status(StatusCodes.CREATED).json(
+        customResponse({
+            data: serializePurchaseOrder(created),
+            message: 'Tao don dat hang thanh cong',
+            status: StatusCodes.CREATED,
+            success: true,
+        })
+    );
 };
 
 export const updatePurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
@@ -503,7 +544,9 @@ export const updatePurchaseOrder = async (req: Request, res: Response, next: Nex
     }
 
     const { items: itemUpdates, note } = req.body;
-    let items = [...((order as any).items ?? [])].map((i: any) => (typeof i.toObject === 'function' ? i.toObject() : i));
+    const items = [...((order as any).items ?? [])].map((i: any) =>
+        typeof i.toObject === 'function' ? i.toObject() : i
+    );
 
     if (Array.isArray(itemUpdates)) {
         for (const upd of itemUpdates) {
@@ -530,11 +573,14 @@ export const updatePurchaseOrder = async (req: Request, res: Response, next: Nex
         ...(note !== undefined ? { note: note?.trim() || undefined } : {}),
     });
 
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: serializePurchaseOrder(updated),
-        message: 'Cap nhat don dat hang thanh cong',
-        status: StatusCodes.OK, success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializePurchaseOrder(updated),
+            message: 'Cap nhat don dat hang thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const confirmPurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
@@ -548,11 +594,14 @@ export const confirmPurchaseOrder = async (req: Request, res: Response, next: Ne
         orderedAt: new Date(),
     });
 
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: serializePurchaseOrder(updated),
-        message: 'Xac nhan don dat hang thanh cong',
-        status: StatusCodes.OK, success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializePurchaseOrder(updated),
+            message: 'Xac nhan don dat hang thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const receivePurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
@@ -620,7 +669,8 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
 
             item.quantityReceived = Number((alreadyReceived + quantity).toFixed(2));
             item.quantityMissing = Math.max(0, Number((ordered - item.quantityReceived).toFixed(2)));
-            item.receiveStatus = item.quantityReceived <= 0 ? 'pending' : item.quantityMissing > 0 ? 'partially_received' : 'received';
+            item.receiveStatus =
+                item.quantityReceived <= 0 ? 'pending' : item.quantityMissing > 0 ? 'partially_received' : 'received';
             items[index] = item;
 
             await upsertShortageForItem({ order, item, itemIndex: index, session });
@@ -716,11 +766,14 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
         message: `${actorName} đã xác nhận nhận hàng cho đơn ${(updated as any)?.orderCode || ''}`,
     });
 
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: serializePurchaseOrder(updated),
-        message: 'Nhan hang thanh cong, ton kho da cap nhat',
-        status: StatusCodes.OK, success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializePurchaseOrder(updated),
+            message: 'Nhan hang thanh cong, ton kho da cap nhat',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const deletePurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
@@ -746,9 +799,14 @@ export const deletePurchaseOrder = async (req: Request, res: Response, next: Nex
         await session.endSession();
     }
 
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: null, message: 'Huy don dat hang thanh cong', status: StatusCodes.OK, success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: null,
+            message: 'Huy don dat hang thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 const getMutableOrderItem = (order: any, indexParam: string) => {
@@ -807,7 +865,9 @@ export const linkPurchaseOrderItemMaterial = async (req: Request, res: Response,
 
     try {
         await session.withTransaction(async () => {
-            const order = await PurchaseOrder.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).session(session);
+            const order = await PurchaseOrder.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).session(
+                session
+            );
             if (!order) throw new NotFoundError('Khong tim thay don dat hang');
             ensureOrderMutationScope(req, order);
 
@@ -835,12 +895,14 @@ export const linkPurchaseOrderItemMaterial = async (req: Request, res: Response,
     }
 
     const updated = await purchaseOrderRepository.findById(updatedId);
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: serializePurchaseOrder(updated),
-        message: 'Da gan vat tu vao danh muc',
-        status: StatusCodes.OK,
-        success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializePurchaseOrder(updated),
+            message: 'Da gan vat tu vao danh muc',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const createMaterialForPurchaseOrderItem = async (req: Request, res: Response, next: NextFunction) => {
@@ -850,7 +912,9 @@ export const createMaterialForPurchaseOrderItem = async (req: Request, res: Resp
 
     try {
         await session.withTransaction(async () => {
-            const order = await PurchaseOrder.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).session(session);
+            const order = await PurchaseOrder.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).session(
+                session
+            );
             if (!order) throw new NotFoundError('Khong tim thay don dat hang');
             ensureOrderMutationScope(req, order);
 
@@ -899,12 +963,14 @@ export const createMaterialForPurchaseOrderItem = async (req: Request, res: Resp
     }
 
     const updated = await purchaseOrderRepository.findById(updatedId);
-    return res.status(StatusCodes.CREATED).json(customResponse({
-        data: serializePurchaseOrder(updated),
-        message: 'Da tao vat tu va gan vao don hang',
-        status: StatusCodes.CREATED,
-        success: true,
-    }));
+    return res.status(StatusCodes.CREATED).json(
+        customResponse({
+            data: serializePurchaseOrder(updated),
+            message: 'Da tao vat tu va gan vao don hang',
+            status: StatusCodes.CREATED,
+            success: true,
+        })
+    );
 };
 
 export const ignorePurchaseOrderItemInventory = async (req: Request, res: Response, next: NextFunction) => {
@@ -921,12 +987,14 @@ export const ignorePurchaseOrderItemInventory = async (req: Request, res: Respon
 
     const updated = await purchaseOrderRepository.updateById(String(req.params.id), { items });
 
-    return res.status(StatusCodes.OK).json(customResponse({
-        data: serializePurchaseOrder(updated),
-        message: 'Da bo qua quan ton cho dong vat tu',
-        status: StatusCodes.OK,
-        success: true,
-    }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializePurchaseOrder(updated),
+            message: 'Da bo qua quan ton cho dong vat tu',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
 
 export const exportPurchaseOrderXlsx = async (req: Request, res: Response, next: NextFunction) => {
@@ -937,21 +1005,24 @@ export const exportPurchaseOrderXlsx = async (req: Request, res: Response, next:
     const data = serializePurchaseOrder(order);
 
     // Enrich plantName từ PR nếu item chưa có (dữ liệu cũ)
-    const prIds = [...new Set((order as any).items?.map((i: any) => String(i.purchaseRequestId)).filter(Boolean) ?? [])];
+    const prIds = [
+        ...new Set((order as any).items?.map((i: any) => String(i.purchaseRequestId)).filter(Boolean) ?? []),
+    ];
     if (prIds.length) {
         const prs = await PurchaseRequest.find({ _id: { $in: prIds } })
             .populate('plantId', 'name')
             .populate('items.plantId', 'name')
             .lean();
         // Map prId → { prPlantName, itemPlantMap: Map<materialName, plantName> }
-        const prInfoMap = new Map(prs.map((pr: any) => {
-            const prPlantName = (pr.plantId as any)?.name || '';
-            const itemPlantMap = new Map((pr.items ?? []).map((item: any) => [
-                item.materialName,
-                (item.plantId as any)?.name || prPlantName,
-            ]));
-            return [String(pr._id), { prPlantName, itemPlantMap }];
-        }));
+        const prInfoMap = new Map(
+            prs.map((pr: any) => {
+                const prPlantName = (pr.plantId as any)?.name || '';
+                const itemPlantMap = new Map(
+                    (pr.items ?? []).map((item: any) => [item.materialName, (item.plantId as any)?.name || prPlantName])
+                );
+                return [String(pr._id), { prPlantName, itemPlantMap }];
+            })
+        );
 
         data.items = (data.items ?? []).map((item: any) => {
             if (item.plantName) return item;
