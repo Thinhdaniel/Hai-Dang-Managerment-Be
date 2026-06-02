@@ -317,11 +317,10 @@ const applySupplyShortageResolutions = async ({
         }
 
         const outstanding = Number(shortage.quantityShortage ?? 0) - Number(shortage.quantityResolved ?? 0);
-        if (quantity > outstanding) {
-            throw new BadRequestError(`So luong cap bu cho "${shortage.materialName}" vuot qua so luong con thieu`);
-        }
+        // Cho phep cap vuot (cap them): chi tinh phan bu vao shortage, phan du nam o phieu cap phat.
+        const applied = Number(Math.min(quantity, outstanding).toFixed(2));
 
-        shortage.quantityResolved = Number((Number(shortage.quantityResolved ?? 0) + quantity).toFixed(2));
+        shortage.quantityResolved = Number((Number(shortage.quantityResolved ?? 0) + applied).toFixed(2));
         shortage.status =
             shortage.quantityResolved >= Number(shortage.quantityShortage ?? 0)
                 ? 'settled'
@@ -331,7 +330,7 @@ const applySupplyShortageResolutions = async ({
         shortage.resolutions.push({
             distributionId: (record as any)._id,
             distributionCode: (record as any).distributionCode,
-            quantity,
+            quantity: applied,
             resolvedBy: performedBy,
             resolvedAt: new Date(),
             note: item.note,
@@ -586,8 +585,8 @@ export const createCompensationDistributionRecord = async (req: Request, res: Re
     const toPlantIds = new Set(shortages.map((shortage: any) => toId(shortage.toPlantId)).filter(Boolean));
     if (toPlantIds.size !== 1) throw new BadRequestError('Chi co the tao mot phieu cap bu cho cung mot co so nhan');
 
-    const supplyRequestIds = new Set(shortages.map((shortage: any) => toId(shortage.originalSupplyRequestId)).filter(Boolean));
-    if (supplyRequestIds.size !== 1) throw new BadRequestError('Chi co the tao mot phieu cap bu cho cung mot de xuat goc');
+    // Cho phep gop nhieu de xuat goc (cua cung 1 co so nhan) vao 1 phieu cap bu (Tang 2).
+    // Viec tru shortage duoc xu ly theo tung dong qua applySupplyShortageResolutions nen da ho tro da-SR.
 
     const shortagesById = new Map(shortages.map((shortage: any) => [String(shortage._id), shortage]));
     const normalizedItems = (items ?? []).map((item: any, idx: number) => {
@@ -607,17 +606,22 @@ export const createCompensationDistributionRecord = async (req: Request, res: Re
         };
     });
 
-    const quantityByShortage = new Map<string, number>();
+    const aggByShortage = new Map<string, { quantity: number; hasNote: boolean }>();
     normalizedItems.forEach((item: any) => {
         const key = String(item.sourceShortageId);
-        quantityByShortage.set(key, Number((Number(quantityByShortage.get(key) ?? 0) + Number(item.quantity ?? 0)).toFixed(2)));
+        const prev = aggByShortage.get(key) ?? { quantity: 0, hasNote: false };
+        aggByShortage.set(key, {
+            quantity: Number((prev.quantity + Number(item.quantity ?? 0)).toFixed(2)),
+            hasNote: prev.hasNote || Boolean(String(item.note ?? '').trim()),
+        });
     });
 
-    for (const [shortageId, quantity] of quantityByShortage.entries()) {
+    for (const [shortageId, agg] of aggByShortage.entries()) {
         const shortage = shortagesById.get(shortageId);
         const outstanding = Number(shortage.quantityShortage ?? 0) - Number(shortage.quantityResolved ?? 0);
-        if (quantity > outstanding) {
-            throw new BadRequestError(`So luong cap bu cho "${shortage.materialName}" vuot qua so luong con thieu`);
+        // Cho phep cap vuot so con thieu (cap them) nhung bat buoc co ghi chu ly do.
+        if (agg.quantity > outstanding && !agg.hasNote) {
+            throw new BadRequestError(`Cap vuot so con thieu cho "${shortage.materialName}" can ghi chu ly do`);
         }
     }
 
@@ -913,37 +917,53 @@ export const distributeRecord = async (req: Request, res: Response, next: NextFu
 };
 
 export const confirmDistributionRecord = async (req: Request, res: Response, next: NextFunction) => {
-    // Raw query để tránh populate che khuất data thật
-    const raw = await (DistributionRecord as any).findById(req.params.id).lean();
-    console.log('[CONFIRM DEBUG] id=%s status=%s toPlantId=%s userPlantId=%s',
-        req.params.id, raw?.status, String(raw?.toPlantId), String((req.user as any)?.plantId));
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    const record = await distributionRepository.findById(String(req.params.id));
-    if (!record) throw new NotFoundError('Khong tim thay phieu cap phat');
+    try {
+        // Raw doc (không populate) để đọc đúng data và dùng trong applySupplyShortageResolutions
+        const record = await (DistributionRecord as any)
+            .findOne({ _id: req.params.id, isDeleted: { $ne: true } })
+            .session(session);
+        if (!record) throw new NotFoundError('Khong tim thay phieu cap phat');
 
-    ensureDistributionAccess(req, record);
+        ensureDistributionAccess(req, record);
 
-    if ((record as any).status !== 'distributed') {
-        throw new BadRequestError(`Khong the confirm khi status=${(record as any).status} (can: distributed)`);
-    }
-
-    // Chỉ CS nhận (toPlantId) mới được confirm — bỏ qua nếu là manager/admin
-    if (!isManagerRole(req.role)) {
-        const userPlantId = getUserPlantId(req);
-        const toPlantId = toId((record as any).toPlantId);
-        if (userPlantId !== toPlantId) {
-            throw new UnAuthorizedError(`Sai co so: user=${userPlantId} toPlant=${toPlantId}`);
+        if (record.status !== 'distributed') {
+            throw new BadRequestError(`Khong the confirm khi status=${record.status} (can: distributed)`);
         }
-    }
 
-    await (DistributionRecord as any).updateOne(
-        { _id: (record as any)._id },
-        { $set: { status: 'confirmed', confirmedBy: req.userId, confirmedAt: new Date() } }
-    );
+        // Chỉ CS nhận (toPlantId) mới được confirm — bỏ qua nếu là manager/admin
+        if (!isManagerRole(req.role)) {
+            const userPlantId = getUserPlantId(req);
+            const toPlantId = toId(record.toPlantId);
+            if (userPlantId !== toPlantId) {
+                throw new UnAuthorizedError(`Sai co so: user=${userPlantId} toPlant=${toPlantId}`);
+            }
+        }
 
-    const supplyRequestId = toId((record as any).supplyRequestId);
-    if (supplyRequestId) {
-        await refreshSupplyRequestFulfillmentStatus(supplyRequestId);
+        await (DistributionRecord as any).updateOne(
+            { _id: record._id },
+            { $set: { status: 'confirmed', confirmedBy: req.userId, confirmedAt: new Date() } },
+            { session }
+        );
+
+        if (record.isCompensation) {
+            // Phiếu cấp bù: trừ số còn thiếu của các shortage liên quan + refresh tất cả SR gốc (đa-SR).
+            await applySupplyShortageResolutions({ record, performedBy: req.userId, session });
+        } else {
+            const supplyRequestId = toId(record.supplyRequestId);
+            if (supplyRequestId) {
+                await refreshSupplyRequestFulfillmentStatus(supplyRequestId, session);
+            }
+        }
+
+        await session.commitTransaction();
+    } catch (err) {
+        await session.abortTransaction();
+        throw err;
+    } finally {
+        await session.endSession();
     }
 
     const updated = await distributionRepository.findById(String(req.params.id));
