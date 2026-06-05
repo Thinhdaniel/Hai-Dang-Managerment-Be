@@ -2,6 +2,7 @@ import { emitToUser } from '@/lib/socket';
 import User from '@/models/User';
 import Maintenance from '@/models/Maintenance';
 import Notification from '@/models/Notification';
+import { sendWebPushToUser } from '@/services/web-push.service';
 
 /**
  * Get actor display name by userId
@@ -48,6 +49,9 @@ export const notifyAdmins = async (event: string, data: any) => {
             }
 
             emitToUser(String(admin._id), event, notificationPayload);
+            if (event === 'notify:new') {
+                void sendWebPushToUser(String(admin._id), notificationPayload);
+            }
         }
 
         console.log(`[Notification] Sent to ${admins.length} admins`);
@@ -77,6 +81,9 @@ export const notifyUser = async (userId: string, event: string, data: any) => {
         }
 
         emitToUser(userId, event, notificationPayload);
+        if (event === 'notify:new') {
+            void sendWebPushToUser(userId, notificationPayload);
+        }
     } catch (error) {
         console.error('[Notification] Error notifying user:', error);
     }
@@ -89,7 +96,7 @@ export const notifyUser = async (userId: string, event: string, data: any) => {
 export const checkAndNotifyOverdueMaintenance = async () => {
     try {
         const now = new Date();
-        
+
         // Find maintenance items that are overdue
         const overdueMaintenances = await Maintenance.find({
             isDeleted: { $ne: true },
@@ -99,7 +106,7 @@ export const checkAndNotifyOverdueMaintenance = async () => {
 
         for (const maintenance of overdueMaintenances) {
             const assetName = (maintenance.assetId as any)?.name || 'Thiết bị';
-            
+
             await notifyAdmins('notify:new', {
                 type: 'error',
                 actionType: 'maintenance',

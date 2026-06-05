@@ -9,3 +9,4 @@ export * as transferService from './transfer.service';
 export * as borrowingService from './borrowing.service';
 export * as dashboardService from './dashboard.service';
 export * as notificationService from './notification.service';
+export * as webPushService from './web-push.service';

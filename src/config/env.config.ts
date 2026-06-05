@@ -8,7 +8,10 @@ const envVarsSchema = z.object({
     PORT: z.coerce.number().default(8000),
     APP_HOST: z.string().default('0.0.0.0'),
     CLIENT_URL: z.string().default('http://localhost:5173'),
-    RESET_PASSWORD_URL: z.string().optional().describe('Custom URL for password reset page (e.g., https://yourdomain.com/reset-password)'),
+    RESET_PASSWORD_URL: z
+        .string()
+        .optional()
+        .describe('Custom URL for password reset page (e.g., https://yourdomain.com/reset-password)'),
     ALLOWED_ORIGINS: z.string().optional().describe('Comma-separated list of allowed CORS origins'),
     MONGODB_URL_DEV: z.string().describe('Local Mongo DB'),
     MONGODB_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
@@ -51,6 +54,10 @@ const envVarsSchema = z.object({
     EMAIL_PASSWORD: z.string().min(3),
     EMAIL_FROM: z.string().optional(),
     EMAIL_FROM_NAME: z.string().default('Device Management System'),
+    // WEB PUSH
+    WEB_PUSH_PUBLIC_KEY: z.string().optional(),
+    WEB_PUSH_PRIVATE_KEY: z.string().optional(),
+    WEB_PUSH_SUBJECT: z.string().optional(),
 });
 
 const result = envVarsSchema.safeParse(process.env);
@@ -72,7 +79,7 @@ const config = {
     app: {
         clientUrl: envVars.CLIENT_URL,
         resetPasswordUrl: envVars.RESET_PASSWORD_URL,
-        allowedOrigins: envVars.ALLOWED_ORIGINS ? envVars.ALLOWED_ORIGINS.split(',').map(s => s.trim()) : [],
+        allowedOrigins: envVars.ALLOWED_ORIGINS ? envVars.ALLOWED_ORIGINS.split(',').map((s) => s.trim()) : [],
     },
     mongoose: {
         url: envVars.MONGODB_URL_DEV,
@@ -112,6 +119,12 @@ const config = {
         password: envVars.EMAIL_PASSWORD,
         fromEmail: envVars.EMAIL_FROM || envVars.EMAIL_USER,
         fromName: envVars.EMAIL_FROM_NAME,
+    },
+    webPush: {
+        publicKey: envVars.WEB_PUSH_PUBLIC_KEY,
+        privateKey: envVars.WEB_PUSH_PRIVATE_KEY,
+        subject: envVars.WEB_PUSH_SUBJECT || `mailto:${envVars.EMAIL_FROM || envVars.EMAIL_USER}`,
+        enabled: Boolean(envVars.WEB_PUSH_PUBLIC_KEY && envVars.WEB_PUSH_PRIVATE_KEY),
     },
 };
 
