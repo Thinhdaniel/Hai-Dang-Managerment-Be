@@ -66,7 +66,7 @@ const toWebPushSubscription = (subscription: {
     },
 });
 
-const getNotificationPayload = (notification: INotification | any) =>
+const getNotificationPayload = (notification: INotification | any, unreadCount: number) =>
     JSON.stringify({
         notificationId: String(notification._id ?? ''),
         title: notification.title ?? 'Thông báo mới',
@@ -77,6 +77,7 @@ const getNotificationPayload = (notification: INotification | any) =>
         url: buildActionUrl(notification),
         tag: `${notification.actionType ?? 'system'}:${notification.actionId ?? notification._id ?? Date.now()}`,
         createdAt: notification.createdAt ?? new Date().toISOString(),
+        unreadCount,
     });
 
 export const getPublicKey = async (_req: Request, res: Response, _next: NextFunction) => {
@@ -232,7 +233,8 @@ export const sendWebPushToUser = async (
     }
 
     const subscriptions = await PushSubscription.find({ userId, isActive: true }).lean();
-    const payload = getNotificationPayload(notification);
+    const unreadCount = await Notification.countDocuments({ userId, isRead: false });
+    const payload = getNotificationPayload(notification, unreadCount);
     let sent = 0;
     let failed = 0;
 
