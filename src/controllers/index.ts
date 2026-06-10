@@ -4,3 +4,4 @@ export * as plantController from './plant.controller';
 export * as assetController from './asset.controller';
 export * as borrowingController from './borrowing.controller';
 export * as transferController from './transfer.controller';
+export * as qrLabelController from './qr-label.controller';

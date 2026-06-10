@@ -129,8 +129,6 @@ export const serializePublicAsset = (input: any) => {
             ? serializePlant(asset.plantId)
             : undefined;
 
-    console.log('serializePublicAsset called for:', asset?.publicId, 'machineCode is:', asset?.machineCode);
-
     return {
         publicId: asset?.publicId,
         name: asset?.name,

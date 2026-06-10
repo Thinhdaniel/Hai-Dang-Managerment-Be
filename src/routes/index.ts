@@ -23,6 +23,7 @@ import expressDispatchRoutes from './express-dispatch.route';
 import returnRecordRoutes from './return-record.route';
 import aiHelpRoutes from './ai-help.route';
 import reportRoutes from './report.route';
+import qrLabelRoutes from './qr-label.route';
 
 const router = Router();
 
@@ -49,5 +50,6 @@ router.use('/express-dispatch', expressDispatchRoutes);
 router.use('/return-records', returnRecordRoutes);
 router.use('/ai', aiHelpRoutes);
 router.use('/reports', reportRoutes);
+router.use('/qr-labels', qrLabelRoutes);
 
 export default router;
