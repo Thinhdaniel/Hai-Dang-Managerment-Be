@@ -23,6 +23,10 @@ export const connectDB = async () => {
         serverSelectionTimeoutMS: config.mongoose.options.serverSelectionTimeoutMS,
         connectTimeoutMS: config.mongoose.options.connectTimeoutMS,
         socketTimeoutMS: config.mongoose.options.socketTimeoutMS,
+        maxPoolSize: config.mongoose.options.maxPoolSize,
+        minPoolSize: config.mongoose.options.minPoolSize,
+        maxIdleTimeMS: config.mongoose.options.maxIdleTimeMS,
+        heartbeatFrequencyMS: config.mongoose.options.heartbeatFrequencyMS,
     } as ConnectOptions);
 
     // @event connected: Emitted when this connection successfully connects to the db. May be emitted multiple times in reconnected scenarios
@@ -56,6 +60,10 @@ export const connectDB = async () => {
                 serverSelectionTimeoutMS: config.mongoose.options.serverSelectionTimeoutMS,
                 socketTimeoutMS: config.mongoose.options.socketTimeoutMS,
                 connectTimeoutMS: config.mongoose.options.connectTimeoutMS,
+                maxPoolSize: config.mongoose.options.maxPoolSize,
+                minPoolSize: config.mongoose.options.minPoolSize,
+                maxIdleTimeMS: config.mongoose.options.maxIdleTimeMS,
+                heartbeatFrequencyMS: config.mongoose.options.heartbeatFrequencyMS,
             } as ConnectOptions);
         }, 3000);
     });

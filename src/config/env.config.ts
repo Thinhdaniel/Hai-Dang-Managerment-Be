@@ -14,9 +14,14 @@ const envVarsSchema = z.object({
         .describe('Custom URL for password reset page (e.g., https://yourdomain.com/reset-password)'),
     ALLOWED_ORIGINS: z.string().optional().describe('Comma-separated list of allowed CORS origins'),
     MONGODB_URL_DEV: z.string().describe('Local Mongo DB'),
-    MONGODB_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
-    MONGODB_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+    MONGODB_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
     MONGODB_SOCKET_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
+    // Pool/keep-alive — chong socket Atlas bi NAT cat lam treo request dau tien
+    MONGODB_MAX_POOL_SIZE: z.coerce.number().int().positive().default(10),
+    MONGODB_MIN_POOL_SIZE: z.coerce.number().int().nonnegative().default(2),
+    MONGODB_MAX_IDLE_TIME_MS: z.coerce.number().int().positive().default(30000),
+    MONGODB_HEARTBEAT_FREQUENCY_MS: z.coerce.number().int().positive().default(10000),
     AUTH_BYPASS: z
         .string()
         .optional()
@@ -88,6 +93,10 @@ const config = {
             serverSelectionTimeoutMS: envVars.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
             connectTimeoutMS: envVars.MONGODB_CONNECT_TIMEOUT_MS,
             socketTimeoutMS: envVars.MONGODB_SOCKET_TIMEOUT_MS,
+            maxPoolSize: envVars.MONGODB_MAX_POOL_SIZE,
+            minPoolSize: envVars.MONGODB_MIN_POOL_SIZE,
+            maxIdleTimeMS: envVars.MONGODB_MAX_IDLE_TIME_MS,
+            heartbeatFrequencyMS: envVars.MONGODB_HEARTBEAT_FREQUENCY_MS,
         },
         syncIndexes: envVars.SYNC_INDEXES,
     },
