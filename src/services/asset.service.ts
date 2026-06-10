@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
+import { emitToAll } from '@/lib/socket';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
 import { assetRepository } from '@/repositories/asset.repository';
 import { confirmAssetImport, previewAssetImport } from '@/services/asset-import.helpers';
@@ -11,6 +12,31 @@ import Transfer from '@/models/Transfer';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import customResponse from '@/utils/response';
+
+const ASSET_SOCKET_EVENTS = {
+    CREATED: 'asset:created',
+    UPDATED: 'asset:updated',
+    DELETED: 'asset:deleted',
+} as const;
+
+const broadcastAssetChange = (
+    event: (typeof ASSET_SOCKET_EVENTS)[keyof typeof ASSET_SOCKET_EVENTS],
+    asset: unknown,
+    action: string,
+    changedFields: string[] = []
+) => {
+    if (!asset) return;
+
+    const serializedAsset = serializeAsset(asset);
+
+    emitToAll(event, {
+        action,
+        assetId: serializedAsset.id,
+        asset: serializedAsset,
+        changedFields,
+        updatedAt: serializedAsset.updatedAt ?? new Date().toISOString(),
+    });
+};
 
 const buildFilter = (query: Request['query']) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
@@ -80,6 +106,7 @@ export const createAsset = async (req: Request, res: Response, next: NextFunctio
     });
 
     const createdAsset = await assetRepository.findById(String(asset._id));
+    broadcastAssetChange(ASSET_SOCKET_EVENTS.CREATED, createdAsset, 'created', ['created']);
 
     return res.status(StatusCodes.CREATED).json(
         customResponse({
@@ -246,6 +273,8 @@ export const ensureAssetPublicId = async (req: Request, res: Response, next: Nex
         throw new NotFoundError('Khong tim thay thiet bi');
     }
 
+    broadcastAssetChange(ASSET_SOCKET_EVENTS.UPDATED, updatedAsset, 'public-id-updated', ['publicId']);
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: { publicId: updatedAsset.publicId },
@@ -283,6 +312,7 @@ export const updateAsset = async (req: Request, res: Response, next: NextFunctio
     const asset = await assetRepository.updateById(String(req.params.id), { ...req.body, updatedBy: req.userId });
 
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
+    broadcastAssetChange(ASSET_SOCKET_EVENTS.UPDATED, asset, 'updated', Object.keys(req.body));
 
     return res.status(StatusCodes.OK).json(
         customResponse({
@@ -307,6 +337,7 @@ export const updateAssetStatus = async (req: Request, res: Response, next: NextF
     });
 
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
+    broadcastAssetChange(ASSET_SOCKET_EVENTS.UPDATED, asset, 'status-updated', ['status', 'statusNote']);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
@@ -326,6 +357,7 @@ export const deleteAsset = async (req: Request, res: Response, next: NextFunctio
     });
 
     if (!asset) throw new NotFoundError('Khong tim thay thiet bi');
+    broadcastAssetChange(ASSET_SOCKET_EVENTS.DELETED, asset, 'deleted', ['isDeleted']);
 
     return res.status(StatusCodes.OK).json(
         customResponse({

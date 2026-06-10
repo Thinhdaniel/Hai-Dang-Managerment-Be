@@ -5,6 +5,7 @@ import { NextFunction, Request, Response } from 'express';
 import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import { QR_LABEL_BATCH_STATUS, QR_LABEL_STATUS, QR_LABEL_TYPE } from '@/constant/qrLabel';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
+import { emitToAll } from '@/lib/socket';
 import Asset from '@/models/Asset';
 import QrLabel from '@/models/QrLabel';
 import QrLabelBatch from '@/models/QrLabelBatch';
@@ -15,6 +16,10 @@ import { serializeAsset, serializePlant, serializePublicAsset } from '@/utils/se
 const QR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const QR_PUBLIC_ID_LENGTH = 8;
 const generateQrToken = customAlphabet(QR_ALPHABET, QR_PUBLIC_ID_LENGTH);
+const ASSET_SOCKET_EVENTS = {
+    CREATED: 'asset:created',
+    UPDATED: 'asset:updated',
+} as const;
 
 const toPlain = (value: any) => (typeof value?.toObject === 'function' ? value.toObject() : value);
 const toId = (value: any) => {
@@ -33,6 +38,25 @@ const getUserId = (req: Request) =>
 
 const getPopulatedPlant = (value: any) =>
     value && typeof value === 'object' && value.name ? serializePlant(value) : undefined;
+
+const broadcastAssetChange = (
+    event: (typeof ASSET_SOCKET_EVENTS)[keyof typeof ASSET_SOCKET_EVENTS],
+    asset: unknown,
+    action: string,
+    changedFields: string[] = []
+) => {
+    if (!asset) return;
+
+    const serializedAsset = serializeAsset(asset);
+
+    emitToAll(event, {
+        action,
+        assetId: serializedAsset.id,
+        asset: serializedAsset,
+        changedFields,
+        updatedAt: serializedAsset.updatedAt ?? new Date().toISOString(),
+    });
+};
 
 const serializeBatch = (input: any, extra?: { assignedCount?: number; unusedCount?: number }) => {
     const batch = toPlain(input);
@@ -633,6 +657,7 @@ export const activateMachineLabel = async (req: Request, res: Response, next: Ne
         Asset.findById(createdAssetId).populate('brandId').populate('plantId'),
         findLabelByPublicId(publicId),
     ]);
+    broadcastAssetChange(ASSET_SOCKET_EVENTS.CREATED, asset, 'qr-label-activated', ['publicId', 'created']);
 
     return res.status(StatusCodes.CREATED).json(
         customResponse({
@@ -714,6 +739,7 @@ export const linkAssetLabel = async (req: Request, res: Response, next: NextFunc
         Asset.findById(linkedAssetId).populate('brandId').populate('plantId'),
         findLabelByPublicId(publicId),
     ]);
+    broadcastAssetChange(ASSET_SOCKET_EVENTS.UPDATED, asset, 'qr-label-linked', ['publicId']);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
