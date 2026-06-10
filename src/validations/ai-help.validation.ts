@@ -16,3 +16,7 @@ export const askAiHelpSchema = z.object({
     route: z.string().trim().max(200).optional(),
     contextTopics: z.array(helpContextTopicSchema).max(6).default([]),
 });
+
+export const aiAssetSearchSchema = z.object({
+    query: z.string().trim().min(2).max(500),
+});
