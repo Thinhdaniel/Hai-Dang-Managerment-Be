@@ -37,7 +37,7 @@ router.post(
     qrLabelController.markBatchPrinted
 );
 
-router.get('/resolve/:publicId', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), qrLabelController.resolveInternalQr);
+router.get('/resolve/:publicId', qrLabelController.resolveInternalQr);
 
 router.get('/', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), qrLabelController.getLabels);
 router.post(

@@ -1,12 +1,13 @@
 import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
+import { emitToAll } from '@/lib/socket';
 import Asset from '@/models/Asset';
 import Maintenance from '@/models/Maintenance';
 import Plant from '@/models/Plant';
 import Transfer from '@/models/Transfer';
 import TransferHistory from '@/models/TransferHistory';
 import { getPagination } from '@/utils/pagination';
-import { serializeMaintenance } from '@/utils/serializers';
+import { serializeAsset, serializeMaintenance } from '@/utils/serializers';
 import {
     WORKFLOW_POPULATE,
     applyPopulate,
@@ -21,6 +22,23 @@ import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
 const EXTERNAL_REPAIR_MODE = 'external';
+const ASSET_SOCKET_EVENTS = {
+    UPDATED: 'asset:updated',
+} as const;
+
+const broadcastAssetChange = (asset: unknown, action: string, changedFields: string[] = []) => {
+    if (!asset) return;
+
+    const serializedAsset = serializeAsset(asset);
+
+    emitToAll(ASSET_SOCKET_EVENTS.UPDATED, {
+        action,
+        assetId: serializedAsset.id,
+        asset: serializedAsset,
+        changedFields,
+        updatedAt: serializedAsset.updatedAt ?? new Date().toISOString(),
+    });
+};
 
 // ─── Plant snapshot helper ────────────────────────────────────────────────────
 
@@ -284,17 +302,30 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
             : req.body.externalRepair,
     });
 
+    let updatedAsset: unknown;
     if (!isExternalRepair && status === 'in_progress') {
-        await Asset.findByIdAndUpdate(req.body.assetId, {
-            status: ASSET_STATUS.MAINTENANCE,
-        });
+        updatedAsset = await Asset.findByIdAndUpdate(
+            req.body.assetId,
+            {
+                status: ASSET_STATUS.MAINTENANCE,
+            },
+            { new: true }
+        )
+            .populate('brandId')
+            .populate('plantId');
     }
 
     if (!isExternalRepair && status === 'completed') {
-        await Asset.findByIdAndUpdate(req.body.assetId, {
-            status: getNextAssetStatus(asset),
-            lastMaintenanceDate: req.body.endDate,
-        });
+        updatedAsset = await Asset.findByIdAndUpdate(
+            req.body.assetId,
+            {
+                status: getNextAssetStatus(asset),
+                lastMaintenanceDate: req.body.endDate,
+            },
+            { new: true }
+        )
+            .populate('brandId')
+            .populate('plantId');
     }
 
     const createdItem = await findOnePopulatedOrThrow({
@@ -318,6 +349,10 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
         isRead: false,
         createdAt: new Date().toISOString(),
     });
+
+    if (updatedAsset) {
+        broadcastAssetChange(updatedAsset, 'maintenance-created', ['status', 'lastMaintenanceDate']);
+    }
 
     return sendSerializedItem(
         res,
@@ -420,10 +455,16 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
     if (!item) throw new NotFoundError('Khong tim thay phieu bao tri');
 
     const asset = await Asset.findById(item.assetId);
-    await Asset.findByIdAndUpdate(item.assetId, {
-        status: getNextAssetStatus(asset),
-        lastMaintenanceDate: req.body.endDate,
-    });
+    const updatedAsset = await Asset.findByIdAndUpdate(
+        item.assetId,
+        {
+            status: getNextAssetStatus(asset),
+            lastMaintenanceDate: req.body.endDate,
+        },
+        { new: true }
+    )
+        .populate('brandId')
+        .populate('plantId');
 
     // Send notification about completed maintenance
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
@@ -439,6 +480,8 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
         isRead: false,
         createdAt: new Date().toISOString(),
     });
+
+    broadcastAssetChange(updatedAsset, 'maintenance-completed', ['status', 'lastMaintenanceDate']);
 
     return sendSerializedItem(res, item, serializeMaintenance, 'Hoan thanh bao tri thanh cong');
 };
@@ -463,11 +506,18 @@ export const approveMaintenance = async (req: Request, res: Response, next: Next
     };
     await item.save();
 
-    await Asset.findByIdAndUpdate(item.assetId, {
-        status: ASSET_STATUS.MAINTENANCE,
-    });
+    const updatedAsset = await Asset.findByIdAndUpdate(
+        item.assetId,
+        {
+            status: ASSET_STATUS.MAINTENANCE,
+        },
+        { new: true }
+    )
+        .populate('brandId')
+        .populate('plantId');
 
     const populated = await fetchPopulatedMaintenance(String(item._id));
+    broadcastAssetChange(updatedAsset, 'maintenance-approved', ['status']);
     return sendSerializedItem(res, populated, serializeMaintenance, 'Da duyet phieu sua ngoai');
 };
 
