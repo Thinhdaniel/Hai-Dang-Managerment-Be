@@ -969,13 +969,17 @@ export const confirmDistributionRecord = async (req: Request, res: Response, nex
     const updated = await distributionRepository.findById(String(req.params.id));
 
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        type: 'success',
-        actionType: 'distribution',
-        actionId: String(req.params.id),
-        title: 'Xác nhận nhận hàng',
-        message: `${actorName} đã xác nhận nhận hàng phiếu cấp phát ${(updated as any)?.distributionCode || ''}`,
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'success',
+            actionType: 'distribution',
+            actionId: String(req.params.id),
+            title: 'Xác nhận nhận hàng',
+            message: `${actorName} đã xác nhận nhận hàng phiếu cấp phát ${(updated as any)?.distributionCode || ''}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return res.status(StatusCodes.OK).json(
         customResponse({

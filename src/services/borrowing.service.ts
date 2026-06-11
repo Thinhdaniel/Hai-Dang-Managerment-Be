@@ -152,17 +152,17 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
     // Send notification to admins about new borrowing
     const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        _id: `borrowing-${createdItem._id}`,
-        userId: '',
-        type: 'info',
-        actionType: 'borrowing',
-        actionId: String(createdItem._id),
-        title: 'Giao dịch mới',
-        message: `${actorName} đã tạo giao dịch ${createdItem.type === 'internal' ? 'nội bộ' : 'cho thuê'} cho ${assetName}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'info',
+            actionType: 'borrowing',
+            actionId: String(createdItem._id),
+            title: 'Giao dịch mới',
+            message: `${actorName} đã tạo giao dịch ${createdItem.type === 'internal' ? 'nội bộ' : 'cho thuê'} cho ${assetName}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return sendSerializedItem(
         res,
@@ -204,17 +204,17 @@ export const returnBorrowing = async (req: Request, res: Response, next: NextFun
     // Send notification to admins about returned device
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        _id: `return-${item._id}`,
-        userId: '',
-        type: 'success',
-        actionType: 'borrowing',
-        actionId: String(item._id),
-        title: 'Thiết bị đã được trả',
-        message: `${actorName} đã xác nhận trả ${assetName} về kho`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'success',
+            actionType: 'borrowing',
+            actionId: String(item._id),
+            title: 'Thiết bị đã được trả',
+            message: `${actorName} đã xác nhận trả ${assetName} về kho`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return sendSerializedItem(res, item, serializeBorrowing, 'Xac nhan tra thiet bi thanh cong');
 };

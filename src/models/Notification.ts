@@ -2,7 +2,6 @@ import mongoose from 'mongoose';
 
 export type NotificationType = 'info' | 'success' | 'warning' | 'error';
 export type NotificationActionType =
-    | 'machine'
     | 'user'
     | 'asset'
     | 'transfer'
@@ -44,7 +43,7 @@ const NotificationSchema = new mongoose.Schema<INotification>(
         },
         actionType: {
             type: String,
-            enum: ['machine', 'user', 'asset', 'transfer', 'maintenance', 'borrowing', 'purchase_request', 'supply_request', 'purchase_order', 'distribution', 'system'],
+            enum: ['user', 'asset', 'transfer', 'maintenance', 'borrowing', 'purchase_request', 'supply_request', 'purchase_order', 'distribution', 'system'],
             default: 'system',
         },
         actionId: { type: String },

@@ -241,15 +241,17 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
     // Send notification to admins about new transfer request
     const assetName = formatAssetLabel(getTransferAssets(createdItem));
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        type: 'warning',
-        actionType: 'transfer',
-        actionId: String(createdItem._id),
-        title: 'Yêu cầu điều chuyển mới',
-        message: `${actorName} đã tạo yêu cầu điều chuyển ${assetName} từ ${createdItem.fromArea} đến ${createdItem.toArea}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'warning',
+            actionType: 'transfer',
+            actionId: String(createdItem._id),
+            title: 'Yêu cầu điều chuyển mới',
+            message: `${actorName} đã tạo yêu cầu điều chuyển ${assetName} từ ${createdItem.fromArea} đến ${createdItem.toArea}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return sendSerializedItem(
         res,
@@ -281,15 +283,17 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
     // Send notification about approved transfer
     const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        type: 'success',
-        actionType: 'transfer',
-        actionId: String(item._id),
-        title: 'Điều chuyển đã được duyệt',
-        message: `${actorName} đã duyệt điều chuyển ${assetName}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'success',
+            actionType: 'transfer',
+            actionId: String(item._id),
+            title: 'Điều chuyển đã được duyệt',
+            message: `${actorName} đã duyệt điều chuyển ${assetName}`,
+        },
+        { excludeUserIds: [req.userId, String((item as any).createdBy)] }
+    );
 
     // Notify người tạo lệnh
     const createdById = String((item as any).createdBy);
@@ -329,15 +333,17 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
     const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
 
-    await notifyAdmins('notify:new', {
-        type: 'error',
-        actionType: 'transfer',
-        actionId: String(item._id),
-        title: 'Điều chuyển bị từ chối',
-        message: `${actorName} đã từ chối điều chuyển ${assetName}: ${item.rejectReason || 'Không có lý do'}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'error',
+            actionType: 'transfer',
+            actionId: String(item._id),
+            title: 'Điều chuyển bị từ chối',
+            message: `${actorName} đã từ chối điều chuyển ${assetName}: ${item.rejectReason || 'Không có lý do'}`,
+        },
+        { excludeUserIds: [req.userId, String((item as any).createdBy)] }
+    );
 
     // Notify người tạo lệnh
     const createdById = String((item as any).createdBy);
@@ -411,15 +417,17 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
     const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
 
-    await notifyAdmins('notify:new', {
-        type: 'success',
-        actionType: 'transfer',
-        actionId: String(item._id),
-        title: 'Điều chuyển hoàn tất',
-        message: `${actorName} đã hoàn tất điều chuyển ${assetName} đến ${item.toArea || toPlantName}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'success',
+            actionType: 'transfer',
+            actionId: String(item._id),
+            title: 'Điều chuyển hoàn tất',
+            message: `${actorName} đã hoàn tất điều chuyển ${assetName} đến ${item.toArea || toPlantName}`,
+        },
+        { excludeUserIds: [req.userId, String((item as any).createdBy)] }
+    );
 
     // Notify người tạo lệnh
     const createdById = String((item as any).createdBy);
@@ -467,15 +475,17 @@ export const cancelTransfer = async (req: Request, res: Response, next: NextFunc
     const assetName = formatAssetLabel(getTransferAssets(item));
     const actorName = await getActorName(req.userId);
 
-    await notifyAdmins('notify:new', {
-        type: 'warning',
-        actionType: 'transfer',
-        actionId: String(item._id),
-        title: 'Lệnh điều chuyển bị hủy',
-        message: `${actorName} đã hủy lệnh điều chuyển ${assetName}: ${req.body.reason}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'warning',
+            actionType: 'transfer',
+            actionId: String(item._id),
+            title: 'Lệnh điều chuyển bị hủy',
+            message: `${actorName} đã hủy lệnh điều chuyển ${assetName}: ${req.body.reason}`,
+        },
+        { excludeUserIds: [req.userId, String((item as any).createdBy)] }
+    );
 
     return sendSerializedItem(res, item, serializeTransfer, 'Huy dieu chuyen thanh cong');
 };

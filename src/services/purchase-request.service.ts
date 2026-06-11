@@ -247,13 +247,17 @@ export const createPurchaseRequest = async (req: Request, res: Response, next: N
     const createdRequest = await purchaseRequestRepository.findById(String(request._id));
 
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        type: 'info',
-        actionType: 'purchase_request',
-        actionId: String(request._id),
-        title: 'Phiếu đề xuất mua vật tư mới',
-        message: `${actorName} đã tạo phiếu đề xuất ${(createdRequest as any)?.requestCode || ''}`,
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'info',
+            actionType: 'purchase_request',
+            actionId: String(request._id),
+            title: 'Phiếu đề xuất mua vật tư mới',
+            message: `${actorName} đã tạo phiếu đề xuất ${(createdRequest as any)?.requestCode || ''}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return res.status(StatusCodes.CREATED).json(
         customResponse({

@@ -518,13 +518,17 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     const created = await purchaseOrderRepository.findById(createdId);
 
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        type: 'info',
-        actionType: 'purchase_order',
-        actionId: createdId,
-        title: 'Đơn đặt hàng mới',
-        message: `${actorName} đã tạo đơn đặt hàng ${(created as any)?.orderCode || ''}`,
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'info',
+            actionType: 'purchase_order',
+            actionId: createdId,
+            title: 'Đơn đặt hàng mới',
+            message: `${actorName} đã tạo đơn đặt hàng ${(created as any)?.orderCode || ''}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return res.status(StatusCodes.CREATED).json(
         customResponse({
@@ -758,13 +762,17 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
     const updated = await purchaseOrderRepository.findById(String(req.params.id));
 
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        type: 'success',
-        actionType: 'purchase_order',
-        actionId: String(req.params.id),
-        title: 'Đã nhận hàng',
-        message: `${actorName} đã xác nhận nhận hàng cho đơn ${(updated as any)?.orderCode || ''}`,
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'success',
+            actionType: 'purchase_order',
+            actionId: String(req.params.id),
+            title: 'Đã nhận hàng',
+            message: `${actorName} đã xác nhận nhận hàng cho đơn ${(updated as any)?.orderCode || ''}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return res.status(StatusCodes.OK).json(
         customResponse({

@@ -2,6 +2,7 @@ import { emitToUser } from '@/lib/socket';
 import User from '@/models/User';
 import Maintenance from '@/models/Maintenance';
 import Notification from '@/models/Notification';
+import { ROLE_GROUPS } from '@/constant/permissions';
 import { sendWebPushToUser } from '@/services/web-push.service';
 
 /**
@@ -19,25 +20,34 @@ export const getActorName = async (userId?: string | null): Promise<string> => {
     }
 };
 
+type NotifyOptions = {
+    /** Người dùng KHÔNG nhận (vd: chính người vừa thao tác, hoặc người đã được notifyUser riêng). */
+    excludeUserIds?: (string | null | undefined)[];
+};
+
 /**
- * Send notification to all admins/managers
+ * Gửi thông báo cho cấp quản lý: Super Admin + Giám đốc + Quản lý.
+ * Tự khử trùng theo excludeUserIds (thường truyền người thao tác để không tự báo cho mình).
  */
-export const notifyAdmins = async (event: string, data: any) => {
+export const notifyAdmins = async (event: string, data: any, options: NotifyOptions = {}) => {
     try {
-        // Get all admin and manager users
-        const admins = await User.find({
-            role: { $in: ['admin', 'manager'] },
+        const exclude = new Set((options.excludeUserIds ?? []).filter(Boolean).map((id) => String(id)));
+
+        const managers = await User.find({
+            role: { $in: [...ROLE_GROUPS.MANAGEMENT] },
             isDeleted: { $ne: true },
             isActive: true,
-        });
+        }).select('_id');
 
-        // Emit to each admin
-        for (const admin of admins) {
+        let sent = 0;
+        for (const manager of managers) {
+            const managerId = String(manager._id);
+            if (exclude.has(managerId)) continue;
+
             let notificationPayload = data;
-
             if (event === 'notify:new') {
                 const doc = await Notification.create({
-                    userId: admin._id,
+                    userId: manager._id,
                     title: data.title,
                     message: data.message,
                     type: data.type || 'info',
@@ -48,15 +58,17 @@ export const notifyAdmins = async (event: string, data: any) => {
                 notificationPayload = doc.toObject();
             }
 
-            emitToUser(String(admin._id), event, notificationPayload);
+            emitToUser(managerId, event, notificationPayload);
             if (event === 'notify:new') {
-                void sendWebPushToUser(String(admin._id), notificationPayload);
+                void sendWebPushToUser(managerId, notificationPayload);
             }
+            sent += 1;
         }
 
-        console.log(`[Notification] Sent to ${admins.length} admins`);
+        return sent;
     } catch (error) {
-        console.error('[Notification] Error notifying admins:', error);
+        console.error('[Notification] Error notifying managers:', error);
+        return 0;
     }
 };
 
@@ -118,8 +130,6 @@ export const checkAndNotifyOverdueMaintenance = async () => {
             // Update status to overdue
             await Maintenance.findByIdAndUpdate(maintenance._id, { status: 'overdue' });
         }
-
-        console.log(`[Notification] Checked overdue maintenance: ${overdueMaintenances.length} found`);
     } catch (error) {
         console.error('[Notification] Error checking overdue maintenance:', error);
     }

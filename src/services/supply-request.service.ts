@@ -159,13 +159,17 @@ export const createSupplyRequest = async (req: Request, res: Response, next: Nex
     const created = await purchaseRequestRepository.findById(String(request._id));
 
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        type: 'info',
-        actionType: 'supply_request',
-        actionId: String(request._id),
-        title: 'Phiếu đề xuất cấp vật tư mới',
-        message: `${actorName} đã tạo phiếu đề xuất cấp vật tư ${(created as any)?.requestCode || ''}`,
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'info',
+            actionType: 'supply_request',
+            actionId: String(request._id),
+            title: 'Phiếu đề xuất cấp vật tư mới',
+            message: `${actorName} đã tạo phiếu đề xuất cấp vật tư ${(created as any)?.requestCode || ''}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     return res.status(StatusCodes.CREATED).json(
         customResponse({

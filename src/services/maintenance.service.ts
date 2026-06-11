@@ -338,17 +338,17 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
     // Send notification to admins about new maintenance
     const assetName = (createdItem.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        _id: `maintenance-${createdItem._id}`,
-        userId: '',
-        type: 'info',
-        actionType: 'maintenance',
-        actionId: String(createdItem._id),
-        title: 'Bảo trì mới',
-        message: `${actorName} đã tạo phiếu bảo trì mới cho ${assetName}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'info',
+            actionType: 'maintenance',
+            actionId: String(createdItem._id),
+            title: 'Bảo trì mới',
+            message: `${actorName} đã tạo phiếu bảo trì mới cho ${assetName}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     if (updatedAsset) {
         broadcastAssetChange(updatedAsset, 'maintenance-created', ['status', 'lastMaintenanceDate']);
@@ -469,17 +469,17 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
     // Send notification about completed maintenance
     const assetName = (item.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
-    await notifyAdmins('notify:new', {
-        _id: `maintenance-completed-${item._id}`,
-        userId: '',
-        type: 'success',
-        actionType: 'maintenance',
-        actionId: String(item._id),
-        title: 'Bảo trì hoàn tất',
-        message: `${actorName} đã hoàn tất bảo trì ${assetName}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-    });
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'success',
+            actionType: 'maintenance',
+            actionId: String(item._id),
+            title: 'Bảo trì hoàn tất',
+            message: `${actorName} đã hoàn tất bảo trì ${assetName}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     broadcastAssetChange(updatedAsset, 'maintenance-completed', ['status', 'lastMaintenanceDate']);
 
