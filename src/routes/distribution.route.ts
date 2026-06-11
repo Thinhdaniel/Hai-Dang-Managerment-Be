@@ -29,7 +29,7 @@ router.patch('/:id/internal/finalize', requirePlantManager, validateObjectId, va
 // Sub-resource routes before /:id
 router.get('/:id/export-xlsx', validateObjectId, distributionController.exportDistributionXlsx);
 router.patch('/:id/distribute', requireCS1Manager, validateObjectId, distributionController.distributeDistributionRecord);
-router.patch('/:id/confirm', validateObjectId, validator(confirmDistributionSchema), distributionController.confirmDistributionRecord);
+router.patch('/:id/confirm', requirePlantManager, validateObjectId, validator(confirmDistributionSchema), distributionController.confirmDistributionRecord);
 
 // Dynamic /:id routes last
 router.get('/:id', validateObjectId, distributionController.getDistributionRecordById);

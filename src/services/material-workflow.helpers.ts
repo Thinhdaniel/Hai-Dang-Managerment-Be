@@ -22,7 +22,8 @@ export const toId = (value: unknown) => {
     return String(value);
 };
 
-export const isManagerRole = (role?: string) => role === USER_ROLE.ADMIN || role === USER_ROLE.MANAGER;
+export const isManagerRole = (role?: string) =>
+    role === USER_ROLE.ADMIN || role === USER_ROLE.MANAGER || role === USER_ROLE.DIRECTOR;
 
 export const getUserPlantId = (req: Request) => {
     const plantValue =

@@ -6,55 +6,50 @@ import { authenticate } from '@/middlewares/authenticationMiddleware';
 import { authorize } from '@/middlewares/authorizationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import { excelUpload } from '@/middlewares/multerMiddleware';
-import { USER_ROLE } from '@/constant/allowedRoles';
+import { ROLE_GROUPS } from '@/constant/permissions';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.post(
-    '/',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
-    validator(createAssetSchema),
-    assetController.createAsset
-);
+router.post('/', authorize(...ROLE_GROUPS.MANAGEMENT), validator(createAssetSchema), assetController.createAsset);
 router.get('/names', assetController.getAssetNames);
 router.get('/models', assetController.getAssetModels);
 router.get('/types', assetController.getAssetTypes);
 router.post(
     '/import/preview',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     excelUpload.single('file'),
     assetController.previewAssetImportFile
 );
 router.post(
     '/import/confirm',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     excelUpload.single('file'),
     assetController.confirmAssetImportFile
 );
-router.get('/export', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), assetController.exportAssets);
+router.get('/export', authorize(...ROLE_GROUPS.MANAGEMENT), assetController.exportAssets);
 router.get('/', assetController.getAllAssets);
 router.patch(
     '/:id/status',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.FIELD),
     validateObjectId,
     assetController.updateAssetStatus
 );
 router.post(
     '/:id/public-id',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     assetController.ensureAssetPublicId
 );
 router.get('/:id', validateObjectId, assetController.getAssetById);
 router.patch(
     '/:id',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(updateAssetSchema),
     assetController.updateAsset
 );
-router.delete('/:id', authorize(USER_ROLE.ADMIN), validateObjectId, assetController.deleteAsset);
+router.delete('/:id', authorize(...ROLE_GROUPS.ADMIN_ONLY), validateObjectId, assetController.deleteAsset);
 
 export default router;

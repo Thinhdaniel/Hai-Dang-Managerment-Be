@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireProcurementManager, requireProcurementDirector } from '@/middlewares/authenticationMiddleware';
+import { authenticate, requireProcurementManager } from '@/middlewares/authenticationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import * as ctrl from '@/controllers/purchase-order.controller';
@@ -20,8 +20,8 @@ router.get('/', ctrl.getAllPurchaseOrders);
 router.get('/shortages', ctrl.getOutstandingPurchaseShortages);
 router.post('/', validator(createPurchaseOrderSchema), ctrl.createPurchaseOrder);
 router.get('/:id/export-xlsx', validateObjectId, ctrl.exportPurchaseOrderXlsx);
-router.patch('/:id/confirm', requireProcurementDirector, validateObjectId, ctrl.confirmPurchaseOrder);
-router.patch('/:id/receive', requireProcurementDirector, validateObjectId, validator(receivePurchaseOrderSchema), ctrl.receivePurchaseOrder);
+router.patch('/:id/confirm', validateObjectId, ctrl.confirmPurchaseOrder);
+router.patch('/:id/receive', validateObjectId, validator(receivePurchaseOrderSchema), ctrl.receivePurchaseOrder);
 router.patch('/:id/items/:index/link-material', validator(linkPurchaseOrderItemMaterialSchema), ctrl.linkPurchaseOrderItemMaterial);
 router.post('/:id/items/:index/create-material', validator(createPurchaseOrderItemMaterialSchema), ctrl.createMaterialForPurchaseOrderItem);
 router.patch('/:id/items/:index/ignore-inventory', validator(ignorePurchaseOrderItemInventorySchema), ctrl.ignorePurchaseOrderItemInventory);

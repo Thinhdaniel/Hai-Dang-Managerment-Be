@@ -5,7 +5,7 @@ import { createPlantSchema, updatePlantSchema } from '@/validations/plant.valida
 import { authenticate } from '@/middlewares/authenticationMiddleware';
 import { authorize } from '@/middlewares/authorizationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
-import { USER_ROLE } from '@/constant/allowedRoles';
+import { ROLE_GROUPS } from '@/constant/permissions';
 
 const router = Router();
 
@@ -13,7 +13,7 @@ router.use(authenticate);
 
 router.post(
     '/',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.ADMIN_ONLY),
     validator(createPlantSchema),
     plantController.createPlant
 );
@@ -22,11 +22,11 @@ router.get('/with-machine-count', plantController.getPlantsWithMachineCount);
 router.get('/:id', validateObjectId, plantController.getPlantById);
 router.patch(
     '/:id',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.ADMIN_ONLY),
     validateObjectId,
     validator(updatePlantSchema),
     plantController.updatePlant
 );
-router.delete('/:id', authorize(USER_ROLE.ADMIN), validateObjectId, plantController.deletePlant);
+router.delete('/:id', authorize(...ROLE_GROUPS.ADMIN_ONLY), validateObjectId, plantController.deletePlant);
 
 export default router;

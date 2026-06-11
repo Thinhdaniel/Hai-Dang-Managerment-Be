@@ -3,7 +3,7 @@ import { authenticate } from '@/middlewares/authenticationMiddleware';
 import { authorize } from '@/middlewares/authorizationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
-import { USER_ROLE } from '@/constant/allowedRoles';
+import { ROLE_GROUPS } from '@/constant/permissions';
 import * as supplyRequestController from '@/controllers/supply-request.controller';
 import {
     approveSupplyRequestSchema,
@@ -19,10 +19,10 @@ router.use(authenticate);
 // GET danh sách — tất cả roles xem (filter theo plant tự động trong service)
 router.get('/', supplyRequestController.getAllSupplyRequests);
 
-// POST tạo — chỉ Staff và Manager thuộc CS khác (service sẽ chặn CS1)
+// POST tạo — Quản lý trở lên (service sẽ chặn CS1)
 router.post(
     '/',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER, USER_ROLE.STAFF),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validator(createSupplyRequestSchema),
     supplyRequestController.createSupplyRequest
 );
@@ -34,6 +34,7 @@ router.get('/:id', validateObjectId, supplyRequestController.getSupplyRequestByI
 // PUT cập nhật items — CS1 chỉnh sửa SL, chỉ được khi status=pending
 router.put(
     '/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(updateSupplyRequestSchema),
     supplyRequestController.updateSupplyRequest
@@ -42,7 +43,7 @@ router.put(
 // PATCH duyệt (chỉ đổi status, không tạo distribution) — chỉ CS1
 router.patch(
     '/:id/approve',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(approveSupplyRequestSchema),
     supplyRequestController.approveSupplyRequest
@@ -51,15 +52,15 @@ router.patch(
 // PATCH duyệt + cấp phát tự động (legacy, giữ lại) — chỉ CS1
 router.patch(
     '/:id/approve-and-distribute',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     supplyRequestController.approveAndDistribute
 );
 
-// PATCH từ chối — chỉ CS1 (Admin/Manager)
+// PATCH từ chối — chỉ CS1
 router.patch(
     '/:id/reject',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(rejectSupplyRequestSchema),
     supplyRequestController.rejectSupplyRequest

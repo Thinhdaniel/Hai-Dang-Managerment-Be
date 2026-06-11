@@ -12,45 +12,52 @@ import {
     rejectMaintenanceSchema,
     updateMaintenanceSchema,
 } from '@/validations/maintenance.validation';
-import { USER_ROLE } from '@/constant/allowedRoles';
+import { ROLE_GROUPS } from '@/constant/permissions';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.post('/', validator(createMaintenanceSchema), asyncHandler(maintenanceService.createMaintenance));
+router.post(
+    '/',
+    authorize(...ROLE_GROUPS.FIELD),
+    validator(createMaintenanceSchema),
+    asyncHandler(maintenanceService.createMaintenance)
+);
 router.get('/', asyncHandler(maintenanceService.getAllMaintenances));
 router.get('/report', asyncHandler(maintenanceService.getMaintenanceReport));
 router.get('/asset/:assetId', validateObjectId, asyncHandler(maintenanceService.getMaintenanceByAsset));
 router.get('/:id', validateObjectId, asyncHandler(maintenanceService.getMaintenanceById));
 router.patch(
     '/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(updateMaintenanceSchema),
     asyncHandler(maintenanceService.updateMaintenance)
 );
 router.delete(
     '/:id',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     asyncHandler(maintenanceService.deleteMaintenance)
 );
 router.patch(
     '/:id/complete',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(completeMaintenanceSchema),
     asyncHandler(maintenanceService.completeMaintenance)
 );
 router.patch(
     '/:id/approve',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(approveMaintenanceSchema),
     asyncHandler(maintenanceService.approveMaintenance)
 );
 router.patch(
     '/:id/reject',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     validator(rejectMaintenanceSchema),
     asyncHandler(maintenanceService.rejectMaintenance)

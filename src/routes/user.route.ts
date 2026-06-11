@@ -6,28 +6,28 @@ import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import { userService } from '@/services';
 import { createUserSchema, updateUserSchema } from '@/validations/user.validation';
-import { USER_ROLE } from '@/constant/allowedRoles';
+import { ROLE_GROUPS } from '@/constant/permissions';
 
 const router = Router();
 
 router.use(authenticate);
 
 router.get('/me', asyncHandler(userService.getMe));
-router.post('/', authorize(USER_ROLE.ADMIN), validator(createUserSchema), asyncHandler(userService.createUser));
-router.get('/', authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER), asyncHandler(userService.getAllUsers));
+router.post('/', authorize(...ROLE_GROUPS.ADMIN_ONLY), validator(createUserSchema), asyncHandler(userService.createUser));
+router.get('/', authorize(...ROLE_GROUPS.DIRECTOR_UP), asyncHandler(userService.getAllUsers));
 router.get(
     '/:id',
-    authorize(USER_ROLE.ADMIN, USER_ROLE.MANAGER),
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
     validateObjectId,
     asyncHandler(userService.getUserById)
 );
 router.patch(
     '/:id',
-    authorize(USER_ROLE.ADMIN),
+    authorize(...ROLE_GROUPS.ADMIN_ONLY),
     validateObjectId,
     validator(updateUserSchema),
     asyncHandler(userService.updateUser)
 );
-router.delete('/:id', authorize(USER_ROLE.ADMIN), validateObjectId, asyncHandler(userService.deleteUser));
+router.delete('/:id', authorize(...ROLE_GROUPS.ADMIN_ONLY), validateObjectId, asyncHandler(userService.deleteUser));
 
 export default router;
