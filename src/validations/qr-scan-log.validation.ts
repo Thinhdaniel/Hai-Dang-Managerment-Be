@@ -13,6 +13,10 @@ export const createQrScanLogSchema = z.object({
         'transfer_scan',
         'maintenance_quick_create',
         'maintenance_quick_create_success',
+        'borrowing_receive',
+        'borrowing_receive_success',
+        'borrowing_return',
+        'borrowing_return_success',
     ]),
     result: z.enum([
         'resolved',

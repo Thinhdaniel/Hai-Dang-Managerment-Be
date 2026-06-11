@@ -18,6 +18,30 @@ export const getBorrowingById = asyncHandler(async (req: Request, res: Response,
     return await borrowingService.getBorrowingById(req, res, next);
 });
 
+export const getAllBorrowingBatches = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.getAllBorrowingBatches(req, res, next);
+});
+
+export const createBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.createBorrowingBatch(req, res, next);
+});
+
+export const getBorrowingBatchById = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.getBorrowingBatchById(req, res, next);
+});
+
+export const createBorrowingBatchQr = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.createBorrowingBatchQr(req, res, next);
+});
+
+export const receiveBorrowingBatchByQr = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.receiveBorrowingBatchByQr(req, res, next);
+});
+
+export const bulkReturnBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.bulkReturnBorrowingBatch(req, res, next);
+});
+
 export const returnBorrowing = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await borrowingService.returnBorrowing(req, res, next);
 });

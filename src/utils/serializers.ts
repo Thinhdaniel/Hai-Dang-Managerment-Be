@@ -258,6 +258,10 @@ export const serializeBorrowing = (input: any) => {
         borrowing?.assetId && typeof borrowing.assetId === 'object' && borrowing.assetId.name
             ? serializeAsset(borrowing.assetId)
             : undefined;
+    const batch =
+        borrowing?.batchId && typeof borrowing.batchId === 'object' && borrowing.batchId.code
+            ? serializeBorrowingBatch(borrowing.batchId)
+            : undefined;
     const borrower =
         borrowing?.borrowerId && typeof borrowing.borrowerId === 'object' && borrowing.borrowerId.email
             ? serializeUser(borrowing.borrowerId)
@@ -267,23 +271,86 @@ export const serializeBorrowing = (input: any) => {
         id: toId(borrowing),
         assetId: asset?.id ?? toId(borrowing?.assetId),
         asset,
+        batchId: batch?.id ?? toId(borrowing?.batchId),
+        batch,
+        qrLabelId: toId(borrowing?.qrLabelId),
         borrowerId: borrower?.id ?? toId(borrowing?.borrowerId),
         borrower,
         borrowerName: borrowing?.borrowerName ?? borrower?.name,
         type: borrowing?.type,
         borrowTime: toIso(borrowing?.borrowTime),
         returnTime: toIso(borrowing?.returnTime),
+        expectedReturnTime: toIso(borrowing?.expectedReturnTime),
         status: borrowing?.status,
+        partnerMachineCode: borrowing?.partnerMachineCode,
         purpose: borrowing?.purpose,
         partnerName: borrowing?.partnerName,
         location: borrowing?.location,
         cost: borrowing?.cost,
         note: borrowing?.note,
         returnNote: borrowing?.returnNote,
+        receiveCondition: borrowing?.receiveCondition,
+        receiveNote: borrowing?.receiveNote,
+        returnCondition: borrowing?.returnCondition,
+        qrReturnAction: borrowing?.qrReturnAction,
+        qrReturnNote: borrowing?.qrReturnNote,
+        qrRemovedAt: toIso(borrowing?.qrRemovedAt),
+        qrRemovedBy: toId(borrowing?.qrRemovedBy),
+        returnedInBatchAt: toIso(borrowing?.returnedInBatchAt),
         assetStatusBefore: borrowing?.assetStatusBefore,
         createdBy: toId(borrowing?.createdBy),
         returnedBy: toId(borrowing?.returnedBy),
         createdAt: toIso(borrowing?.createdAt),
         updatedAt: toIso(borrowing?.updatedAt),
+    };
+};
+
+export const serializeBorrowingBatch = (input: any) => {
+    const batch = toPlain(input);
+    const plant =
+        batch?.plantId && typeof batch.plantId === 'object' && batch.plantId.name
+            ? serializePlant(batch.plantId)
+            : undefined;
+    const qrBatch =
+        batch?.qrBatchId && typeof batch.qrBatchId === 'object' && batch.qrBatchId.code
+            ? toPlain(batch.qrBatchId)
+            : undefined;
+
+    return {
+        id: toId(batch),
+        code: batch?.code,
+        type: batch?.type,
+        status: batch?.status,
+        partnerName: batch?.partnerName,
+        contractNo: batch?.contractNo,
+        plantId: plant?.id ?? toId(batch?.plantId),
+        plant,
+        area: batch?.area,
+        borrowTime: toIso(batch?.borrowTime),
+        expectedReturnTime: toIso(batch?.expectedReturnTime),
+        plannedQuantity: batch?.plannedQuantity ?? 0,
+        qrBatchId: qrBatch ? toId(qrBatch) : toId(batch?.qrBatchId),
+        qrBatch: qrBatch
+            ? {
+                  id: toId(qrBatch),
+                  code: qrBatch.code,
+                  quantity: qrBatch.quantity,
+                  status: qrBatch.status,
+                  printedAt: toIso(qrBatch.printedAt),
+              }
+            : undefined,
+        labelPolicy: batch?.labelPolicy ?? 'temporary',
+        removeQrOnReturn: batch?.removeQrOnReturn !== false,
+        note: batch?.note,
+        receivedCount: batch?.receivedCount,
+        activeCount: batch?.activeCount,
+        returnedCount: batch?.returnedCount,
+        unusedQrCount: batch?.unusedQrCount,
+        createdBy: toId(batch?.createdBy),
+        updatedBy: toId(batch?.updatedBy),
+        closedBy: toId(batch?.closedBy),
+        closedAt: toIso(batch?.closedAt),
+        createdAt: toIso(batch?.createdAt),
+        updatedAt: toIso(batch?.updatedAt),
     };
 };

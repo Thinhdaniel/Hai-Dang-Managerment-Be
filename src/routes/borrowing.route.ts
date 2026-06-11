@@ -4,14 +4,61 @@ import { authorize } from '@/middlewares/authorizationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import { borrowingController } from '@/controllers';
-import { createBorrowingSchema, returnBorrowingSchema } from '@/validations/borrowing.validation';
+import {
+    bulkReturnBorrowingBatchSchema,
+    createBorrowingBatchQrSchema,
+    createBorrowingBatchSchema,
+    createBorrowingSchema,
+    receiveBorrowingBatchByQrSchema,
+    returnBorrowingSchema,
+} from '@/validations/borrowing.validation';
 import { ROLE_GROUPS } from '@/constant/permissions';
 
 const router = Router();
 
 router.use(authenticate);
 
-router.post('/', authorize(...ROLE_GROUPS.MANAGEMENT), validator(createBorrowingSchema), borrowingController.createBorrowing);
+router.get('/batches', authorize(...ROLE_GROUPS.MANAGEMENT), borrowingController.getAllBorrowingBatches);
+router.post(
+    '/batches',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(createBorrowingBatchSchema),
+    borrowingController.createBorrowingBatch
+);
+router.get(
+    '/batches/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    borrowingController.getBorrowingBatchById
+);
+router.post(
+    '/batches/:id/qr-batch',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    validator(createBorrowingBatchQrSchema),
+    borrowingController.createBorrowingBatchQr
+);
+router.post(
+    '/batches/:id/receive-by-qr',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    validator(receiveBorrowingBatchByQrSchema),
+    borrowingController.receiveBorrowingBatchByQr
+);
+router.post(
+    '/batches/:id/bulk-return',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    validator(bulkReturnBorrowingBatchSchema),
+    borrowingController.bulkReturnBorrowingBatch
+);
+
+router.post(
+    '/',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(createBorrowingSchema),
+    borrowingController.createBorrowing
+);
 router.get('/', borrowingController.getAllBorrowings);
 router.get('/asset/:assetId', validateObjectId, borrowingController.getBorrowingByAsset);
 router.get('/:id', validateObjectId, borrowingController.getBorrowingById);

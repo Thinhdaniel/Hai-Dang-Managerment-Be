@@ -18,8 +18,11 @@ export const WORKFLOW_POPULATE = {
     ],
     borrowing: [
         { path: 'assetId', populate: ['brandId', 'plantId'] },
+        { path: 'batchId', populate: ['plantId', 'qrBatchId'] },
         { path: 'borrowerId', populate: ['plantId'] },
+        'qrLabelId',
     ],
+    borrowingBatch: ['plantId', 'qrBatchId'],
 } as const;
 
 export const applyPopulate = (query: any, options: readonly PopulateOption[]) => {

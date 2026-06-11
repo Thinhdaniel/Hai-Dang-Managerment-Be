@@ -19,6 +19,7 @@ import {
     getMaterialsMap,
     getSuppliersMap,
 } from '@/services/material-domain.helpers';
+import { matchMaterialsForItems } from '@/services/material-match.helpers';
 import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
@@ -28,9 +29,17 @@ import mongoose from 'mongoose';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
-/** Build items khÃ´ng cáº§n materialId tá»“n táº¡i trong DB */
-const buildFreeFormItems = (rawItems: any[]) => {
-    return rawItems.map((item: any) => {
+/** Build items cho phép vật tư mới, nhưng tự khớp danh mục khi đủ chắc chắn. */
+const buildFreeFormItems = async (rawItems: any[]) => {
+    const matches = await matchMaterialsForItems(rawItems);
+
+    return rawItems.map((item: any, index: number) => {
+        const match = matches[index];
+        if (item.materialId && match.reason === 'missing_explicit_id') {
+            throw new BadRequestError(`Dong ${index + 1}: vat tu da chon khong ton tai hoac da ngung su dung`);
+        }
+
+        const matchedMaterial = match.status === 'matched' ? match.material : undefined;
         const qty = Number(item.quantityOrdered ?? item.quantityRequested ?? 0);
         const price = Number(item.unitPrice ?? 0);
         const totalPrice = Number((qty * price).toFixed(2));
@@ -41,9 +50,9 @@ const buildFreeFormItems = (rawItems: any[]) => {
         const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
 
         return {
-            materialId: item.materialId || undefined,
-            materialName: item.materialName?.trim() || '',
-            unit: item.unit?.trim() || '',
+            materialId: matchedMaterial?._id || item.materialId || undefined,
+            materialName: matchedMaterial?.name || item.materialName?.trim() || '',
+            unit: matchedMaterial?.unit || item.unit?.trim() || '',
             proposedBy: item.proposedBy?.trim() || '',
             purpose: item.purpose?.trim() || '',
             plantId: item.plantId || undefined,
@@ -59,7 +68,12 @@ const buildFreeFormItems = (rawItems: any[]) => {
             supplierId: item.supplierId || undefined,
             supplierName: item.supplierName?.trim() || undefined,
             supplierNote: item.supplierNote?.trim() || undefined,
-            catalogStatus: item.catalogStatus || (item.materialId ? 'matched' : 'unmatched'),
+            catalogStatus:
+                item.catalogStatus === 'ignored'
+                    ? 'ignored'
+                    : matchedMaterial
+                      ? 'matched'
+                      : item.catalogStatus || 'unmatched',
             estimatedPrice: item.estimatedPrice != null ? Number(item.estimatedPrice) : undefined,
             estimatedTotal: item.estimatedTotal != null ? Number(item.estimatedTotal) : undefined,
             note: item.note?.trim() || undefined,
@@ -76,7 +90,12 @@ const buildPurchaseRequestFilter = (query: Request['query'], req: Request) => {
     const regex = buildSearchRegex(query.search, { flexibleWhitespace: true });
 
     if (regex) {
-        filter.$or = [{ requestCode: regex }, { note: regex }, { 'items.materialName': regex }, { 'items.supplierName': regex }];
+        filter.$or = [
+            { requestCode: regex },
+            { note: regex },
+            { 'items.materialName': regex },
+            { 'items.supplierName': regex },
+        ];
     }
 
     if (query.status) {
@@ -155,12 +174,24 @@ const resolvePurchaseRequestPlantId = async (req: Request, plantId?: string) => 
 const buildApprovalItems = async (request: any, overrideItems?: any[]) => {
     // Với free-form items (không có materialId), chỉ cần giữ nguyên items hiện tại
     // và cập nhật quantityApproved nếu có override
-    const items = (request.items ?? []).map((item: any, idx: number) => {
-        const plainItem = typeof item.toObject === 'function' ? item.toObject() : item;
+    const plainItems = (request.items ?? []).map((item: any) =>
+        typeof item.toObject === 'function' ? item.toObject() : item
+    );
+    const matches = await matchMaterialsForItems(plainItems);
+    const items = plainItems.map((plainItem: any, idx: number) => {
         const override = overrideItems?.[idx];
+        const matchedMaterial = matches[idx]?.status === 'matched' ? matches[idx].material : undefined;
         return {
             ...plainItem,
-            catalogStatus: plainItem.catalogStatus || (plainItem.materialId ? 'matched' : 'unmatched'),
+            materialId: matchedMaterial?._id || plainItem.materialId,
+            materialName: matchedMaterial?.name || plainItem.materialName,
+            unit: matchedMaterial?.unit || plainItem.unit,
+            catalogStatus:
+                plainItem.catalogStatus === 'ignored'
+                    ? 'ignored'
+                    : matchedMaterial
+                      ? 'matched'
+                      : plainItem.catalogStatus || (plainItem.materialId ? 'matched' : 'unmatched'),
             quantityApproved: override?.quantityApproved ?? plainItem.quantityRequested,
         };
     });
@@ -223,10 +254,10 @@ export const createPurchaseRequest = async (req: Request, res: Response, next: N
     });
 
     const now = new Date();
-    const requestMonth = req.body.requestMonth ?? (now.getMonth() + 1);
+    const requestMonth = req.body.requestMonth ?? now.getMonth() + 1;
     const requestYear = req.body.requestYear ?? now.getFullYear();
 
-    const items = buildFreeFormItems(req.body.items);
+    const items = await buildFreeFormItems(req.body.items);
     const totalWithVat = items.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0);
     const totalEstimated = items.reduce((s: number, i: any) => s + (i.totalPrice ?? i.estimatedTotal ?? 0), 0);
 
@@ -282,15 +313,19 @@ export const updatePurchaseRequest = async (req: Request, res: Response, next: N
         throw new BadRequestError('Chi co the cap nhat phieu de xuat dang cho duyet hoac nhap');
     }
 
-    const plantId = req.body.plantId ? await resolvePurchaseRequestPlantId(req, req.body.plantId) : toId(request.plantId);
+    const plantId = req.body.plantId
+        ? await resolvePurchaseRequestPlantId(req, req.body.plantId)
+        : toId(request.plantId);
     const nextNote = req.body.note !== undefined ? req.body.note?.trim() || undefined : request.note;
     let nextItems: any = request.items;
     let totalEstimated = Number(request.totalEstimated ?? 0);
     let totalWithVat = Number((request as any).totalWithVat ?? 0);
 
     if (req.body.items) {
-        nextItems = buildFreeFormItems(req.body.items);
-        totalEstimated = Number(nextItems.reduce((s: number, i: any) => s + (i.totalPrice ?? i.estimatedTotal ?? 0), 0).toFixed(2));
+        nextItems = await buildFreeFormItems(req.body.items);
+        totalEstimated = Number(
+            nextItems.reduce((s: number, i: any) => s + (i.totalPrice ?? i.estimatedTotal ?? 0), 0).toFixed(2)
+        );
         totalWithVat = Number(nextItems.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0).toFixed(2));
     }
 
@@ -455,7 +490,10 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
                 throw new BadRequestError('Chi co the tong hop cac phieu de xuat da duyet');
             }
 
-            const resolvedSupplierId = ensureSingleSupplierForItems(requests, req.body.supplierId ? String(req.body.supplierId) : undefined);
+            const resolvedSupplierId = ensureSingleSupplierForItems(
+                requests,
+                req.body.supplierId ? String(req.body.supplierId) : undefined
+            );
             const supplier = resolvedSupplierId
                 ? await Supplier.findOne({
                       _id: resolvedSupplierId,
@@ -561,7 +599,6 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
         await session.endSession();
     }
 };
-
 
 export const exportPurchaseRequestXlsx = async (req: Request, res: Response, next: NextFunction) => {
     const { generatePurchaseRequestXlsx } = await import('@/utils/generatePurchaseRequestXlsx');

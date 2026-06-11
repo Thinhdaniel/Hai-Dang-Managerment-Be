@@ -29,6 +29,13 @@ export const borrowingRepository = {
         });
     },
 
+    findByBatchId(batchId: string) {
+        return applyPopulate(Borrowing.find({ batchId, isDeleted: { $ne: true } }), WORKFLOW_POPULATE.borrowing).sort({
+            borrowTime: -1,
+            createdAt: -1,
+        });
+    },
+
     findMany(filter: BorrowingFilter, { limit, skip, sort = '-createdAt' }: FindManyOptions = {}) {
         let query = applyPopulate(Borrowing.find(filter), WORKFLOW_POPULATE.borrowing).sort(sort);
 
