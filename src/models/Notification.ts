@@ -58,6 +58,8 @@ const NotificationSchema = new mongoose.Schema<INotification>(
 
 NotificationSchema.index({ userId: 1, createdAt: -1 });
 NotificationSchema.index({ isRead: 1 });
+// TTL: Mongo tự xoá thông báo sau 90 ngày để collection không phình vô hạn
+NotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 
 const Notification = mongoose.model<INotification>('Notification', NotificationSchema);
 
