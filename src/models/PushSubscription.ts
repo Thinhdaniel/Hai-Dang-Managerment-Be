@@ -12,8 +12,13 @@ export interface IPushSubscription {
     deviceName?: string;
     userAgent?: string;
     platform?: string;
+    trusted: boolean;
     isActive: boolean;
     lastSeenAt?: Date;
+    lastConfirmedAt?: Date;
+    lastSentAt?: Date;
+    lastSuccessAt?: Date;
+    lastFailureAt?: Date;
     failureCount: number;
     revokedAt?: Date | null;
     createdAt: Date;
@@ -42,8 +47,13 @@ const PushSubscriptionSchema = new mongoose.Schema<IPushSubscription>(
         deviceName: { type: String, trim: true },
         userAgent: { type: String, trim: true },
         platform: { type: String, trim: true },
+        trusted: { type: Boolean, default: true, index: true },
         isActive: { type: Boolean, default: true, index: true },
         lastSeenAt: { type: Date, default: Date.now },
+        lastConfirmedAt: { type: Date, default: Date.now },
+        lastSentAt: { type: Date },
+        lastSuccessAt: { type: Date },
+        lastFailureAt: { type: Date },
         failureCount: { type: Number, default: 0 },
         revokedAt: { type: Date, default: null },
     },
@@ -54,6 +64,7 @@ const PushSubscriptionSchema = new mongoose.Schema<IPushSubscription>(
 );
 
 PushSubscriptionSchema.index({ userId: 1, isActive: 1, updatedAt: -1 });
+PushSubscriptionSchema.index({ userId: 1, trusted: 1, lastConfirmedAt: -1 });
 
 const PushSubscription = mongoose.model<IPushSubscription>('PushSubscription', PushSubscriptionSchema);
 
