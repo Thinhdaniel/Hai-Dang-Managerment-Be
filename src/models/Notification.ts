@@ -11,6 +11,7 @@ export type NotificationActionType =
     | 'supply_request'
     | 'purchase_order'
     | 'distribution'
+    | 'chat'
     | 'system';
 
 export interface INotification {
@@ -43,7 +44,19 @@ const NotificationSchema = new mongoose.Schema<INotification>(
         },
         actionType: {
             type: String,
-            enum: ['user', 'asset', 'transfer', 'maintenance', 'borrowing', 'purchase_request', 'supply_request', 'purchase_order', 'distribution', 'system'],
+            enum: [
+                'user',
+                'asset',
+                'transfer',
+                'maintenance',
+                'borrowing',
+                'purchase_request',
+                'supply_request',
+                'purchase_order',
+                'distribution',
+                'chat',
+                'system',
+            ],
             default: 'system',
         },
         actionId: { type: String },

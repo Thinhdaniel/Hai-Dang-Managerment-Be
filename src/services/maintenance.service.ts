@@ -18,6 +18,7 @@ import {
     sendSuccess,
 } from './service.helpers';
 import { notifyAdmins, getActorName } from './notification.helper';
+import { appendMaintenanceSystemMessage } from './chat.service';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -349,6 +350,11 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
         },
         { excludeUserIds: [req.userId] }
     );
+    void appendMaintenanceSystemMessage(
+        String(createdItem._id),
+        `${actorName} đã tạo phiếu bảo trì cho ${assetName}.`,
+        req.userId
+    );
 
     if (updatedAsset) {
         broadcastAssetChange(updatedAsset, 'maintenance-created', ['status', 'lastMaintenanceDate']);
@@ -480,6 +486,11 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
         },
         { excludeUserIds: [req.userId] }
     );
+    void appendMaintenanceSystemMessage(
+        String(item._id),
+        `${actorName} đã hoàn tất bảo trì ${assetName}.`,
+        req.userId
+    );
 
     broadcastAssetChange(updatedAsset, 'maintenance-completed', ['status', 'lastMaintenanceDate']);
 
@@ -517,6 +528,13 @@ export const approveMaintenance = async (req: Request, res: Response, next: Next
         .populate('plantId');
 
     const populated = await fetchPopulatedMaintenance(String(item._id));
+    const actorName = await getActorName(req.userId);
+    const assetName = ((populated as any).assetId as any)?.name || 'Thiết bị';
+    void appendMaintenanceSystemMessage(
+        String(item._id),
+        `${actorName} đã duyệt phiếu sửa ngoài cho ${assetName}.`,
+        req.userId
+    );
     broadcastAssetChange(updatedAsset, 'maintenance-approved', ['status']);
     return sendSerializedItem(res, populated, serializeMaintenance, 'Da duyet phieu sua ngoai');
 };
@@ -542,6 +560,13 @@ export const rejectMaintenance = async (req: Request, res: Response, next: NextF
     await item.save();
 
     const populated = await fetchPopulatedMaintenance(String(item._id));
+    const actorName = await getActorName(req.userId);
+    const assetName = ((populated as any).assetId as any)?.name || 'Thiết bị';
+    void appendMaintenanceSystemMessage(
+        String(item._id),
+        `${actorName} đã từ chối phiếu sửa ngoài cho ${assetName}. Lý do: ${req.body.rejectReason}`,
+        req.userId
+    );
     return sendSerializedItem(res, populated, serializeMaintenance, 'Da tu choi phieu sua ngoai');
 };
 

@@ -21,6 +21,24 @@ export const imageUpload = createMemoryUpload(
     UPLOAD_MESSAGES.INVALID_FILE_TYPE
 );
 
+export const chatImageUpload = multer({
+    storage,
+    fileFilter: (req, file, cb) => {
+        const validExtension = /\.(jpg|jpeg|png|webp)$/i.test(file.originalname);
+        const validMime = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+
+        if (!validExtension || !validMime) {
+            return cb(new BadRequestError(UPLOAD_MESSAGES.INVALID_FILE_TYPE));
+        }
+
+        cb(null, true);
+    },
+    limits: {
+        fileSize: 8 * 1024 * 1024,
+        files: 4,
+    },
+});
+
 export const excelUpload = createMemoryUpload(
     /\.(xlsx|xls)$/i,
     'Chi chap nhan file Excel co duoi XLSX hoac XLS'

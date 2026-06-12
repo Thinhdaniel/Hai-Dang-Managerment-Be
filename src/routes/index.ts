@@ -25,6 +25,7 @@ import aiHelpRoutes from './ai-help.route';
 import reportRoutes from './report.route';
 import qrLabelRoutes from './qr-label.route';
 import qrScanLogRoutes from './qr-scan-log.route';
+import chatRoutes from './chat.route';
 
 const router = Router();
 
@@ -53,5 +54,6 @@ router.use('/ai', aiHelpRoutes);
 router.use('/reports', reportRoutes);
 router.use('/qr-labels', qrLabelRoutes);
 router.use('/qr-scan-logs', qrScanLogRoutes);
+router.use('/chat', chatRoutes);
 
 export default router;
