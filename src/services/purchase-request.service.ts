@@ -21,6 +21,7 @@ import {
 } from '@/services/material-domain.helpers';
 import { matchMaterialsForItems } from '@/services/material-match.helpers';
 import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
+import { appendWorkflowSystemMessage } from '@/services/chat.service';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -290,6 +291,16 @@ export const createPurchaseRequest = async (req: Request, res: Response, next: N
         { excludeUserIds: [req.userId] }
     );
 
+    // Phiếu nháp chưa gửi duyệt thì chưa mở thread trao đổi
+    if ((createdRequest as any)?.status !== 'draft') {
+        void appendWorkflowSystemMessage(
+            'purchase_request',
+            String(request._id),
+            `${actorName} đã tạo phiếu đề xuất mua vật tư ${(createdRequest as any)?.requestCode || ''}.`,
+            req.userId
+        );
+    }
+
     return res.status(StatusCodes.CREATED).json(
         customResponse({
             data: serializePurchaseRequest(createdRequest),
@@ -405,6 +416,13 @@ export const approvePurchaseRequest = async (req: Request, res: Response, next: 
         message: `${actorName} đã duyệt phiếu ${(request as any).requestCode || ''}`,
     });
 
+    void appendWorkflowSystemMessage(
+        'purchase_request',
+        String(req.params.id),
+        `${actorName} đã duyệt phiếu đề xuất ${(request as any).requestCode || ''}.`,
+        req.userId
+    );
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializePurchaseRequest(approvedRequest),
@@ -441,6 +459,13 @@ export const rejectPurchaseRequest = async (req: Request, res: Response, next: N
         title: 'Phiếu đề xuất bị từ chối',
         message: `${actorName} đã từ chối phiếu ${(request as any).requestCode || ''}${req.body.reason ? ': ' + req.body.reason : ''}`,
     });
+
+    void appendWorkflowSystemMessage(
+        'purchase_request',
+        String(req.params.id),
+        `${actorName} đã từ chối phiếu đề xuất ${(request as any).requestCode || ''}.${req.body.reason ? ` Lý do: ${req.body.reason}` : ''}`,
+        req.userId
+    );
 
     return res.status(StatusCodes.OK).json(
         customResponse({

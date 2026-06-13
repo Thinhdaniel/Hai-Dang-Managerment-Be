@@ -4,7 +4,10 @@ import { BadRequestError, NotFoundError, UnAuthorizedError } from '@/errors/cust
 import { emitToUser } from '@/lib/socket';
 import ChatConversation, { type IChatConversation } from '@/models/ChatConversation';
 import ChatMessage, { type IChatAttachment, type IChatMessage } from '@/models/ChatMessage';
+import DistributionRecord from '@/models/DistributionRecord';
 import Maintenance from '@/models/Maintenance';
+import PurchaseRequest from '@/models/PurchaseRequest';
+import Transfer from '@/models/Transfer';
 import User from '@/models/User';
 import { getUserPlantId, isManagerRole, toId } from '@/services/material-workflow.helpers';
 import { sendWebPushToUser } from '@/services/web-push.service';
@@ -19,7 +22,18 @@ const MAX_CHAT_USERS = 30;
 const MAX_CONVERSATION_PARTICIPANTS = 25;
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_CHAT_ATTACHMENTS = 4;
-const CONTEXT_TYPES = ['maintenance'] as const;
+const CONTEXT_TYPES = ['maintenance', 'transfer', 'purchase_request', 'supply_request', 'distribution'] as const;
+export type WorkflowContextType = (typeof CONTEXT_TYPES)[number];
+
+// Ngữ cảnh chung cho mọi loại phiếu có thread trao đổi
+type WorkflowContext = {
+    title: string;
+    label: string;
+    path: string;
+    plantId?: string; // cơ sở chính gắn vào conversation.plantId
+    plantIds: string[]; // mọi cơ sở liên quan: quyết định quản lý nào được vào + quyền truy cập
+    creatorId?: string;
+};
 
 cloudinary.config(cloudinaryConfig);
 
@@ -42,7 +56,9 @@ const getUserDisplayName = (user: any) => user?.fullname || user?.name || user?.
 const buildMaintenanceCode = (maintenance: any) => {
     const baseDate = maintenance?.createdAt || maintenance?.startDate || new Date();
     const year = new Date(baseDate).getFullYear();
-    return `MNT-${year}-${String(maintenance?._id ?? maintenance?.id ?? '').slice(-5).toUpperCase()}`;
+    return `MNT-${year}-${String(maintenance?._id ?? maintenance?.id ?? '')
+        .slice(-5)
+        .toUpperCase()}`;
 };
 
 const getPlantSummary = (plant: any) => {
@@ -89,9 +105,42 @@ const getConversationTitle = (conversation: IChatConversation | any, currentUser
     return 'Tin nhắn nội bộ';
 };
 
+// Route FE tương ứng từng loại phiếu — luôn derive từ type + id để path lưu cũ trong DB không gây link hỏng
+const buildWorkflowPath = (type: WorkflowContextType, id: string): string => {
+    switch (type) {
+        case 'maintenance':
+            return `/maintenances?maintenance=${id}`;
+        case 'transfer':
+            return `/transfers/${id}`;
+        case 'purchase_request':
+            return `/materials/purchase-requests?request=${id}`;
+        case 'supply_request':
+            return `/materials/supply-requests?request=${id}`;
+        case 'distribution':
+            return `/materials/distributions?record=${id}`;
+    }
+};
+
+const serializeContext = (context: any) => {
+    if (!context?.type) return undefined;
+
+    const id = context.id ? String(context.id) : undefined;
+    const isKnownType = CONTEXT_TYPES.includes(context.type);
+
+    return {
+        type: context.type,
+        id,
+        label: context.label,
+        path: id && isKnownType ? buildWorkflowPath(context.type as WorkflowContextType, id) : context.path,
+    };
+};
+
 const serializeConversation = (conversation: IChatConversation | any, currentUserId: string) => {
     const state = getParticipantState(conversation, currentUserId);
-    const plant = conversation?.plantId && typeof conversation.plantId === 'object' ? getPlantSummary(conversation.plantId) : undefined;
+    const plant =
+        conversation?.plantId && typeof conversation.plantId === 'object'
+            ? getPlantSummary(conversation.plantId)
+            : undefined;
 
     return {
         id: toId(conversation),
@@ -99,7 +148,7 @@ const serializeConversation = (conversation: IChatConversation | any, currentUse
         title: getConversationTitle(conversation, currentUserId),
         plantId: plant?.id ?? toId(conversation?.plantId),
         plant,
-        context: conversation.context,
+        context: serializeContext(conversation.context),
         participants: Array.isArray(conversation.participantIds)
             ? conversation.participantIds.map(serializeChatUser).filter((user: any) => user.id)
             : [],
@@ -304,21 +353,21 @@ const uploadChatImage = (file: Express.Multer.File): Promise<IChatAttachment> =>
         streamifier.createReadStream(file.buffer).pipe(uploadStream);
     });
 
-const resolveMaintenanceContext = async (maintenanceId: string, req?: Request) => {
-    if (!mongoose.Types.ObjectId.isValid(maintenanceId)) {
-        throw new NotFoundError('Khong tim thay phieu bao tri');
-    }
+const buildWorkflowCode = (prefix: string, doc: any) => {
+    const baseDate = doc?.createdAt || new Date();
+    const year = new Date(baseDate).getFullYear();
+    return `${prefix}-${year}-${String(doc?._id ?? '')
+        .slice(-5)
+        .toUpperCase()}`;
+};
 
+const resolveMaintenanceContext = async (maintenanceId: string): Promise<WorkflowContext> => {
     const maintenance = await Maintenance.findOne({ _id: maintenanceId, isDeleted: { $ne: true } })
         .populate({
             path: 'assetId',
-            populate: [
-                { path: 'brandId' },
-                { path: 'plantId', select: 'name code' },
-            ],
+            populate: [{ path: 'brandId' }, { path: 'plantId', select: 'name code' }],
         })
         .populate('plantId', 'name code')
-        .populate('createdBy', 'fullname username email role avatarUrl plantId isActive')
         .lean();
 
     if (!maintenance) {
@@ -327,38 +376,157 @@ const resolveMaintenanceContext = async (maintenanceId: string, req?: Request) =
 
     const asset = (maintenance as any).assetId;
     const plantId = toId((maintenance as any).plantId) ?? toId(asset?.plantId);
-    const currentUserPlantId = req ? getUserPlantId(req) : undefined;
-    const currentUserId = req?.userId;
-    const isCreator = currentUserId && toId((maintenance as any).createdBy) === currentUserId;
-    const samePlant = Boolean(plantId && currentUserPlantId && plantId === currentUserPlantId);
-
-    if (req && !isManagerRole(req.role) && !isCreator && !samePlant) {
-        throw new UnAuthorizedError('Ban khong co quyen trao doi tren phieu bao tri nay');
-    }
-
     const code = buildMaintenanceCode(maintenance);
     const assetName = asset?.name || 'Máy chưa xác định';
     const machineCode = asset?.machineCode;
 
     return {
-        maintenance,
-        asset,
-        plantId,
-        code,
         title: `Bảo trì ${machineCode || assetName}`,
         label: `${code} · ${assetName}`,
-        path: `/maintenances?maintenance=${maintenanceId}`,
+        path: buildWorkflowPath('maintenance', maintenanceId),
+        plantId,
+        plantIds: plantId ? [plantId] : [],
+        creatorId: toId((maintenance as any).createdBy),
     };
 };
 
-const getMaintenanceParticipantIds = async (maintenanceContext: Awaited<ReturnType<typeof resolveMaintenanceContext>>, actorId?: string) => {
-    const participantIds = normalizeIds(
-        [
-            actorId,
-            toId((maintenanceContext.maintenance as any).createdBy),
-        ],
-        undefined
+const resolveTransferContext = async (transferId: string): Promise<WorkflowContext> => {
+    const transfer = await Transfer.findOne({ _id: transferId, isDeleted: { $ne: true } })
+        .populate('assetId', 'name machineCode')
+        .populate('assetIds', 'name machineCode')
+        .populate('fromPlantId', 'name code')
+        .populate('toPlantId', 'name code')
+        .lean();
+
+    if (!transfer) {
+        throw new NotFoundError('Khong tim thay lenh dieu chuyen');
+    }
+
+    const record = transfer as any;
+    const assets =
+        Array.isArray(record.assetIds) && record.assetIds.length ? record.assetIds : [record.assetId].filter(Boolean);
+    const firstAsset = assets[0];
+    const assetLabel =
+        assets.length > 1 ? `${assets.length} máy` : firstAsset?.machineCode || firstAsset?.name || 'máy';
+    const code = buildWorkflowCode('DC', record);
+    const fromName = record.fromPlantId?.name || 'Cơ sở đi';
+    const toName = record.toPlantId?.name || 'Cơ sở nhận';
+    const plantIds = Array.from(
+        new Set([toId(record.fromPlantId), toId(record.toPlantId)].filter(Boolean) as string[])
     );
+
+    return {
+        title: `Điều chuyển ${assetLabel}`,
+        label: `${code} · ${fromName} → ${toName}`,
+        path: buildWorkflowPath('transfer', transferId),
+        plantId: plantIds[0],
+        plantIds,
+        creatorId: toId(record.createdBy),
+    };
+};
+
+const resolvePurchaseRequestContext = async (
+    type: 'purchase_request' | 'supply_request',
+    requestId: string
+): Promise<WorkflowContext> => {
+    const request = await PurchaseRequest.findOne({ _id: requestId, isDeleted: { $ne: true } })
+        .populate('plantId', 'name code')
+        .populate('fromPlantId', 'name code')
+        .populate('toPlantId', 'name code')
+        .lean();
+
+    if (!request) {
+        throw new NotFoundError('Khong tim thay phieu de xuat');
+    }
+
+    const record = request as any;
+    const isSupply = type === 'supply_request';
+    const expectedRequestType = isSupply ? 'supply_request' : 'purchase';
+    if ((record.requestType ?? 'purchase') !== expectedRequestType) {
+        throw new NotFoundError('Khong tim thay phieu de xuat');
+    }
+
+    const code = record.requestCode || buildWorkflowCode(isSupply ? 'YCVT' : 'DXM', record);
+    const plantName = record.plantId?.name || record.fromPlantId?.name || 'Cơ sở';
+    const plantIds = Array.from(
+        new Set([toId(record.plantId), toId(record.fromPlantId), toId(record.toPlantId)].filter(Boolean) as string[])
+    );
+
+    return {
+        title: isSupply ? `Yêu cầu vật tư ${code}` : `Đề xuất mua ${code}`,
+        label: `${code} · ${plantName}`,
+        path: buildWorkflowPath(type, requestId),
+        plantId: toId(record.plantId) ?? plantIds[0],
+        plantIds,
+        creatorId: toId(record.requestedBy),
+    };
+};
+
+const resolveDistributionContext = async (recordId: string): Promise<WorkflowContext> => {
+    const distribution = await DistributionRecord.findOne({ _id: recordId, isDeleted: { $ne: true } })
+        .populate('fromPlantId', 'name code')
+        .populate('toPlantId', 'name code')
+        .lean();
+
+    if (!distribution) {
+        throw new NotFoundError('Khong tim thay phieu cap phat');
+    }
+
+    const record = distribution as any;
+    const code = record.distributionCode || buildWorkflowCode('CP', record);
+    const routeLabel =
+        [record.fromPlantId?.name, record.toPlantId?.name].filter(Boolean).join(' → ') || 'Cấp phát nội bộ';
+    const plantIds = Array.from(
+        new Set([toId(record.fromPlantId), toId(record.toPlantId)].filter(Boolean) as string[])
+    );
+
+    return {
+        title: `Cấp phát ${code}`,
+        label: `${code} · ${routeLabel}`,
+        path: buildWorkflowPath('distribution', recordId),
+        plantId: toId(record.toPlantId) ?? plantIds[0],
+        plantIds,
+        creatorId: toId(record.distributedBy),
+    };
+};
+
+const assertWorkflowAccess = (req: Request | undefined, context: WorkflowContext) => {
+    if (!req || isManagerRole(req.role)) return;
+
+    const currentUserPlantId = getUserPlantId(req);
+    const isCreator = Boolean(req.userId && context.creatorId && context.creatorId === req.userId);
+    const samePlant = Boolean(currentUserPlantId && context.plantIds.includes(currentUserPlantId));
+
+    if (!isCreator && !samePlant) {
+        throw new UnAuthorizedError('Ban khong co quyen trao doi tren phieu nay');
+    }
+};
+
+const resolveWorkflowContext = async (
+    type: WorkflowContextType,
+    id: string,
+    req?: Request
+): Promise<WorkflowContext> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new NotFoundError('Khong tim thay phieu');
+    }
+
+    const context =
+        type === 'maintenance'
+            ? await resolveMaintenanceContext(id)
+            : type === 'transfer'
+              ? await resolveTransferContext(id)
+              : type === 'distribution'
+                ? await resolveDistributionContext(id)
+                : await resolvePurchaseRequestContext(type, id);
+
+    assertWorkflowAccess(req, context);
+
+    return context;
+};
+
+const getWorkflowParticipantIds = async (context: WorkflowContext, actorId?: string) => {
+    const participantIds = normalizeIds([actorId, context.creatorId], undefined);
 
     const managementFilter: Record<string, any> = {
         isDeleted: { $ne: true },
@@ -366,9 +534,7 @@ const getMaintenanceParticipantIds = async (maintenanceContext: Awaited<ReturnTy
         role: { $in: [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER] },
     };
 
-    const managementUsers = await User.find(managementFilter)
-        .select('_id role plantId')
-        .lean();
+    const managementUsers = await User.find(managementFilter).select('_id role plantId').lean();
 
     for (const manager of managementUsers) {
         const managerId = toId(manager);
@@ -379,8 +545,8 @@ const getMaintenanceParticipantIds = async (maintenanceContext: Awaited<ReturnTy
         const shouldInclude =
             managerRole === USER_ROLE.ADMIN ||
             managerRole === USER_ROLE.DIRECTOR ||
-            !maintenanceContext.plantId ||
-            managerPlantId === maintenanceContext.plantId;
+            !context.plantIds.length ||
+            (managerPlantId ? context.plantIds.includes(managerPlantId) : false);
 
         if (shouldInclude) {
             participantIds.push(managerId);
@@ -481,16 +647,21 @@ const createUserMessage = async ({
     return populatedMessage;
 };
 
-export const ensureMaintenanceConversation = async (maintenanceId: string, actorId?: string, req?: Request) => {
-    const context = await resolveMaintenanceContext(maintenanceId, req);
+export const ensureWorkflowConversation = async (
+    type: WorkflowContextType,
+    contextId: string,
+    actorId?: string,
+    req?: Request
+) => {
+    const context = await resolveWorkflowContext(type, contextId, req);
     const existing = await ChatConversation.findOne({
         isDeleted: { $ne: true },
-        'context.type': 'maintenance',
-        'context.id': maintenanceId,
+        'context.type': type,
+        'context.id': contextId,
     });
 
     if (existing) {
-        const expectedParticipantIds = await getMaintenanceParticipantIds(context, actorId);
+        const expectedParticipantIds = await getWorkflowParticipantIds(context, actorId);
         const existingIds = new Set(existing.participantIds.map((id) => String(id)));
         let changed = false;
 
@@ -505,6 +676,14 @@ export const ensureMaintenanceConversation = async (maintenanceId: string, actor
             changed = true;
         }
 
+        // Context lưu cứng lúc tạo có thể lỗi thời (đổi route FE, đổi tên máy/cơ sở) — đồng bộ lại
+        if (existing.context && (existing.context.path !== context.path || existing.context.label !== context.label)) {
+            existing.context.path = context.path;
+            existing.context.label = context.label;
+            existing.markModified('context');
+            changed = true;
+        }
+
         if (changed) {
             await existing.save();
         }
@@ -512,16 +691,19 @@ export const ensureMaintenanceConversation = async (maintenanceId: string, actor
         return existing;
     }
 
-    const participantIds = await getMaintenanceParticipantIds(context, actorId);
+    const participantIds = await getWorkflowParticipantIds(context, actorId);
     const now = new Date();
 
     const conversation = await ChatConversation.create({
         type: 'workflow_thread',
         title: context.title,
-        plantId: context.plantId && mongoose.Types.ObjectId.isValid(context.plantId) ? toObjectId(context.plantId) : undefined,
+        plantId:
+            context.plantId && mongoose.Types.ObjectId.isValid(context.plantId)
+                ? toObjectId(context.plantId)
+                : undefined,
         context: {
-            type: 'maintenance',
-            id: maintenanceId,
+            type,
+            id: contextId,
             label: context.label,
             path: context.path,
         },
@@ -539,14 +721,22 @@ export const ensureMaintenanceConversation = async (maintenanceId: string, actor
     return conversation;
 };
 
-export const appendMaintenanceSystemMessage = async (maintenanceId: string, body: string, actorId?: string) => {
+export const appendWorkflowSystemMessage = async (
+    type: WorkflowContextType,
+    contextId: string,
+    body: string,
+    actorId?: string
+) => {
     try {
-        const conversation = await ensureMaintenanceConversation(maintenanceId, actorId);
+        const conversation = await ensureWorkflowConversation(type, contextId, actorId);
         await createSystemMessage(conversation, body, actorId);
     } catch (error) {
-        console.error('[Chat] Failed to append maintenance system message:', error);
+        console.error(`[Chat] Failed to append ${type} system message:`, error);
     }
 };
+
+export const appendMaintenanceSystemMessage = async (maintenanceId: string, body: string, actorId?: string) =>
+    appendWorkflowSystemMessage('maintenance', maintenanceId, body, actorId);
 
 export const getAvailableUsers = async (req: Request, res: Response, _next: NextFunction) => {
     const search = String(req.query.search ?? '').trim();
@@ -596,16 +786,11 @@ export const getContextConversation = async (req: Request, res: Response, _next:
     const type = String(req.params.type);
     const contextId = String(req.params.id);
 
-    if (!CONTEXT_TYPES.includes(type as (typeof CONTEXT_TYPES)[number])) {
+    if (!CONTEXT_TYPES.includes(type as WorkflowContextType)) {
         throw new BadRequestError('Loai hoi thoai nghiep vu chua duoc ho tro');
     }
 
-    const conversation =
-        type === 'maintenance' ? await ensureMaintenanceConversation(contextId, req.userId, req) : undefined;
-
-    if (!conversation) {
-        throw new NotFoundError('Khong tim thay hoi thoai nghiep vu');
-    }
+    const conversation = await ensureWorkflowConversation(type as WorkflowContextType, contextId, req.userId, req);
 
     const populated = await populateConversation(ChatConversation.findById(conversation._id));
 
@@ -695,7 +880,12 @@ export const createConversation = async (req: Request, res: Response, _next: Nex
     const now = new Date();
     const conversation = await ChatConversation.create({
         type,
-        title: type === 'group' ? String(req.body?.title ?? '').trim().slice(0, 160) || undefined : undefined,
+        title:
+            type === 'group'
+                ? String(req.body?.title ?? '')
+                      .trim()
+                      .slice(0, 160) || undefined
+                : undefined,
         directKey,
         participantIds: participantIds.map(toObjectId),
         participantStates: participantIds.map((id) => ({
@@ -737,11 +927,7 @@ export const getMessages = async (req: Request, res: Response, _next: NextFuncti
         filter.createdAt = { $lt: before };
     }
 
-    const messages = await populateMessage(
-        ChatMessage.find(filter)
-            .sort({ createdAt: -1 })
-            .limit(limit)
-    );
+    const messages = await populateMessage(ChatMessage.find(filter).sort({ createdAt: -1 }).limit(limit));
 
     return res.status(StatusCodes.OK).json(
         customResponse({

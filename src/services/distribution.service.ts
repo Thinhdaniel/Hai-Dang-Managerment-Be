@@ -13,6 +13,7 @@ import {
     toId,
 } from '@/services/material-workflow.helpers';
 import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
+import { appendWorkflowSystemMessage } from '@/services/chat.service';
 import { getMaterialsMap } from '@/services/material-domain.helpers';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
@@ -558,6 +559,13 @@ export const createDistributionRecord = async (req: Request, res: Response, next
         message: `${actorName} đã tạo phiếu cấp phát ${(created as any)?.distributionCode || ''} cho phiếu đề xuất ${(sr as any).requestCode || ''}`,
     });
 
+    void appendWorkflowSystemMessage(
+        'distribution',
+        String((record as any)._id),
+        `${actorName} đã tạo phiếu cấp phát ${(created as any)?.distributionCode || ''} từ phiếu yêu cầu ${(sr as any).requestCode || ''}.`,
+        req.userId
+    );
+
     return res.status(StatusCodes.CREATED).json(
         customResponse({
             data: serializeDistributionRecord(created),
@@ -906,6 +914,13 @@ export const distributeRecord = async (req: Request, res: Response, next: NextFu
         });
     }
 
+    void appendWorkflowSystemMessage(
+        'distribution',
+        String(req.params.id),
+        `${actorName} đã xuất kho phiếu cấp phát ${(updated as any)?.distributionCode || ''}.`,
+        req.userId
+    );
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializeDistributionRecord(updated),
@@ -979,6 +994,13 @@ export const confirmDistributionRecord = async (req: Request, res: Response, nex
             message: `${actorName} đã xác nhận nhận hàng phiếu cấp phát ${(updated as any)?.distributionCode || ''}`,
         },
         { excludeUserIds: [req.userId] }
+    );
+
+    void appendWorkflowSystemMessage(
+        'distribution',
+        String(req.params.id),
+        `${actorName} đã xác nhận nhận hàng phiếu cấp phát ${(updated as any)?.distributionCode || ''}.`,
+        req.userId
     );
 
     return res.status(StatusCodes.OK).json(

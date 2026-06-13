@@ -9,6 +9,7 @@ import {
     toId,
 } from '@/services/material-workflow.helpers';
 import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
+import { appendWorkflowSystemMessage } from '@/services/chat.service';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -171,6 +172,13 @@ export const createSupplyRequest = async (req: Request, res: Response, next: Nex
         { excludeUserIds: [req.userId] }
     );
 
+    void appendWorkflowSystemMessage(
+        'supply_request',
+        String(request._id),
+        `${actorName} đã tạo phiếu yêu cầu cấp vật tư ${(created as any)?.requestCode || ''}.`,
+        req.userId
+    );
+
     return res.status(StatusCodes.CREATED).json(
         customResponse({
             data: serializePurchaseRequest(created),
@@ -260,6 +268,13 @@ export const rejectSupplyRequest = async (req: Request, res: Response, next: Nex
         message: `${actorName} đã từ chối phiếu ${(request as any).requestCode || ''}${req.body.reason ? ': ' + req.body.reason : ''}`,
     });
 
+    void appendWorkflowSystemMessage(
+        'supply_request',
+        String(req.params.id),
+        `${actorName} đã từ chối phiếu yêu cầu cấp vật tư ${(request as any).requestCode || ''}.${req.body.reason ? ` Lý do: ${req.body.reason}` : ''}`,
+        req.userId
+    );
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializePurchaseRequest(updated),
@@ -328,6 +343,13 @@ export const approveSupplyRequest = async (req: Request, res: Response, next: Ne
         title: 'Phiếu đề xuất cấp vật tư được duyệt',
         message: `${actorName} đã duyệt phiếu ${(request as any).requestCode || ''}`,
     });
+
+    void appendWorkflowSystemMessage(
+        'supply_request',
+        String(req.params.id),
+        `${actorName} đã duyệt phiếu yêu cầu cấp vật tư ${(request as any).requestCode || ''}.`,
+        req.userId
+    );
 
     return res.status(StatusCodes.OK).json(
         customResponse({

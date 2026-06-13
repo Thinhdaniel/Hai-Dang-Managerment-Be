@@ -8,6 +8,7 @@ import { getPagination } from '@/utils/pagination';
 import { serializeTransfer } from '@/utils/serializers';
 import { sendSerializedItem, sendSerializedList, sendSerializedPage } from './service.helpers';
 import { notifyAdmins, notifyUser, getActorName } from './notification.helper';
+import { appendWorkflowSystemMessage } from './chat.service';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 
@@ -253,6 +254,13 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
         { excludeUserIds: [req.userId] }
     );
 
+    void appendWorkflowSystemMessage(
+        'transfer',
+        String(createdItem._id),
+        `${actorName} đã tạo lệnh điều chuyển ${assetName} từ ${createdItem.fromArea} đến ${createdItem.toArea}.`,
+        req.userId
+    );
+
     return sendSerializedItem(
         res,
         createdItem,
@@ -309,6 +317,13 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
         });
     }
 
+    void appendWorkflowSystemMessage(
+        'transfer',
+        String(item._id),
+        `${actorName} đã duyệt lệnh điều chuyển ${assetName}.`,
+        req.userId
+    );
+
     return sendSerializedItem(res, item, serializeTransfer, 'Duyet dieu chuyen thanh cong');
 };
 
@@ -358,6 +373,13 @@ export const rejectTransfer = async (req: Request, res: Response, next: NextFunc
             createdAt: new Date().toISOString(),
         });
     }
+
+    void appendWorkflowSystemMessage(
+        'transfer',
+        String(item._id),
+        `${actorName} đã từ chối lệnh điều chuyển ${assetName}. Lý do: ${item.rejectReason || 'Không có lý do'}`,
+        req.userId
+    );
 
     return sendSerializedItem(res, item, serializeTransfer, 'Tu choi dieu chuyen thanh cong');
 };
@@ -443,6 +465,13 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
         });
     }
 
+    void appendWorkflowSystemMessage(
+        'transfer',
+        String(item._id),
+        `${actorName} đã hoàn tất điều chuyển ${assetName} đến ${item.toArea || toPlantName}.`,
+        req.userId
+    );
+
     return sendSerializedItem(res, item, serializeTransfer, 'Hoan thanh dieu chuyen thanh cong');
 };
 
@@ -485,6 +514,13 @@ export const cancelTransfer = async (req: Request, res: Response, next: NextFunc
             message: `${actorName} đã hủy lệnh điều chuyển ${assetName}: ${req.body.reason}`,
         },
         { excludeUserIds: [req.userId, String((item as any).createdBy)] }
+    );
+
+    void appendWorkflowSystemMessage(
+        'transfer',
+        String(item._id),
+        `${actorName} đã hủy lệnh điều chuyển ${assetName}. Lý do: ${req.body.reason}`,
+        req.userId
     );
 
     return sendSerializedItem(res, item, serializeTransfer, 'Huy dieu chuyen thanh cong');
