@@ -26,6 +26,7 @@ import reportRoutes from './report.route';
 import qrLabelRoutes from './qr-label.route';
 import qrScanLogRoutes from './qr-scan-log.route';
 import chatRoutes from './chat.route';
+import systemSettingRoutes from './system-setting.route';
 
 const router = Router();
 
@@ -55,5 +56,6 @@ router.use('/reports', reportRoutes);
 router.use('/qr-labels', qrLabelRoutes);
 router.use('/qr-scan-logs', qrScanLogRoutes);
 router.use('/chat', chatRoutes);
+router.use('/system-settings', systemSettingRoutes);
 
 export default router;

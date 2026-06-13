@@ -16,10 +16,7 @@ const createMemoryUpload = (pattern: RegExp, invalidFileMessage: string) =>
         limits: { fileSize: 100 * 1024 * 1024 },
     });
 
-export const imageUpload = createMemoryUpload(
-    /\.(jpg|jpeg|png|webp|avif)$/i,
-    UPLOAD_MESSAGES.INVALID_FILE_TYPE
-);
+export const imageUpload = createMemoryUpload(/\.(jpg|jpeg|png|webp|avif)$/i, UPLOAD_MESSAGES.INVALID_FILE_TYPE);
 
 export const chatImageUpload = multer({
     storage,
@@ -39,9 +36,24 @@ export const chatImageUpload = multer({
     },
 });
 
-export const excelUpload = createMemoryUpload(
-    /\.(xlsx|xls)$/i,
-    'Chi chap nhan file Excel co duoi XLSX hoac XLS'
-);
+export const audioUpload = multer({
+    storage,
+    fileFilter: (req, file, cb) => {
+        const validExtension = /\.mp3$/i.test(file.originalname);
+        const validMime = ['audio/mpeg', 'audio/mp3'].includes(file.mimetype);
+
+        if (!validExtension || !validMime) {
+            return cb(new BadRequestError('Chi chap nhan file am thanh MP3'));
+        }
+
+        cb(null, true);
+    },
+    limits: {
+        fileSize: 3 * 1024 * 1024,
+        files: 1,
+    },
+});
+
+export const excelUpload = createMemoryUpload(/\.(xlsx|xls)$/i, 'Chi chap nhan file Excel co duoi XLSX hoac XLS');
 
 export default imageUpload;
