@@ -156,11 +156,19 @@ export const serializeMaintenance = (input: any) => {
         maintenance?.plantId && typeof maintenance.plantId === 'object' && maintenance.plantId.name
             ? serializePlant(maintenance.plantId)
             : undefined;
+    // Danh sách máy trong phiếu (gồm máy chính) — fallback về [asset] cho phiếu cũ 1 máy
+    const assets = Array.isArray(maintenance?.assetIds)
+        ? maintenance.assetIds.filter((a: any) => a && typeof a === 'object' && a.name).map(serializeAsset)
+        : [];
 
     return {
         id: toId(maintenance),
         assetId: asset?.id ?? toId(maintenance?.assetId),
         asset,
+        assetIds: assets.length
+            ? assets.map((a: any) => a.id)
+            : [asset?.id ?? toId(maintenance?.assetId)].filter(Boolean),
+        assets: assets.length ? assets : asset ? [asset] : [],
         // Snapshot cơ sở tại thời điểm phát sinh bảo trì
         plantId: maintenancePlant?.id ?? toId(maintenance?.plantId),
         plantName: maintenance?.plantName,

@@ -13,17 +13,37 @@ export interface IChatAttachment {
     height?: number;
 }
 
+export interface IChatReaction {
+    userId: mongoose.Types.ObjectId;
+    emoji: string;
+    at: Date;
+}
+
 export interface IChatMessage extends mongoose.Document {
     conversationId: mongoose.Types.ObjectId;
     senderId: mongoose.Types.ObjectId;
     body: string;
     attachments: IChatAttachment[];
+    replyTo?: mongoose.Types.ObjectId;
+    reactions: IChatReaction[];
+    pinned: boolean;
+    pinnedAt?: Date;
+    pinnedBy?: mongoose.Types.ObjectId;
     system: boolean;
     isDeleted: boolean;
     deletedAt?: Date;
     createdAt: Date;
     updatedAt: Date;
 }
+
+const ChatReactionSchema = new mongoose.Schema<IChatReaction>(
+    {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        emoji: { type: String, required: true, trim: true, maxlength: 16 },
+        at: { type: Date, default: Date.now },
+    },
+    { _id: false }
+);
 
 const ChatAttachmentSchema = new mongoose.Schema<IChatAttachment>(
     {
@@ -91,6 +111,25 @@ const ChatMessageSchema = new mongoose.Schema<IChatMessage>(
             type: [ChatAttachmentSchema],
             default: [],
         },
+        replyTo: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'ChatMessage',
+        },
+        reactions: {
+            type: [ChatReactionSchema],
+            default: [],
+        },
+        pinned: {
+            type: Boolean,
+            default: false,
+        },
+        pinnedAt: {
+            type: Date,
+        },
+        pinnedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
         system: {
             type: Boolean,
             default: false,
@@ -112,6 +151,7 @@ const ChatMessageSchema = new mongoose.Schema<IChatMessage>(
 ChatMessageSchema.index({ conversationId: 1, createdAt: -1 });
 ChatMessageSchema.index({ senderId: 1, createdAt: -1 });
 ChatMessageSchema.index({ isDeleted: 1, createdAt: -1 });
+ChatMessageSchema.index({ conversationId: 1, pinned: 1 });
 
 const ChatMessage = mongoose.model<IChatMessage>('ChatMessage', ChatMessageSchema);
 

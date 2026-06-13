@@ -2,10 +2,16 @@ import mongoose from 'mongoose';
 
 const MaintenanceSchema = new mongoose.Schema(
     {
+        // Máy chính (giữ tương thích logic per-máy: trạng thái, snapshot cơ sở...)
         assetId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Asset',
             required: true,
+        },
+        // Toàn bộ máy trong phiếu (gồm cả máy chính) — cho phép 1 phiếu nhiều máy
+        assetIds: {
+            type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Asset' }],
+            default: [],
         },
         type: {
             type: String,

@@ -27,6 +27,7 @@ const externalRepairSchema = z
 
 export const createMaintenanceSchema = z.object({
     assetId: zObjectId('Thiet bi'),
+    assetIds: z.array(zObjectId('Thiet bi')).optional(),
     type: z.enum(['periodic', 'emergency', 'inspection']),
     repairMode: z.enum(['internal', 'external']).optional(),
     description: zRequiredString('Noi dung bao tri'),
@@ -39,6 +40,8 @@ export const createMaintenanceSchema = z.object({
 });
 
 export const updateMaintenanceSchema = z.object({
+    assetId: zObjectId('Thiet bi').optional(),
+    assetIds: z.array(zObjectId('Thiet bi')).optional(),
     type: z.enum(['periodic', 'emergency', 'inspection']).optional(),
     repairMode: z.enum(['internal', 'external']).optional(),
     status: z.enum(['pending', 'in_progress', 'completed', 'overdue', 'cancelled']).optional(),

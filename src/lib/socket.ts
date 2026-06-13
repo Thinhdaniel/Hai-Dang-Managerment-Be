@@ -6,6 +6,8 @@ import config from '@/config/env.config';
 import { tokenTypes } from '@/constant/token';
 import User from '@/models/User';
 import UserSession from '@/models/UserSession';
+import ChatConversation from '@/models/ChatConversation';
+import mongoose from 'mongoose';
 
 interface AuthPayload extends JwtPayload {
     userId: string;
@@ -35,6 +37,7 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
             if (config.auth.bypass && !token) {
                 socket.data.userId = '000000000000000000000000';
                 socket.data.role = 'admin';
+                socket.data.name = 'Admin';
                 return next();
             }
 
@@ -64,6 +67,7 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
 
             socket.data.userId = String(user._id);
             socket.data.role = user.role;
+            socket.data.name = user.fullname || user.username || user.email || 'Người dùng';
             next();
         } catch (err: any) {
             next(new Error('Authentication failed'));
@@ -78,6 +82,30 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
         void socket.join(`user:${userId}`);
 
         console.log(`[Socket.io] Client connected: ${socket.id} (user: ${userId})`);
+
+        // Relay "đang soạn tin" tới các thành viên khác của hội thoại (không lưu DB).
+        // Client tự throttle; bên nhận tự ẩn sau ~3s nếu không có ping mới.
+        socket.on('chat:typing', async (payload: { conversationId?: string } = {}) => {
+            try {
+                const conversationId = String(payload?.conversationId || '');
+                if (!mongoose.isValidObjectId(conversationId)) return;
+
+                const conversation = await ChatConversation.findById(conversationId).select('participantIds').lean();
+                if (!conversation) return;
+
+                const participantIds = (conversation.participantIds ?? []).map(String);
+                if (!participantIds.includes(userId)) return;
+
+                const name = (socket.data.name as string) || 'Người dùng';
+                participantIds
+                    .filter((id) => id && id !== userId)
+                    .forEach((id) => {
+                        io?.to(`user:${id}`).emit('chat:typing', { conversationId, userId, name });
+                    });
+            } catch {
+                // Typing là tín hiệu phù du, lỗi thì bỏ qua
+            }
+        });
 
         socket.on('disconnect', (reason: string) => {
             console.log(`[Socket.io] Client disconnected: ${socket.id} — ${reason}`);

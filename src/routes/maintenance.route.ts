@@ -27,6 +27,7 @@ router.post(
 router.get('/', asyncHandler(maintenanceService.getAllMaintenances));
 router.get('/report', asyncHandler(maintenanceService.getMaintenanceReport));
 router.get('/asset/:assetId', validateObjectId, asyncHandler(maintenanceService.getMaintenanceByAsset));
+router.get('/:id/export-xlsx', validateObjectId, asyncHandler(maintenanceService.exportMaintenanceXlsx));
 router.get('/:id', validateObjectId, asyncHandler(maintenanceService.getMaintenanceById));
 router.patch(
     '/:id',

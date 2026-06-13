@@ -163,6 +163,22 @@ const serializeConversation = (conversation: IChatConversation | any, currentUse
     };
 };
 
+// Trích gọn tin được trả lời (quote) để hiển thị, không lồng sâu
+const serializeReplyPreview = (reply: any) => {
+    if (!reply || typeof reply !== 'object') return undefined;
+    const senderName =
+        reply.senderId && typeof reply.senderId === 'object' ? getUserDisplayName(reply.senderId) : undefined;
+    const hasImage = Array.isArray(reply.attachments) && reply.attachments.some((a: any) => a?.type === 'image');
+    return {
+        id: toId(reply),
+        senderId: toId(reply.senderId),
+        senderName,
+        body: reply.isDeleted ? 'Tin nhắn đã được thu hồi' : (reply.body ?? ''),
+        hasImage: reply.isDeleted ? false : hasImage,
+        isDeleted: reply.isDeleted === true,
+    };
+};
+
 const serializeMessage = (message: IChatMessage | any) => ({
     id: toId(message),
     conversationId: toId(message.conversationId),
@@ -170,6 +186,9 @@ const serializeMessage = (message: IChatMessage | any) => ({
     sender: message.senderId && typeof message.senderId === 'object' ? serializeChatUser(message.senderId) : undefined,
     body: message.isDeleted ? 'Tin nhắn đã được thu hồi' : message.body,
     attachments: message.isDeleted ? [] : (message.attachments ?? []),
+    replyTo: message.isDeleted ? undefined : serializeReplyPreview(message.replyTo),
+    reactions: (message.reactions ?? []).map((r: any) => ({ userId: toId(r.userId), emoji: r.emoji })),
+    pinned: message.pinned === true,
     system: message.system === true,
     isDeleted: message.isDeleted === true,
     createdAt: message.createdAt,
@@ -192,11 +211,17 @@ const populateConversation = (query: any) =>
         .populate({ path: 'plantId', select: 'name code' });
 
 const populateMessage = (query: any) =>
-    query.populate({
-        path: 'senderId',
-        select: 'fullname username email role avatarUrl plantId isActive',
-        populate: { path: 'plantId', select: 'name code' },
-    });
+    query
+        .populate({
+            path: 'senderId',
+            select: 'fullname username email role avatarUrl plantId isActive',
+            populate: { path: 'plantId', select: 'name code' },
+        })
+        .populate({
+            path: 'replyTo',
+            select: 'body senderId attachments isDeleted system',
+            populate: { path: 'senderId', select: 'fullname username' },
+        });
 
 const getVisibleUserFilter = (req: Request, includeSelf = false) => {
     const base: Record<string, any> = {
@@ -620,16 +645,29 @@ const createSystemMessage = async (conversation: IChatConversation, body: string
     return populatedMessage;
 };
 
+// Chỉ cho reply tới tin hợp lệ trong cùng hội thoại, chưa bị thu hồi
+const resolveReplyTo = async (conversationId: mongoose.Types.ObjectId, replyToId?: string) => {
+    if (!replyToId || !mongoose.Types.ObjectId.isValid(replyToId)) return undefined;
+    const target = await ChatMessage.findOne({
+        _id: replyToId,
+        conversationId,
+        isDeleted: { $ne: true },
+    }).select('_id');
+    return target ? target._id : undefined;
+};
+
 const createUserMessage = async ({
     conversation,
     userId,
     body,
     attachments = [],
+    replyTo,
 }: {
     conversation: IChatConversation;
     userId: string;
     body: string;
     attachments?: IChatAttachment[];
+    replyTo?: mongoose.Types.ObjectId;
 }) => {
     const now = new Date();
     const message = await ChatMessage.create({
@@ -637,6 +675,7 @@ const createUserMessage = async ({
         senderId: toObjectId(userId),
         body,
         attachments,
+        replyTo,
     });
 
     await applyMessageToConversation(conversation, message, userId, getMessagePreview(body, attachments), now);
@@ -953,10 +992,12 @@ export const sendMessage = async (req: Request, res: Response, _next: NextFuncti
         throw new BadRequestError('Tin nhan qua dai');
     }
 
+    const replyTo = await resolveReplyTo(conversation._id, req.body?.replyTo);
     const populatedMessage = await createUserMessage({
         conversation,
         userId: userId!,
         body,
+        replyTo,
     });
 
     return res.status(StatusCodes.CREATED).json(
@@ -988,12 +1029,14 @@ export const sendAttachmentMessage = async (req: Request, res: Response, _next: 
         throw new BadRequestError(`Chi duoc gui toi da ${MAX_CHAT_ATTACHMENTS} anh moi lan`);
     }
 
+    const replyTo = await resolveReplyTo(conversation._id, req.body?.replyTo);
     const attachments = files.length ? await Promise.all(files.map(uploadChatImage)) : [];
     const populatedMessage = await createUserMessage({
         conversation,
         userId: userId!,
         body,
         attachments,
+        replyTo,
     });
 
     return res.status(StatusCodes.CREATED).json(
@@ -1066,6 +1109,149 @@ export const recallMessage = async (req: Request, res: Response, _next: NextFunc
         customResponse({
             data: serialized,
             message: 'Thu hoi tin nhan thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+const ALLOWED_REACTIONS = ['👍', '❤️', '😆', '😮', '😢', '🙏'];
+
+// Phát tin nhắn đã đổi (reaction/ghim) tới mọi thành viên để FE cập nhật tại chỗ
+const emitMessageUpdated = (conversation: IChatConversation, serialized: any) => {
+    conversation.participantIds.forEach((participantId) => {
+        const id = String(participantId);
+        if (!id) return;
+        emitToUser(id, 'chat:message:updated', {
+            conversationId: String(conversation._id),
+            message: serialized,
+        });
+    });
+};
+
+const findActiveMessage = async (conversation: IChatConversation, messageId: string) => {
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+        throw new NotFoundError('Khong tim thay tin nhan');
+    }
+    const target = await ChatMessage.findOne({
+        _id: messageId,
+        conversationId: conversation._id,
+        isDeleted: { $ne: true },
+    });
+    if (!target) {
+        throw new NotFoundError('Khong tim thay tin nhan');
+    }
+    return target;
+};
+
+export const toggleReaction = async (req: Request, res: Response, _next: NextFunction) => {
+    const userId = req.userId!;
+    const conversation = await ensureConversationMember(String(req.params.id), userId);
+    const target = await findActiveMessage(conversation, String(req.params.messageId));
+    const emoji = String(req.body?.emoji ?? '').trim();
+
+    if (!ALLOWED_REACTIONS.includes(emoji)) {
+        throw new BadRequestError('Cam xuc khong hop le');
+    }
+    if (target.system) {
+        throw new BadRequestError('Khong the tha cam xuc len tin nhan he thong');
+    }
+
+    const mine = (target.reactions ?? []).find((r) => String(r.userId) === userId);
+    // Mỗi người 1 cảm xúc: bấm lại đúng emoji = gỡ, bấm emoji khác = thay
+    target.reactions = (target.reactions ?? []).filter((r) => String(r.userId) !== userId) as any;
+    if (!mine || mine.emoji !== emoji) {
+        target.reactions.push({ userId: toObjectId(userId), emoji, at: new Date() } as any);
+    }
+    await target.save();
+
+    const serialized = serializeMessage(await populateMessage(ChatMessage.findById(target._id)));
+    emitMessageUpdated(conversation, serialized);
+
+    return res
+        .status(StatusCodes.OK)
+        .json(
+            customResponse({
+                data: serialized,
+                message: 'Cap nhat cam xuc thanh cong',
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+};
+
+export const togglePin = async (req: Request, res: Response, _next: NextFunction) => {
+    const userId = req.userId!;
+    const conversation = await ensureConversationMember(String(req.params.id), userId);
+    const target = await findActiveMessage(conversation, String(req.params.messageId));
+
+    if (target.system) {
+        throw new BadRequestError('Khong the ghim tin nhan he thong');
+    }
+
+    const nextPinned = !target.pinned;
+    target.pinned = nextPinned;
+    target.pinnedAt = nextPinned ? new Date() : undefined;
+    target.pinnedBy = nextPinned ? toObjectId(userId) : undefined;
+    await target.save();
+
+    const serialized = serializeMessage(await populateMessage(ChatMessage.findById(target._id)));
+    emitMessageUpdated(conversation, serialized);
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serialized,
+            message: nextPinned ? 'Da ghim tin nhan' : 'Da bo ghim tin nhan',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const getPinnedMessages = async (req: Request, res: Response, _next: NextFunction) => {
+    const conversation = await ensureConversationMember(String(req.params.id), req.userId);
+    const pinned = await populateMessage(
+        ChatMessage.find({ conversationId: conversation._id, pinned: true, isDeleted: { $ne: true } })
+            .sort({ pinnedAt: -1 })
+            .limit(20)
+    );
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: pinned.map(serializeMessage),
+            message: 'Lay tin ghim thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const searchMessages = async (req: Request, res: Response, _next: NextFunction) => {
+    const conversation = await ensureConversationMember(String(req.params.id), req.userId);
+    const keyword = String(req.query.q ?? '').trim();
+
+    if (keyword.length < 2) {
+        return res
+            .status(StatusCodes.OK)
+            .json(customResponse({ data: [], message: 'Tu khoa qua ngan', status: StatusCodes.OK, success: true }));
+    }
+
+    const regex = new RegExp(escapeRegExp(keyword), 'i');
+    const matched = await populateMessage(
+        ChatMessage.find({
+            conversationId: conversation._id,
+            isDeleted: { $ne: true },
+            system: { $ne: true },
+            body: regex,
+        })
+            .sort({ createdAt: -1 })
+            .limit(40)
+    );
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: matched.map(serializeMessage),
+            message: 'Tim tin nhan thanh cong',
             status: StatusCodes.OK,
             success: true,
         })
