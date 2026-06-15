@@ -7,6 +7,21 @@ import { sendSuccess } from './service.helpers';
 import type { NextFunction, Request, Response } from 'express';
 import { buildPaginatedResponse } from '@/utils/pagination';
 
+// Suy ra may tu lan quet: uu tien assetId, neu khong co thi resolve qua publicId (quet tem in).
+const resolveScannedAssetId = async (body: any): Promise<string | undefined> => {
+    if (body?.assetId) return String(body.assetId);
+    if (body?.publicId) {
+        const asset = await Asset.findOne({
+            publicId: String(body.publicId).trim().toUpperCase(),
+            isDeleted: { $ne: true },
+        })
+            .select('_id')
+            .lean();
+        return asset ? String(asset._id) : undefined;
+    }
+    return undefined;
+};
+
 // Tu GPS luc quet QR -> tim co so gan nhat -> cap nhat vi tri thuc te gan nhat cua may.
 // Chay best-effort, khong duoc lam hong viec ghi log neu co loi.
 const updateAssetLastSeenFromScan = async (assetId: string, geo: any, scannedBy?: string) => {
@@ -119,10 +134,13 @@ export const createQrScanLog = async (req: Request, res: Response, next: NextFun
         userAgent,
     });
 
-    // Co GPS + biet may nao -> cap nhat vi tri thuc te gan nhat (khong chan luong neu loi)
-    if (req.body.assetId && req.body.metadata?.geo) {
+    // Co GPS -> suy ra may (assetId hoac publicId) -> cap nhat vi tri thuc te gan nhat (khong chan luong neu loi)
+    if (req.body.metadata?.geo) {
         try {
-            await updateAssetLastSeenFromScan(String(req.body.assetId), req.body.metadata.geo, req.userId);
+            const assetId = await resolveScannedAssetId(req.body);
+            if (assetId) {
+                await updateAssetLastSeenFromScan(assetId, req.body.metadata.geo, req.userId);
+            }
         } catch (error) {
             console.error('updateAssetLastSeenFromScan failed:', error);
         }
