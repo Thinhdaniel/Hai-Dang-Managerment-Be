@@ -91,6 +91,16 @@ const AssetSchema = new mongoose.Schema(
         nextMaintenanceDate: {
             type: Date,
         },
+        // Vị trí thực tế gần nhất suy ra từ GPS lúc quét QR (tách bạch với plantId - cơ sở quản lý chính thức)
+        lastSeen: {
+            plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant' },
+            lat: { type: Number },
+            lng: { type: Number },
+            accuracy: { type: Number }, // sai số GPS (m) do thiết bị báo
+            distanceM: { type: Number }, // khoảng cách tới cơ sở gần nhất (m)
+            scannedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            scannedAt: { type: Date },
+        },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',

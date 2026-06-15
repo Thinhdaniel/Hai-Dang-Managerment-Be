@@ -1,8 +1,42 @@
 import QrScanLog from '@/models/QrScanLog';
+import Asset from '@/models/Asset';
+import Plant from '@/models/Plant';
+import { findNearest, isValidLatLng } from '@/utils/geo';
 import { getPagination } from '@/utils/pagination';
 import { sendSuccess } from './service.helpers';
 import type { NextFunction, Request, Response } from 'express';
 import { buildPaginatedResponse } from '@/utils/pagination';
+
+// Tu GPS luc quet QR -> tim co so gan nhat -> cap nhat vi tri thuc te gan nhat cua may.
+// Chay best-effort, khong duoc lam hong viec ghi log neu co loi.
+const updateAssetLastSeenFromScan = async (assetId: string, geo: any, scannedBy?: string) => {
+    const point = { lat: Number(geo?.lat), lng: Number(geo?.lng) };
+    if (!isValidLatLng(point)) return;
+
+    const plants = await Plant.find({ isDeleted: { $ne: true }, 'coordinates.lat': { $ne: null } })
+        .select('coordinates name')
+        .lean();
+
+    const nearest = findNearest(point, plants as Array<{ _id: any; coordinates?: { lat: number; lng: number } }>);
+    if (!nearest) return;
+
+    await Asset.updateOne(
+        { _id: assetId },
+        {
+            $set: {
+                lastSeen: {
+                    plantId: nearest.item._id,
+                    lat: point.lat,
+                    lng: point.lng,
+                    accuracy: typeof geo?.accuracy === 'number' ? geo.accuracy : undefined,
+                    distanceM: Math.round(nearest.distanceM),
+                    scannedBy: scannedBy,
+                    scannedAt: new Date(),
+                },
+            },
+        }
+    );
+};
 
 const toId = (value: any) => {
     if (!value) return undefined;
@@ -84,6 +118,15 @@ export const createQrScanLog = async (req: Request, res: Response, next: NextFun
         ip: req.ip,
         userAgent,
     });
+
+    // Co GPS + biet may nao -> cap nhat vi tri thuc te gan nhat (khong chan luong neu loi)
+    if (req.body.assetId && req.body.metadata?.geo) {
+        try {
+            await updateAssetLastSeenFromScan(String(req.body.assetId), req.body.metadata.geo, req.userId);
+        } catch (error) {
+            console.error('updateAssetLastSeenFromScan failed:', error);
+        }
+    }
 
     return sendSuccess(res, serializeQrScanLog(log), 'Da ghi nhan lich su quet QR', 201);
 };

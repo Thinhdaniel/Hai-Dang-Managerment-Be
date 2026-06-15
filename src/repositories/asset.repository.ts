@@ -28,7 +28,9 @@ export const assetRepository = {
     findById(id: string) {
         return Asset.findOne({ _id: id, isDeleted: { $ne: true } })
             .populate('brandId')
-            .populate('plantId');
+            .populate('plantId')
+            .populate('lastSeen.plantId', 'name code')
+            .populate('lastSeen.scannedBy', 'fullname username');
     },
 
     findByPublicId(publicId: string) {

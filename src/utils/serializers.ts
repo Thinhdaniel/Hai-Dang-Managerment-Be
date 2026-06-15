@@ -54,6 +54,10 @@ export const serializePlant = (input: any) => {
         code: plant?.code,
         address: plant?.address ?? plant?.location,
         phone: plant?.phone,
+        coordinates:
+            typeof plant?.coordinates?.lat === 'number' && typeof plant?.coordinates?.lng === 'number'
+                ? { lat: plant.coordinates.lat, lng: plant.coordinates.lng }
+                : undefined,
         managerId: toId(plant?.managerId),
         assetCount: typeof plant?.assetCount === 'number' ? plant.assetCount : undefined,
         machineCount: typeof plant?.machineCount === 'number' ? plant.machineCount : undefined,
@@ -95,6 +99,25 @@ export const serializeAsset = (input: any) => {
             ? serializePlant(asset.plantId)
             : undefined;
 
+    const ls = asset?.lastSeen;
+    const lsPlant = ls?.plantId && typeof ls.plantId === 'object' && ls.plantId.name ? serializePlant(ls.plantId) : undefined;
+    const lsActor = ls?.scannedBy && typeof ls.scannedBy === 'object' ? ls.scannedBy : undefined;
+    const lastSeen =
+        ls && (ls.plantId || ls.scannedAt)
+            ? {
+                  plantId: lsPlant?.id ?? toId(ls?.plantId),
+                  plantName: lsPlant?.name,
+                  plantCode: lsPlant?.code,
+                  lat: ls?.lat,
+                  lng: ls?.lng,
+                  accuracy: ls?.accuracy,
+                  distanceM: ls?.distanceM,
+                  scannedById: lsActor ? toId(lsActor) : toId(ls?.scannedBy),
+                  scannedByName: lsActor ? (lsActor.fullname ?? lsActor.name ?? lsActor.username) : undefined,
+                  scannedAt: toIso(ls?.scannedAt),
+              }
+            : undefined;
+
     return {
         id: toId(asset),
         name: asset?.name,
@@ -117,6 +140,7 @@ export const serializeAsset = (input: any) => {
         imageUrl: asset?.imageUrl,
         lastMaintenanceDate: toIso(asset?.lastMaintenanceDate),
         nextMaintenanceDate: toIso(asset?.nextMaintenanceDate),
+        lastSeen,
         createdAt: toIso(asset?.createdAt),
         updatedAt: toIso(asset?.updatedAt),
     };
