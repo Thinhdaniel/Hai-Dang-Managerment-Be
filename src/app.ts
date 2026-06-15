@@ -14,6 +14,10 @@ import router from './routes/index';
 
 const app: Express = express();
 
+// Sau proxy cua host (Render/Railway/Vercel...) request den la HTTP noi bo; tin proxy de
+// req.secure / x-forwarded-proto phan anh dung HTTPS -> cookie Secure moi duoc gui.
+app.set('trust proxy', 1);
+
 cloudinary.config(cloudinaryConfig);
 
 app.use(cors(corsOptions));

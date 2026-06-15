@@ -30,6 +30,14 @@ const buildTokenPayload = (user: TUserPayload, sessionId: Types.ObjectId, type: 
     type,
 });
 
+// Cap rieng access token cho mot session da co (dung khi refresh ma KHONG xoay vong refresh token)
+export const generateAccessToken = (user: TUserPayload, sessionId: Types.ObjectId) =>
+    signToken(
+        buildTokenPayload(user, sessionId, tokenTypes.ACCESS),
+        config.jwt.accessTokenKey,
+        config.jwt.accessExpiration
+    );
+
 const generateSessionTokenPair = (user: TUserPayload, sessionId: Types.ObjectId) => {
     const accessToken = signToken(
         buildTokenPayload(user, sessionId, tokenTypes.ACCESS),

@@ -6,6 +6,7 @@ import { sendPasswordResetEmail } from '@/services/mail.service';
 import {
     createPasswordResetToken,
     findSessionByRefreshToken,
+    generateAccessToken,
     generateAuthTokens,
     getTokenExpiryDate,
     hashToken,
@@ -22,31 +23,48 @@ import { StatusCodes } from 'http-status-codes';
 
 const normalizeEmail = (value: string) => String(value).trim().toLowerCase();
 
-const buildRefreshCookieOptions = (refreshToken: string): CookieOptions => {
-    const secure = config.auth.cookieSecure || config.auth.cookieSameSite === 'none';
+// Tu nhan biet moi truong de cookie refresh luon gui duoc, khoi phai chinh env theo tung noi:
+// - HTTPS (production, sau proxy)  -> SameSite=None + Secure  => gui duoc ca khi FE khac domain (Vercel)
+// - HTTP  (local dev)              -> SameSite=Lax  + khong Secure
+// Luu y: SameSite=None bat buoc Secure, va Secure can HTTPS — nen suy ra theo giao thuc that la chac chan nhat.
+const resolveCookieSecurity = (res: Response) => {
+    const req = res.req as Request | undefined;
+    const forwardedProto = String(req?.headers['x-forwarded-proto'] ?? '')
+        .split(',')[0]
+        .trim();
+    const isHttps = Boolean(req?.secure) || forwardedProto === 'https';
+
+    return {
+        secure: isHttps,
+        sameSite: (isHttps ? 'none' : 'lax') as CookieOptions['sameSite'],
+    };
+};
+
+const buildRefreshCookieOptions = (res: Response, refreshToken: string): CookieOptions => {
+    const { secure, sameSite } = resolveCookieSecurity(res);
 
     return {
         httpOnly: true,
         secure,
-        sameSite: config.auth.cookieSameSite as CookieOptions['sameSite'],
+        sameSite,
         expires: getTokenExpiryDate(refreshToken),
         path: '/',
     };
 };
 
 const clearRefreshTokenCookie = (res: Response) => {
-    const secure = config.auth.cookieSecure || config.auth.cookieSameSite === 'none';
+    const { secure, sameSite } = resolveCookieSecurity(res);
 
     res.clearCookie(config.auth.refreshTokenCookieName, {
         httpOnly: true,
         secure,
-        sameSite: config.auth.cookieSameSite as CookieOptions['sameSite'],
+        sameSite,
         path: '/',
     });
 };
 
 const setRefreshTokenCookie = (res: Response, refreshToken: string) => {
-    res.cookie(config.auth.refreshTokenCookieName, refreshToken, buildRefreshCookieOptions(refreshToken));
+    res.cookie(config.auth.refreshTokenCookieName, refreshToken, buildRefreshCookieOptions(res, refreshToken));
 };
 
 const extractRefreshToken = (req: Request) => {
@@ -153,12 +171,13 @@ export const refreshToken = async (req: Request, res: Response, next: NextFuncti
         throw new UnAuthenticatedError(AUTH_MESSAGES.USER_NOT_ACTIVE);
     }
 
-    const tokens = await issueSession(res, user);
-    await revokeSessionById(String(session._id));
+    // KHONG xoay vong refresh token: chi cap access token moi, giu nguyen session + cookie.
+    // Nho vay nhieu request refresh trung (nhieu tab/retry) deu idempotent -> het 401 race gay logout oan.
+    const accessToken = generateAccessToken({ _id: user._id, role: user.role }, session._id);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
-            data: buildAuthResponse(user, tokens.accessToken),
+            data: buildAuthResponse(user, accessToken),
             message: 'Lam moi phien dang nhap thanh cong',
             status: StatusCodes.OK,
             success: true,
