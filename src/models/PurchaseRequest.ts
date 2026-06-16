@@ -44,9 +44,12 @@ const PurchaseRequestSchema = new mongoose.Schema(
         requestCode: { type: String, trim: true },
         requestType: {
             type: String,
-            enum: ['purchase', 'supply_request'],
+            enum: ['purchase', 'supply_request', 'technical_purchase'],
             default: 'purchase',
         },
+        // Phiếu "Giấy đề nghị mua vật tư" của bộ phận kỹ thuật (technical_purchase)
+        requesterName: { type: String, trim: true },
+        department: { type: String, trim: true },
         fromPlantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant' },
         toPlantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant' },
         plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant', required: true },

@@ -154,6 +154,8 @@ export const serializePurchaseRequest = (input: any) => {
         id: toId(request),
         requestCode: request?.requestCode,
         requestType: request?.requestType,
+        requesterName: request?.requesterName,
+        department: request?.department,
         plantId: plant?.id ?? toId(request?.plantId),
         plant,
         fromPlantId: fromPlant?.id ?? toId(request?.fromPlantId),
