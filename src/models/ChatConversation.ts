@@ -8,6 +8,7 @@ export type ChatWorkflowContextType =
     | 'borrowing'
     | 'purchase_request'
     | 'supply_request'
+    | 'technical_purchase'
     | 'purchase_order'
     | 'distribution'
     | 'system';
@@ -107,6 +108,7 @@ const ChatConversationSchema = new mongoose.Schema<IChatConversation>(
                     'borrowing',
                     'purchase_request',
                     'supply_request',
+                    'technical_purchase',
                     'purchase_order',
                     'distribution',
                     'system',

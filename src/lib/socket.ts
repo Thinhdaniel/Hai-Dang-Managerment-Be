@@ -18,6 +18,11 @@ interface AuthPayload extends JwtPayload {
 
 let io: SocketServer | null = null;
 
+// Đếm số kết nối còn sống của từng user (1 người có thể mở nhiều tab/thiết bị) để suy ra online/offline.
+const onlineCounts = new Map<string, number>();
+
+export const getOnlineUserIds = (): string[] => Array.from(onlineCounts.keys());
+
 export const initSocketServer = (httpServer: HttpServer): SocketServer => {
     io = new SocketServer(httpServer, {
         cors: {
@@ -81,6 +86,16 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
         // Join a user-specific room so we can target notifications
         void socket.join(`user:${userId}`);
 
+        // ── Presence: cập nhật online/offline ──────────────────────────────
+        const prevCount = onlineCounts.get(userId) ?? 0;
+        onlineCounts.set(userId, prevCount + 1);
+        // Gửi ảnh chụp danh sách đang online cho client vừa kết nối
+        socket.emit('chat:presence:init', { userIds: Array.from(onlineCounts.keys()) });
+        // Báo cho mọi người nếu user này vừa chuyển từ offline -> online
+        if (prevCount === 0) {
+            io?.emit('chat:presence', { userId, online: true });
+        }
+
         console.log(`[Socket.io] Client connected: ${socket.id} (user: ${userId})`);
 
         // Relay "đang soạn tin" tới các thành viên khác của hội thoại (không lưu DB).
@@ -107,7 +122,19 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
             }
         });
 
+        // Client xin lại ảnh chụp danh sách online (phòng trường hợp lỡ sự kiện init lúc kết nối)
+        socket.on('chat:presence:sync', () => {
+            socket.emit('chat:presence:init', { userIds: Array.from(onlineCounts.keys()) });
+        });
+
         socket.on('disconnect', (reason: string) => {
+            const current = onlineCounts.get(userId) ?? 0;
+            if (current <= 1) {
+                onlineCounts.delete(userId);
+                io?.emit('chat:presence', { userId, online: false });
+            } else {
+                onlineCounts.set(userId, current - 1);
+            }
             console.log(`[Socket.io] Client disconnected: ${socket.id} — ${reason}`);
         });
     });

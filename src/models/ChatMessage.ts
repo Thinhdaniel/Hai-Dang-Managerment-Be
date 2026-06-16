@@ -26,6 +26,7 @@ export interface IChatMessage extends mongoose.Document {
     attachments: IChatAttachment[];
     replyTo?: mongoose.Types.ObjectId;
     reactions: IChatReaction[];
+    mentions: mongoose.Types.ObjectId[];
     pinned: boolean;
     pinnedAt?: Date;
     pinnedBy?: mongoose.Types.ObjectId;
@@ -119,6 +120,11 @@ const ChatMessageSchema = new mongoose.Schema<IChatMessage>(
             type: [ChatReactionSchema],
             default: [],
         },
+        // Tài khoản được nhắc (@mention) trong tin — báo riêng kể cả khi tắt thông báo hội thoại
+        mentions: {
+            type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+            default: [],
+        },
         pinned: {
             type: Boolean,
             default: false,
@@ -152,6 +158,7 @@ ChatMessageSchema.index({ conversationId: 1, createdAt: -1 });
 ChatMessageSchema.index({ senderId: 1, createdAt: -1 });
 ChatMessageSchema.index({ isDeleted: 1, createdAt: -1 });
 ChatMessageSchema.index({ conversationId: 1, pinned: 1 });
+ChatMessageSchema.index({ mentions: 1, createdAt: -1 });
 
 const ChatMessage = mongoose.model<IChatMessage>('ChatMessage', ChatMessageSchema);
 

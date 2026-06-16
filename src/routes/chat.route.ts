@@ -11,6 +11,7 @@ router.use(authenticate);
 
 router.get('/users', asyncHandler(chatService.getAvailableUsers));
 router.get('/unread', asyncHandler(chatService.getUnreadSummary));
+router.get('/mentions', asyncHandler(chatService.getMyMentions));
 router.get('/context/:type/:id', asyncHandler(chatService.getContextConversation));
 router.get('/conversations', asyncHandler(chatService.getConversations));
 router.post('/conversations', asyncHandler(chatService.createConversation));

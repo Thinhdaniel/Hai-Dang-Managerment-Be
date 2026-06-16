@@ -10,6 +10,7 @@ import PurchaseRequest from '@/models/PurchaseRequest';
 import Transfer from '@/models/Transfer';
 import User from '@/models/User';
 import { getUserPlantId, isManagerRole, toId } from '@/services/material-workflow.helpers';
+import { notifyUser } from '@/services/notification.helper';
 import { sendWebPushToUser } from '@/services/web-push.service';
 import customResponse from '@/utils/response';
 import { v2 as cloudinary, type UploadApiResponse } from 'cloudinary';
@@ -22,7 +23,14 @@ const MAX_CHAT_USERS = 30;
 const MAX_CONVERSATION_PARTICIPANTS = 25;
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_CHAT_ATTACHMENTS = 4;
-const CONTEXT_TYPES = ['maintenance', 'transfer', 'purchase_request', 'supply_request', 'distribution'] as const;
+const CONTEXT_TYPES = [
+    'maintenance',
+    'transfer',
+    'purchase_request',
+    'supply_request',
+    'technical_purchase',
+    'distribution',
+] as const;
 export type WorkflowContextType = (typeof CONTEXT_TYPES)[number];
 
 // Ngữ cảnh chung cho mọi loại phiếu có thread trao đổi
@@ -116,6 +124,8 @@ const buildWorkflowPath = (type: WorkflowContextType, id: string): string => {
             return `/materials/purchase-requests?request=${id}`;
         case 'supply_request':
             return `/materials/supply-requests?request=${id}`;
+        case 'technical_purchase':
+            return `/materials/technical-purchase-requests?request=${id}`;
         case 'distribution':
             return `/materials/distributions?record=${id}`;
     }
@@ -158,6 +168,12 @@ const serializeConversation = (conversation: IChatConversation | any, currentUse
         unreadCount: Number(state?.unreadCount ?? 0),
         muted: state?.muted === true,
         archivedAt: state?.archivedAt ?? undefined,
+        // Dấu "đã xem": thời điểm đọc gần nhất của từng thành viên (FE suy ra ai đã xem tin nào)
+        readReceipts: Array.isArray(conversation.participantStates)
+            ? conversation.participantStates
+                  .filter((item: any) => item?.lastReadAt)
+                  .map((item: any) => ({ userId: toId(item.userId), lastReadAt: item.lastReadAt }))
+            : [],
         createdAt: conversation.createdAt,
         updatedAt: conversation.updatedAt,
     };
@@ -188,6 +204,7 @@ const serializeMessage = (message: IChatMessage | any) => ({
     attachments: message.isDeleted ? [] : (message.attachments ?? []),
     replyTo: message.isDeleted ? undefined : serializeReplyPreview(message.replyTo),
     reactions: (message.reactions ?? []).map((r: any) => ({ userId: toId(r.userId), emoji: r.emoji })),
+    mentions: Array.isArray(message.mentions) ? message.mentions.map((m: any) => toId(m)).filter(Boolean) : [],
     pinned: message.pinned === true,
     system: message.system === true,
     isDeleted: message.isDeleted === true,
@@ -451,7 +468,7 @@ const resolveTransferContext = async (transferId: string): Promise<WorkflowConte
 };
 
 const resolvePurchaseRequestContext = async (
-    type: 'purchase_request' | 'supply_request',
+    type: 'purchase_request' | 'supply_request' | 'technical_purchase',
     requestId: string
 ): Promise<WorkflowContext> => {
     const request = await PurchaseRequest.findOne({ _id: requestId, isDeleted: { $ne: true } })
@@ -465,20 +482,27 @@ const resolvePurchaseRequestContext = async (
     }
 
     const record = request as any;
-    const isSupply = type === 'supply_request';
-    const expectedRequestType = isSupply ? 'supply_request' : 'purchase';
+    const expectedRequestType =
+        type === 'supply_request' ? 'supply_request' : type === 'technical_purchase' ? 'technical_purchase' : 'purchase';
     if ((record.requestType ?? 'purchase') !== expectedRequestType) {
         throw new NotFoundError('Khong tim thay phieu de xuat');
     }
 
-    const code = record.requestCode || buildWorkflowCode(isSupply ? 'YCVT' : 'DXM', record);
+    const codePrefix = type === 'supply_request' ? 'YCVT' : type === 'technical_purchase' ? 'KT' : 'DXM';
+    const code = record.requestCode || buildWorkflowCode(codePrefix, record);
     const plantName = record.plantId?.name || record.fromPlantId?.name || 'Cơ sở';
     const plantIds = Array.from(
         new Set([toId(record.plantId), toId(record.fromPlantId), toId(record.toPlantId)].filter(Boolean) as string[])
     );
+    const title =
+        type === 'supply_request'
+            ? `Yêu cầu vật tư ${code}`
+            : type === 'technical_purchase'
+              ? `Đề nghị mua (KT) ${code}`
+              : `Đề xuất mua ${code}`;
 
     return {
-        title: isSupply ? `Yêu cầu vật tư ${code}` : `Đề xuất mua ${code}`,
+        title,
         label: `${code} · ${plantName}`,
         path: buildWorkflowPath(type, requestId),
         plantId: toId(record.plantId) ?? plantIds[0],
@@ -656,18 +680,76 @@ const resolveReplyTo = async (conversationId: mongoose.Types.ObjectId, replyToId
     return target ? target._id : undefined;
 };
 
+// Lọc danh sách @mention: chỉ giữ thành viên hợp lệ của hội thoại; hỗ trợ '@all' = tất cả thành viên.
+// raw có thể là mảng (JSON body) hoặc chuỗi JSON / phân tách dấu phẩy (form-data khi gửi kèm ảnh).
+const resolveMentionIds = (conversation: IChatConversation, raw: unknown): mongoose.Types.ObjectId[] => {
+    let list: unknown[] = [];
+    if (Array.isArray(raw)) {
+        list = raw;
+    } else if (typeof raw === 'string' && raw.trim()) {
+        try {
+            const parsed = JSON.parse(raw);
+            list = Array.isArray(parsed) ? parsed : [raw];
+        } catch {
+            list = raw.split(',');
+        }
+    }
+    if (!list.length) return [];
+
+    const participantIds = new Set(conversation.participantIds.map((id) => String(id)));
+    const result = new Set<string>();
+    for (const value of list) {
+        const id = String(value ?? '').trim();
+        if (id === '@all' || id === 'all') {
+            participantIds.forEach((pid) => result.add(pid));
+        } else if (mongoose.Types.ObjectId.isValid(id) && participantIds.has(id)) {
+            result.add(id);
+        }
+    }
+    return Array.from(result).map(toObjectId);
+};
+
+// Báo @mention cho người được nhắc — luôn gửi, KỂ CẢ khi họ đã tắt thông báo hội thoại (việc gấp không bị bỏ lỡ)
+const notifyMentionedUsers = (
+    conversation: IChatConversation,
+    populatedMessage: any,
+    mentionIds: mongoose.Types.ObjectId[],
+    senderId: string,
+    body: string,
+    attachments: IChatAttachment[]
+) => {
+    if (!mentionIds.length) return;
+    const senderName = getUserDisplayName(populatedMessage?.senderId);
+    const preview = getMessagePreview(body, attachments).slice(0, 120) || 'đã nhắc bạn trong tin nhắn';
+    const seen = new Set<string>();
+    for (const mentionId of mentionIds) {
+        const id = String(mentionId);
+        if (id === senderId || seen.has(id)) continue;
+        seen.add(id);
+        void notifyUser(id, 'notify:new', {
+            type: 'info',
+            actionType: 'chat',
+            actionId: String(conversation._id),
+            title: `${senderName} đã nhắc bạn`,
+            message: preview,
+        });
+    }
+};
+
 const createUserMessage = async ({
     conversation,
     userId,
     body,
     attachments = [],
     replyTo,
+    mentions = [],
 }: {
     conversation: IChatConversation;
     userId: string;
     body: string;
     attachments?: IChatAttachment[];
     replyTo?: mongoose.Types.ObjectId;
+    mentions?: mongoose.Types.ObjectId[];
 }) => {
     const now = new Date();
     const message = await ChatMessage.create({
@@ -676,12 +758,15 @@ const createUserMessage = async ({
         body,
         attachments,
         replyTo,
+        mentions,
     });
 
     await applyMessageToConversation(conversation, message, userId, getMessagePreview(body, attachments), now);
 
     const populatedMessage = await populateMessage(ChatMessage.findById(message._id));
     await emitConversationSnapshot(conversation, populatedMessage);
+
+    notifyMentionedUsers(conversation, populatedMessage, mentions, userId, body, attachments);
 
     return populatedMessage;
 };
@@ -815,6 +900,29 @@ export const getUnreadSummary = async (req: Request, res: Response, _next: NextF
         customResponse({
             data: { unreadCount },
             message: 'Lay so tin nhan chua doc thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+// Inbox "@ Tôi": các tin gần đây có nhắc tới mình (mọi hội thoại)
+export const getMyMentions = async (req: Request, res: Response, _next: NextFunction) => {
+    const userId = req.userId;
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+        throw new UnAuthorizedError('Phien dang nhap khong hop le');
+    }
+
+    const messages = await populateMessage(
+        ChatMessage.find({ mentions: toObjectId(userId), isDeleted: { $ne: true } })
+            .sort({ createdAt: -1 })
+            .limit(40)
+    );
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: messages.map(serializeMessage),
+            message: 'Lay danh sach nhac den ban thanh cong',
             status: StatusCodes.OK,
             success: true,
         })
@@ -993,11 +1101,13 @@ export const sendMessage = async (req: Request, res: Response, _next: NextFuncti
     }
 
     const replyTo = await resolveReplyTo(conversation._id, req.body?.replyTo);
+    const mentions = resolveMentionIds(conversation, req.body?.mentions);
     const populatedMessage = await createUserMessage({
         conversation,
         userId: userId!,
         body,
         replyTo,
+        mentions,
     });
 
     return res.status(StatusCodes.CREATED).json(
@@ -1030,6 +1140,7 @@ export const sendAttachmentMessage = async (req: Request, res: Response, _next: 
     }
 
     const replyTo = await resolveReplyTo(conversation._id, req.body?.replyTo);
+    const mentions = resolveMentionIds(conversation, req.body?.mentions);
     const attachments = files.length ? await Promise.all(files.map(uploadChatImage)) : [];
     const populatedMessage = await createUserMessage({
         conversation,
@@ -1037,6 +1148,7 @@ export const sendAttachmentMessage = async (req: Request, res: Response, _next: 
         body,
         attachments,
         replyTo,
+        mentions,
     });
 
     return res.status(StatusCodes.CREATED).json(
@@ -1324,6 +1436,18 @@ export const markConversationAsRead = async (req: Request, res: Response, _next:
     await conversation.save();
     const totalUnread = await getTotalUnreadForUser(userId!);
     const populatedConversation = await populateConversation(ChatConversation.findById(conversation._id));
+
+    // Báo "đã xem" cho các thành viên khác để FE hiển thị dấu đã xem theo thời gian thực
+    const readAtIso = now.toISOString();
+    conversation.participantIds.forEach((participantId) => {
+        const id = String(participantId);
+        if (!id || id === userId) return;
+        emitToUser(id, 'chat:conversation:read', {
+            conversationId: String(conversation._id),
+            userId,
+            lastReadAt: readAtIso,
+        });
+    });
 
     emitToUser(userId!, 'chat:read', {
         conversationId: String(conversation._id),
