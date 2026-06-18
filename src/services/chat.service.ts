@@ -22,7 +22,10 @@ import streamifier from 'streamifier';
 const MAX_CHAT_USERS = 30;
 const MAX_CONVERSATION_PARTICIPANTS = 25;
 const MAX_MESSAGE_LENGTH = 4000;
-const MAX_CHAT_ATTACHMENTS = 4;
+const MAX_CHAT_IMAGES = 4;
+const MAX_CHAT_AUDIO_FILES = 1;
+const MAX_CHAT_IMAGE_SIZE = 8 * 1024 * 1024;
+const MAX_CHAT_AUDIO_SIZE = 15 * 1024 * 1024;
 const CONTEXT_TYPES = [
     'maintenance',
     'transfer',
@@ -185,12 +188,14 @@ const serializeReplyPreview = (reply: any) => {
     const senderName =
         reply.senderId && typeof reply.senderId === 'object' ? getUserDisplayName(reply.senderId) : undefined;
     const hasImage = Array.isArray(reply.attachments) && reply.attachments.some((a: any) => a?.type === 'image');
+    const hasAudio = Array.isArray(reply.attachments) && reply.attachments.some((a: any) => a?.type === 'audio');
     return {
         id: toId(reply),
         senderId: toId(reply.senderId),
         senderName,
         body: reply.isDeleted ? 'Tin nhắn đã được thu hồi' : (reply.body ?? ''),
         hasImage: reply.isDeleted ? false : hasImage,
+        hasAudio: reply.isDeleted ? false : hasAudio,
         isDeleted: reply.isDeleted === true,
     };
 };
@@ -214,7 +219,17 @@ const serializeMessage = (message: IChatMessage | any) => ({
 
 const getMessagePreview = (body: string, attachments: IChatAttachment[] = []) => {
     if (body) return body.slice(0, 500);
-    if (attachments.length) return attachments.length > 1 ? `Đã gửi ${attachments.length} ảnh` : 'Đã gửi 1 ảnh';
+    if (attachments.length) {
+        const imageCount = attachments.filter((item) => item.type === 'image').length;
+        const audioCount = attachments.filter((item) => item.type === 'audio').length;
+        const parts = [
+            imageCount ? `${imageCount} ảnh` : '',
+            audioCount ? `${audioCount} ghi âm` : '',
+        ].filter(Boolean);
+
+        if (parts.length) return `Đã gửi ${parts.join(' và ')}`;
+        return attachments.length > 1 ? `Đã gửi ${attachments.length} tệp` : 'Đã gửi 1 tệp';
+    }
     return '';
 };
 
@@ -369,7 +384,7 @@ const uploadChatImage = (file: Express.Multer.File): Promise<IChatAttachment> =>
     new Promise((resolve, reject) => {
         const uploadStream = cloudinary.uploader.upload_stream(
             {
-                folder: 'hai-dang/chat',
+                folder: 'hai-dang/chat/images',
                 resource_type: 'image',
                 tags: ['chat', 'maintenance'],
             },
@@ -388,6 +403,43 @@ const uploadChatImage = (file: Express.Multer.File): Promise<IChatAttachment> =>
                     size: file.size,
                     width: result.width,
                     height: result.height,
+                });
+            }
+        );
+
+        streamifier.createReadStream(file.buffer).pipe(uploadStream);
+    });
+
+const uploadChatAudio = (file: Express.Multer.File, durationMs?: number): Promise<IChatAttachment> =>
+    new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+            {
+                folder: 'hai-dang/chat/audio',
+                resource_type: 'video',
+                tags: ['chat', 'voice-note'],
+            },
+            (error, result?: UploadApiResponse) => {
+                if (error || !result) {
+                    reject(error || new Error('Upload ghi am that bai'));
+                    return;
+                }
+
+                const cloudinaryDuration = Number((result as UploadApiResponse & { duration?: number }).duration);
+                const resolvedDurationMs =
+                    Number.isFinite(durationMs) && durationMs && durationMs > 0
+                        ? Math.round(durationMs)
+                        : Number.isFinite(cloudinaryDuration) && cloudinaryDuration > 0
+                          ? Math.round(cloudinaryDuration * 1000)
+                          : undefined;
+
+                resolve({
+                    type: 'audio',
+                    url: result.secure_url,
+                    publicId: result.public_id,
+                    name: file.originalname,
+                    mimeType: file.mimetype,
+                    size: file.size,
+                    durationMs: resolvedDurationMs,
                 });
             }
         );
@@ -1120,28 +1172,70 @@ export const sendMessage = async (req: Request, res: Response, _next: NextFuncti
     );
 };
 
+const getUploadedChatFiles = (files: Request['files']) => {
+    if (!files) {
+        return { imageFiles: [] as Express.Multer.File[], audioFiles: [] as Express.Multer.File[] };
+    }
+
+    if (Array.isArray(files)) {
+        return {
+            imageFiles: files.filter((file) => file.fieldname === 'images' || file.mimetype.startsWith('image/')),
+            audioFiles: files.filter((file) => file.fieldname === 'audio' || file.mimetype.startsWith('audio/')),
+        };
+    }
+
+    const record = files as Record<string, Express.Multer.File[] | undefined>;
+    return {
+        imageFiles: record.images ?? [],
+        audioFiles: record.audio ?? [],
+    };
+};
+
+const parseOptionalDurationMs = (value: unknown) => {
+    const duration = Number(value);
+    if (!Number.isFinite(duration) || duration <= 0) return undefined;
+    return Math.min(Math.round(duration), 10 * 60 * 1000);
+};
+
 export const sendAttachmentMessage = async (req: Request, res: Response, _next: NextFunction) => {
     const userId = req.userId;
     const conversationId = String(req.params.id);
     const conversation = await ensureConversationMember(conversationId, userId);
     const body = String(req.body?.body ?? '').trim();
-    const files = Array.isArray(req.files) ? (req.files as Express.Multer.File[]) : [];
+    const { imageFiles, audioFiles } = getUploadedChatFiles(req.files);
+    const totalFiles = imageFiles.length + audioFiles.length;
 
     if (body.length > MAX_MESSAGE_LENGTH) {
         throw new BadRequestError('Tin nhan qua dai');
     }
 
-    if (!files.length && !body) {
-        throw new BadRequestError('Can nhap noi dung hoac chon anh de gui');
+    if (!totalFiles && !body) {
+        throw new BadRequestError('Can nhap noi dung, chon anh hoac ghi am de gui');
     }
 
-    if (files.length > MAX_CHAT_ATTACHMENTS) {
-        throw new BadRequestError(`Chi duoc gui toi da ${MAX_CHAT_ATTACHMENTS} anh moi lan`);
+    if (imageFiles.length > MAX_CHAT_IMAGES) {
+        throw new BadRequestError(`Chi duoc gui toi da ${MAX_CHAT_IMAGES} anh moi lan`);
+    }
+
+    if (audioFiles.length > MAX_CHAT_AUDIO_FILES) {
+        throw new BadRequestError('Chi duoc gui 1 ghi am moi lan');
+    }
+
+    if (imageFiles.some((file) => file.size > MAX_CHAT_IMAGE_SIZE)) {
+        throw new BadRequestError('Anh vuot qua 8MB');
+    }
+
+    if (audioFiles.some((file) => file.size > MAX_CHAT_AUDIO_SIZE)) {
+        throw new BadRequestError('Ghi am vuot qua 15MB');
     }
 
     const replyTo = await resolveReplyTo(conversation._id, req.body?.replyTo);
     const mentions = resolveMentionIds(conversation, req.body?.mentions);
-    const attachments = files.length ? await Promise.all(files.map(uploadChatImage)) : [];
+    const audioDurationMs = parseOptionalDurationMs(req.body?.audioDurationMs);
+    const attachments = [
+        ...(imageFiles.length ? await Promise.all(imageFiles.map(uploadChatImage)) : []),
+        ...(audioFiles.length ? await Promise.all(audioFiles.map((file) => uploadChatAudio(file, audioDurationMs))) : []),
+    ];
     const populatedMessage = await createUserMessage({
         conversation,
         userId: userId!,
@@ -1154,7 +1248,7 @@ export const sendAttachmentMessage = async (req: Request, res: Response, _next: 
     return res.status(StatusCodes.CREATED).json(
         customResponse({
             data: serializeMessage(populatedMessage),
-            message: 'Gui anh thanh cong',
+            message: 'Gui tep dinh kem thanh cong',
             status: StatusCodes.CREATED,
             success: true,
         })
@@ -1189,10 +1283,11 @@ export const recallMessage = async (req: Request, res: Response, _next: NextFunc
     target.deletedAt = new Date();
     await target.save();
 
-    // Xoá ảnh trên Cloudinary best-effort, không chặn luồng thu hồi
+    // Xoá media trên Cloudinary best-effort, không chặn luồng thu hồi
     for (const attachment of target.attachments ?? []) {
         if (attachment.publicId) {
-            void cloudinary.uploader.destroy(attachment.publicId).catch(() => undefined);
+            const destroyOptions = attachment.type === 'audio' ? { resource_type: 'video' as const } : undefined;
+            void cloudinary.uploader.destroy(attachment.publicId, destroyOptions).catch(() => undefined);
         }
     }
 

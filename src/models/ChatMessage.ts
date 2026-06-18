@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-export type ChatAttachmentType = 'image' | 'file';
+export type ChatAttachmentType = 'image' | 'audio' | 'file';
 
 export interface IChatAttachment {
     type: ChatAttachmentType;
@@ -11,6 +11,7 @@ export interface IChatAttachment {
     size?: number;
     width?: number;
     height?: number;
+    durationMs?: number;
 }
 
 export interface IChatReaction {
@@ -50,7 +51,7 @@ const ChatAttachmentSchema = new mongoose.Schema<IChatAttachment>(
     {
         type: {
             type: String,
-            enum: ['image', 'file'],
+            enum: ['image', 'audio', 'file'],
             required: true,
         },
         url: {
@@ -81,6 +82,10 @@ const ChatAttachmentSchema = new mongoose.Schema<IChatAttachment>(
             min: 0,
         },
         height: {
+            type: Number,
+            min: 0,
+        },
+        durationMs: {
             type: Number,
             min: 0,
         },

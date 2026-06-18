@@ -1,3 +1,5 @@
+import { evaluateMislocation } from '@/constant/mislocation';
+
 const toPlain = (value: any) => (typeof value?.toObject === 'function' ? value.toObject() : value);
 
 const toId = (value: any) => {
@@ -118,6 +120,21 @@ export const serializeAsset = (input: any) => {
               }
             : undefined;
 
+    const officialPlantId = plant?.id ?? toId(asset?.plantId);
+    const mislocation = evaluateMislocation(officialPlantId, ls);
+    const locationMismatch = mislocation.mismatch
+        ? {
+              mismatch: true as const,
+              officialPlantId,
+              officialPlantName: plant?.name,
+              actualPlantId: lastSeen?.plantId,
+              actualPlantName: lastSeen?.plantName,
+              distanceM: mislocation.distanceM,
+              accuracy: mislocation.accuracy,
+              scannedAt: lastSeen?.scannedAt,
+          }
+        : undefined;
+
     return {
         id: toId(asset),
         name: asset?.name,
@@ -141,6 +158,7 @@ export const serializeAsset = (input: any) => {
         lastMaintenanceDate: toIso(asset?.lastMaintenanceDate),
         nextMaintenanceDate: toIso(asset?.nextMaintenanceDate),
         lastSeen,
+        locationMismatch,
         createdAt: toIso(asset?.createdAt),
         updatedAt: toIso(asset?.updatedAt),
     };

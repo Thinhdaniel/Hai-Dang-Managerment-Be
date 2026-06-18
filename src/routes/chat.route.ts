@@ -2,7 +2,7 @@ import { Router } from 'express';
 import asyncHandler from '@/utils/asyncHandler';
 import { authenticate } from '@/middlewares/authenticationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
-import { chatImageUpload } from '@/middlewares/multerMiddleware';
+import { chatAttachmentUpload } from '@/middlewares/multerMiddleware';
 import * as chatService from '@/services/chat.service';
 
 const router = Router();
@@ -28,7 +28,10 @@ router.patch('/conversations/:id/messages/:messageId/pin', validateObjectId, asy
 router.post(
     '/conversations/:id/attachments',
     validateObjectId,
-    chatImageUpload.array('images', 4),
+    chatAttachmentUpload.fields([
+        { name: 'images', maxCount: 4 },
+        { name: 'audio', maxCount: 1 },
+    ]),
     asyncHandler(chatService.sendAttachmentMessage)
 );
 router.patch('/conversations/:id/read', validateObjectId, asyncHandler(chatService.markConversationAsRead));

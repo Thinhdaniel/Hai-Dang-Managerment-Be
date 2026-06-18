@@ -1,6 +1,7 @@
 import QrScanLog from '@/models/QrScanLog';
 import Asset from '@/models/Asset';
 import Plant from '@/models/Plant';
+import { emitToAll } from '@/lib/socket';
 import { findNearest, isValidLatLng } from '@/utils/geo';
 import { getPagination } from '@/utils/pagination';
 import { sendSuccess } from './service.helpers';
@@ -51,6 +52,9 @@ const updateAssetLastSeenFromScan = async (assetId: string, geo: any, scannedBy?
             },
         }
     );
+
+    // Báo realtime để bản đồ vị trí (mini-map) cập nhật ngay mà không cần reload.
+    emitToAll('asset:updated', { assetId: String(assetId), action: 'location-updated', changedFields: ['lastSeen'] });
 };
 
 const toId = (value: any) => {

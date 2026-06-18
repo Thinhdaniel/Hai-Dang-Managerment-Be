@@ -338,6 +338,15 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
         throw new BadRequestError('Co thiet bi da tra doi tac, khong the tao phieu bao tri moi');
     }
 
+    // Một phiếu bảo trì chỉ gộp máy cùng một cơ sở — để snapshot cơ sở của phiếu đúng cho mọi máy
+    // (giống lệnh điều chuyển: cùng cơ sở xuất phát). Tránh máy cơ sở khác bị tính nhầm cơ sở.
+    const distinctPlantIds = new Set(
+        assets.map((a) => String((a as any).plantId?._id ?? (a as any).plantId ?? ''))
+    );
+    if (distinctPlantIds.size > 1) {
+        throw new BadRequestError('Cac may trong cung mot phieu bao tri phai thuoc cung mot co so');
+    }
+
     const approvedTransfer = await Transfer.findOne({
         $or: [{ assetId: { $in: requestedIds } }, { assetIds: { $in: requestedIds } }],
         status: 'approved',

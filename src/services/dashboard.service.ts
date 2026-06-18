@@ -1,7 +1,9 @@
 import Asset from '@/models/Asset';
 import Maintenance from '@/models/Maintenance';
 import { ASSET_OWNERSHIP_TYPE } from '@/constant/assetStatus';
+import { ROLE_GROUPS } from '@/constant/permissions';
 import { dashboardRepository } from '@/repositories/dashboard.repository';
+import { serializeAsset, serializePlant } from '@/utils/serializers';
 import customResponse from '@/utils/response';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
@@ -48,6 +50,8 @@ export const getDashboardOverview = async (req: Request, res: Response, next: Ne
         }),
     ]);
     const externalRepairMonth = externalRepairAgg[0] ?? { totalCost: 0, count: 0 };
+    // Chi phí (số tiền) chỉ cho ADMIN + Giám đốc — ẩn con số với role khác (FE cũng ẩn thẻ).
+    const canViewCost = (ROLE_GROUPS.DIRECTOR_UP as readonly string[]).includes(String(req.role));
 
     const facilityStats = facilityStatsRaw.map((item) => ({
         ...item,
@@ -65,7 +69,7 @@ export const getDashboardOverview = async (req: Request, res: Response, next: Ne
             data: {
                 summary,
                 maintenanceCost: {
-                    externalRepairCostThisMonth: externalRepairMonth.totalCost,
+                    externalRepairCostThisMonth: canViewCost ? externalRepairMonth.totalCost : 0,
                     externalRepairCompletedThisMonth: externalRepairMonth.count,
                     externalRepairPendingApproval,
                     externalRepairInProgress,
@@ -74,6 +78,89 @@ export const getDashboardOverview = async (req: Request, res: Response, next: Ne
                 recentActivities,
             },
             message: 'Lay tong quan dashboard thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const getDashboardInsights = async (req: Request, res: Response, next: NextFunction) => {
+    // Chi phí chỉ dành cho ADMIN + Giám đốc — không trả costTrend cho role khác (chặn rò rỉ qua API).
+    const canViewCost = (ROLE_GROUPS.DIRECTOR_UP as readonly string[]).includes(String(req.role));
+
+    const [topBrokenAssets, resolution, overdue, costTrend, mislocatedAssets] = await Promise.all([
+        dashboardRepository.getTopBrokenAssets(8),
+        dashboardRepository.getResolutionStats(),
+        dashboardRepository.getOverdueTickets(7, 8),
+        canViewCost ? dashboardRepository.getCostTrend(6) : Promise.resolve([]),
+        dashboardRepository.getMislocatedAssets(8),
+    ]);
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: {
+                topBrokenAssets: topBrokenAssets.map((item) => ({ ...item, lastDate: toIso(item.lastDate) })),
+                resolution,
+                overdue: {
+                    ...overdue,
+                    items: overdue.items.map((item) => ({ ...item, createdAt: toIso(item.createdAt) })),
+                },
+                costTrend,
+                mislocatedAssets: mislocatedAssets.map((item) => ({ ...item, scannedAt: toIso(item.scannedAt) })),
+            },
+            message: 'Lay du lieu phan tich dashboard thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+// Vị trí GPS lần quét cuối của các máy + cơ sở -> dữ liệu cho mini-map. Chỉ Giám đốc trở lên (chặn ở route bằng authorize).
+export const getAssetLocations = async (req: Request, res: Response, next: NextFunction) => {
+    const plantId = typeof req.query.plantId === 'string' && req.query.plantId ? req.query.plantId : undefined;
+
+    const [docs, plants, withoutGps] = await Promise.all([
+        dashboardRepository.getAssetLocationDocs(plantId),
+        dashboardRepository.getPlantsWithCoordinates(),
+        dashboardRepository.countAssetsWithoutGps(plantId),
+    ]);
+
+    const assets = docs
+        .map(serializeAsset)
+        .map((asset) => ({
+            id: asset.id,
+            machineCode: asset.machineCode,
+            name: asset.name,
+            status: asset.status,
+            plantId: asset.plant?.id,
+            plantName: asset.plant?.name,
+            lat: asset.lastSeen?.lat,
+            lng: asset.lastSeen?.lng,
+            accuracy: asset.lastSeen?.accuracy,
+            distanceM: asset.lastSeen?.distanceM,
+            scannedAt: asset.lastSeen?.scannedAt,
+            scannedByName: asset.lastSeen?.scannedByName,
+            mismatch: Boolean(asset.locationMismatch?.mismatch),
+            officialPlantName: asset.locationMismatch?.officialPlantName ?? asset.plant?.name,
+            actualPlantName: asset.locationMismatch?.actualPlantName ?? asset.lastSeen?.plantName,
+        }))
+        .filter((asset) => typeof asset.lat === 'number' && typeof asset.lng === 'number');
+
+    const facilities = plants
+        .map(serializePlant)
+        .filter((plant) => plant.coordinates)
+        .map((plant) => ({
+            id: plant.id,
+            name: plant.name,
+            code: plant.code,
+            lat: plant.coordinates!.lat,
+            lng: plant.coordinates!.lng,
+        }));
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: { assets, facilities, withoutGps },
+            message: 'Lay vi tri may tren ban do thanh cong',
             status: StatusCodes.OK,
             success: true,
         })
