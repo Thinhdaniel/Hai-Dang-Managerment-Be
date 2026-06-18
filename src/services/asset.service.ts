@@ -4,10 +4,12 @@ import { emitToAll } from '@/lib/socket';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
 import { assetRepository } from '@/repositories/asset.repository';
 import { confirmAssetImport, previewAssetImport } from '@/services/asset-import.helpers';
+import { ensureTypeCode, generateMachineCode } from '@/services/machine-code.service';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import { generateUniqueMachinePublicId } from '@/utils/publicId';
 import { buildSearchRegex } from '@/utils/search';
 import { serializeAsset, serializePublicAsset } from '@/utils/serializers';
+import Brand from '@/models/Brand';
 import Transfer from '@/models/Transfer';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
@@ -121,13 +123,34 @@ export const createAsset = async (req: Request, res: Response, next: NextFunctio
     assertValidAssetOwnershipStatus(req.body.status, req.body.ownershipType);
     await assertUniqueSerialAndCode(req.body);
 
+    const { typeCode, ...assetBody } = req.body as Record<string, any>;
+    let machineCode = typeof assetBody.machineCode === 'string' ? assetBody.machineCode.trim() : '';
+
+    // Mã máy để trống -> tự sinh mã thông minh và ghi nhớ mã loại; có nhập tay + có typeCode -> chỉ ghi nhớ mã loại.
+    if (!machineCode) {
+        const brand = await Brand.findOne({ _id: assetBody.brandId, isDeleted: { $ne: true } })
+            .select('name')
+            .lean();
+        const generated = await generateMachineCode({
+            type: assetBody.type,
+            brandName: brand?.name,
+            ownershipType: assetBody.ownershipType,
+            typeCodeOverride: typeCode,
+        });
+        machineCode = generated.machineCode;
+        await ensureTypeCode(assetBody.type, generated.typeCode, Boolean(typeCode));
+    } else if (typeCode) {
+        await ensureTypeCode(assetBody.type, typeCode, true);
+    }
+
     const asset = await assetRepository.create({
-        ...req.body,
+        ...assetBody,
+        machineCode,
         publicId: await createAvailablePublicId(),
         createdBy: req.userId,
         updatedBy: req.userId,
-        status: req.body.status ?? ASSET_STATUS.ACTIVE,
-        ownershipType: req.body.ownershipType ?? ASSET_OWNERSHIP_TYPE.OWNED,
+        status: assetBody.status ?? ASSET_STATUS.ACTIVE,
+        ownershipType: assetBody.ownershipType ?? ASSET_OWNERSHIP_TYPE.OWNED,
     });
 
     const createdAsset = await assetRepository.findById(String(asset._id));

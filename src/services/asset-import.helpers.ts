@@ -4,6 +4,7 @@ import { createAssetSchema } from '@/validations/asset.validation';
 import Brand from '@/models/Brand';
 import Plant from '@/models/Plant';
 import { assetRepository } from '@/repositories/asset.repository';
+import { ensureTypeCode, generateMachineCode } from '@/services/machine-code.service';
 import { generateUniqueMachinePublicId } from '@/utils/publicId';
 import XLSX from 'xlsx';
 
@@ -500,6 +501,7 @@ export const previewAssetImport = async (fileBuffer: Buffer, userId?: string): P
 export const confirmAssetImport = async (fileBuffer: Buffer, userId?: string): Promise<AssetImportConfirmResult> => {
     const rows = await parseImportRows(fileBuffer, userId);
     const reservedPublicIds = new Set<string>();
+    const brandNameById = new Map<string, string>();
     const validPayloads = [];
 
     for (const row of rows) {
@@ -511,10 +513,30 @@ export const confirmAssetImport = async (fileBuffer: Buffer, userId?: string): P
             async (candidate) =>
                 reservedPublicIds.has(candidate) || Boolean(await assetRepository.existsByPublicId(candidate))
         );
-
         reservedPublicIds.add(publicId);
+
+        // Dòng để trống mã máy -> tự sinh mã thông minh theo loại-nhãn-nguồn-STT.
+        let machineCode = typeof row.payload.machineCode === 'string' ? row.payload.machineCode.trim() : '';
+        if (!machineCode) {
+            const brandId = String(row.payload.brandId ?? '');
+            let brandName = brandNameById.get(brandId);
+            if (brandName === undefined) {
+                const brand = await Brand.findById(brandId).select('name').lean();
+                brandName = brand?.name ?? '';
+                brandNameById.set(brandId, brandName);
+            }
+            const generated = await generateMachineCode({
+                type: typeof row.payload.type === 'string' ? row.payload.type : undefined,
+                brandName,
+                ownershipType: typeof row.payload.ownershipType === 'string' ? row.payload.ownershipType : undefined,
+            });
+            machineCode = generated.machineCode;
+            await ensureTypeCode(typeof row.payload.type === 'string' ? row.payload.type : undefined, generated.typeCode);
+        }
+
         validPayloads.push({
             ...row.payload,
+            machineCode,
             publicId,
         });
     }

@@ -1,4 +1,4 @@
-import { assetService } from '@/services';
+import { assetService, machineCodeService } from '@/services';
 import asyncHandler from '@/utils/asyncHandler';
 import { NextFunction, Request, Response } from 'express';
 
@@ -56,4 +56,16 @@ export const previewAssetImportFile = asyncHandler(async (req: Request, res: Res
 
 export const confirmAssetImportFile = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await assetService.confirmAssetImportFile(req, res, next);
+});
+
+export const suggestAssetCode = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await machineCodeService.suggestAssetCode(req, res, next);
+});
+
+export const previewNormalizeAssetCodes = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await machineCodeService.previewNormalizeAssetCodes(req, res, next);
+});
+
+export const confirmNormalizeAssetCodes = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await machineCodeService.confirmNormalizeAssetCodes(req, res, next);
 });

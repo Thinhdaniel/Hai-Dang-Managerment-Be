@@ -4,7 +4,10 @@ import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 
 export const createAssetSchema = z.object({
     name: zRequiredString('Ten thiet bi'),
-    machineCode: zRequiredString('Ma may'),
+    // Để trống -> hệ thống tự sinh mã thông minh theo loại-nhãn-nguồn-STT.
+    machineCode: zOptionalString(),
+    // Mã viết tắt loại máy do người dùng xác nhận khi loại chưa có mã (để ghi nhớ).
+    typeCode: zOptionalString(),
     serial: zOptionalString(),
     type: zRequiredString('Loai may'),
     model: zRequiredString('Model may'),

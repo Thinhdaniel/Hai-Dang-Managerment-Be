@@ -29,6 +29,20 @@ router.post(
     assetController.confirmAssetImportFile
 );
 router.get('/export', authorize(...ROLE_GROUPS.MANAGEMENT), assetController.exportAssets);
+
+// Mã máy thông minh: gợi ý khi tạo (MANAGEMENT); chuẩn hoá hàng loạt mã cũ (Giám đốc trở lên).
+router.post('/code/suggest', authorize(...ROLE_GROUPS.MANAGEMENT), assetController.suggestAssetCode);
+router.post(
+    '/code/normalize/preview',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    assetController.previewNormalizeAssetCodes
+);
+router.post(
+    '/code/normalize/confirm',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    assetController.confirmNormalizeAssetCodes
+);
+
 router.get('/', assetController.getAllAssets);
 router.patch(
     '/:id/status',
