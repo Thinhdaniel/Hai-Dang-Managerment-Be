@@ -456,11 +456,11 @@ export const getDataQualityOverview = async (req: Request, res: Response, _next:
             buildCheck(
                 'assets.duplicateSerial',
                 'Serial bị trùng',
-                'warning',
+                'critical',
                 assetsDuplicateSerial.count,
                 totalAssets,
-                'Serial trùng có thể là nhập sai hoặc máy trùng hồ sơ.',
-                'Đối chiếu thực tế và gộp/sửa hồ sơ nếu cần.',
+                'Serial là số nhận dạng duy nhất của máy — về nguyên tắc không bao giờ được trùng. Trùng serial gần như chắc chắn là nhập sai hoặc trùng hồ sơ máy.',
+                'Đối chiếu serial thực tế trên máy và sửa/gộp hồ sơ để mỗi serial là duy nhất.',
                 assetsDuplicateSerial.records
             ),
         ]),

@@ -93,8 +93,33 @@ const assertValidAssetOwnershipStatus = (status?: string, ownershipType?: string
     }
 };
 
+/**
+ * Unique mềm cho serial & mã máy: được phép để trống (nhiều máy mất serial), nhưng nếu đã nhập thì phải duy nhất
+ * trong các máy chưa xoá (so sánh không phân biệt hoa/thường). Bỏ qua trường không có trong body (update từng phần).
+ */
+const assertUniqueSerialAndCode = async (body: Record<string, unknown>, excludeId?: string) => {
+    const serial = typeof body.serial === 'string' ? body.serial.trim() : '';
+    if (serial) {
+        const dup = await assetRepository.findActiveDuplicateField('serial', serial, excludeId);
+        if (dup) {
+            const owner = dup.machineCode || dup.name || 'máy khác';
+            throw new BadRequestError(`Serial "${serial}" đã thuộc ${owner}. Mỗi serial chỉ được dùng cho một máy.`);
+        }
+    }
+
+    const machineCode = typeof body.machineCode === 'string' ? body.machineCode.trim() : '';
+    if (machineCode) {
+        const dup = await assetRepository.findActiveDuplicateField('machineCode', machineCode, excludeId);
+        if (dup) {
+            const owner = dup.name || dup.serial || 'một máy khác';
+            throw new BadRequestError(`Mã máy "${machineCode}" đã tồn tại (${owner}). Vui lòng dùng mã khác.`);
+        }
+    }
+};
+
 export const createAsset = async (req: Request, res: Response, next: NextFunction) => {
     assertValidAssetOwnershipStatus(req.body.status, req.body.ownershipType);
+    await assertUniqueSerialAndCode(req.body);
 
     const asset = await assetRepository.create({
         ...req.body,
@@ -308,6 +333,7 @@ export const updateAsset = async (req: Request, res: Response, next: NextFunctio
         req.body.status ?? currentAsset.status,
         req.body.ownershipType ?? currentAsset.ownershipType
     );
+    await assertUniqueSerialAndCode(req.body, String(req.params.id));
 
     const asset = await assetRepository.updateById(String(req.params.id), { ...req.body, updatedBy: req.userId });
 

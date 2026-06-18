@@ -440,6 +440,51 @@ const parseImportRows = async (fileBuffer: Buffer, userId?: string) => {
         });
     }
 
+    // Serial là số nhận dạng duy nhất: chặn trùng cả trong file lẫn với hệ thống. Bỏ qua dòng không nhập serial.
+    const getSerialKey = (row: AssetImportParsedRow) => {
+        const serial = row.payload?.serial;
+        if (!serial || typeof serial !== 'string') return '';
+        return normalizeMachineCodeKey(serial);
+    };
+
+    const duplicateSerialRows = new Map<string, AssetImportParsedRow[]>();
+    parsedRows.forEach((row) => {
+        const key = getSerialKey(row);
+        if (!key) return;
+        const rowsForSerial = duplicateSerialRows.get(key) ?? [];
+        rowsForSerial.push(row);
+        duplicateSerialRows.set(key, rowsForSerial);
+    });
+
+    duplicateSerialRows.forEach((rowsForSerial) => {
+        if (rowsForSerial.length < 2) return;
+        rowsForSerial.forEach((row) => {
+            row.errors.push('Serial bi trung trong file import');
+            row.isValid = false;
+            row.payload = undefined;
+        });
+    });
+
+    const serials = parsedRows
+        .map((row) => row.payload?.serial)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+    if (serials.length) {
+        const existingBySerial = await assetRepository.findExistingSerials(serials);
+        const existingSerialSet = new Set(existingBySerial.map((asset) => normalizeMachineCodeKey(String(asset.serial))));
+
+        parsedRows.forEach((row) => {
+            const key = getSerialKey(row);
+            if (!key) return;
+
+            if (existingSerialSet.has(key)) {
+                row.errors.push('Serial da ton tai trong he thong');
+                row.isValid = false;
+                row.payload = undefined;
+            }
+        });
+    }
+
     return parsedRows;
 };
 

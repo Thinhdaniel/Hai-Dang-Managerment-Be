@@ -72,6 +72,24 @@ export const assetRepository = {
             .lean();
     },
 
+    // Serial đang dùng (máy chưa xoá) khớp với danh sách — collation strength 2 để so không phân biệt hoa/thường.
+    findExistingSerials(serials: string[]) {
+        return Asset.find({ isDeleted: { $ne: true }, serial: { $in: serials } })
+            .select('serial')
+            .collation({ locale: 'vi', strength: 2 })
+            .lean();
+    },
+
+    // Tìm máy khác (chưa xoá) trùng giá trị của 1 trường (serial/machineCode), so không phân biệt hoa/thường.
+    findActiveDuplicateField(field: 'serial' | 'machineCode', value: string, excludeId?: string) {
+        const filter: Record<string, unknown> = { isDeleted: { $ne: true }, [field]: value };
+        if (excludeId) filter._id = { $ne: excludeId };
+        return Asset.findOne(filter)
+            .collation({ locale: 'vi', strength: 2 })
+            .select('machineCode name serial')
+            .lean();
+    },
+
     insertMany(documents: Record<string, unknown>[]) {
         return Asset.insertMany(documents, { ordered: false });
     },
