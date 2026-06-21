@@ -2,7 +2,8 @@ import ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
 
 const FONT = 'Times New Roman';
-const thin = { style: 'thin' as const, color: { argb: 'FF64748B' } };
+const thin = { style: 'thin' as const, color: { argb: 'FF94A3B8' } };
+const medium = { style: 'medium' as const, color: { argb: 'FF334155' } };
 const border = { top: thin, left: thin, bottom: thin, right: thin };
 
 const BATCH_STATUS_LABEL: Record<string, string> = {
@@ -24,9 +25,9 @@ const ITEM_STATUS_LABEL: Record<string, string> = {
 };
 
 const SOURCE_LABEL: Record<string, string> = {
-    asset: 'Trong hệ thống',
+    asset: 'Hệ thống',
     external: 'Ngoài hệ thống',
-    qr_only: 'Tem QR tạm',
+    qr_only: 'QR tạm',
 };
 
 const CONDITION_LABEL: Record<string, string> = {
@@ -48,13 +49,11 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 const text = (value?: unknown) => String(value ?? '').trim() || '-';
-const cell = (ws: ExcelJS.Worksheet, address: string) => ws.getCell(address);
-
-const formatDate = (value?: string | Date) => {
-    if (!value) return '-';
-    const parsed = dayjs(value);
-    return parsed.isValid() ? parsed.format('DD/MM/YYYY') : '-';
-};
+const codeText = (item: any) => text(item.machineCode || item.asset?.machineCode || item.publicId);
+const nameText = (item: any) => text(item.name || item.asset?.name);
+const modelSerialText = (item: any) =>
+    [item.model || item.asset?.model, item.serial || item.asset?.serial].filter(Boolean).join(' / ') || '-';
+const money = (value?: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
 const formatDateTime = (value?: string | Date) => {
     if (!value) return '-';
@@ -62,13 +61,20 @@ const formatDateTime = (value?: string | Date) => {
     return parsed.isValid() ? parsed.format('DD/MM/YYYY HH:mm') : '-';
 };
 
+const formatDate = (value?: string | Date) => {
+    if (!value) return '-';
+    const parsed = dayjs(value);
+    return parsed.isValid() ? parsed.format('DD/MM/YYYY') : '-';
+};
+
+const cell = (ws: ExcelJS.Worksheet, address: string) => ws.getCell(address);
+
 const mergeValue = (ws: ExcelJS.Worksheet, range: string, value: unknown, style: Partial<ExcelJS.Style> = {}) => {
     ws.mergeCells(range);
-    const topLeft = range.split(':')[0];
-    const target = cell(ws, topLeft);
+    const target = cell(ws, range.split(':')[0]);
     target.value = value as ExcelJS.CellValue;
     target.style = {
-        font: { name: FONT, size: 11 },
+        font: { name: FONT, size: 10.5 },
         alignment: { vertical: 'middle', wrapText: true },
         ...style,
     };
@@ -84,231 +90,153 @@ const setInfo = (
     value: unknown
 ) => {
     mergeValue(ws, labelRange, label, {
-        font: { name: FONT, size: 11, bold: true },
+        font: { name: FONT, size: 10, bold: true },
         alignment: { vertical: 'middle' },
     });
-    mergeValue(ws, valueRange, text(value), {
-        font: { name: FONT, size: 11 },
+    mergeValue(ws, valueRange, value, {
+        font: { name: FONT, size: 10 },
         alignment: { vertical: 'middle', wrapText: true },
     });
-    ws.getRow(row).height = 22;
+    ws.getRow(row).height = 21;
 };
 
-const styleBox = (ws: ExcelJS.Worksheet, range: string, fillArgb: string) => {
-    const [from, to] = range.split(':');
-    const start = ws.getCell(from);
-    const end = ws.getCell(to);
-    for (let row = start.row; row <= end.row; row += 1) {
-        for (let col = start.col; col <= end.col; col += 1) {
-            const current = ws.getCell(row, col);
-            current.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
-            current.border = border;
-            current.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-            current.font = { name: FONT, size: 11, bold: true, color: { argb: 'FF0F172A' } };
+const styleRangeBorder = (ws: ExcelJS.Worksheet, fromRow: number, toRow: number, fromCol = 1, toCol = 7) => {
+    for (let row = fromRow; row <= toRow; row += 1) {
+        for (let col = fromCol; col <= toCol; col += 1) {
+            ws.getCell(row, col).border = border;
         }
     }
 };
 
-const resolveCode = (item: any) => item.machineCode || item.asset?.machineCode || item.publicId || '';
-const resolveName = (item: any) => item.name || item.asset?.name || 'Máy chưa định danh';
-const sumNumber = (items: any[], key: string) =>
-    items.reduce((total, item) => total + (Number.isFinite(Number(item?.[key])) ? Number(item[key]) : 0), 0);
-
-export const generateAssetDisposalXlsx = async (detail: any): Promise<Buffer> => {
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Hai Dang Management';
-    workbook.created = new Date();
-
-    const ws = workbook.addWorksheet('Danh sach thanh ly may', {
+const buildPrintableSheet = (workbook: ExcelJS.Workbook, detail: any) => {
+    const batch = detail.batch ?? {};
+    const items = Array.isArray(detail.items) ? detail.items : [];
+    const summary = detail.summary ?? {};
+    const ws = workbook.addWorksheet('Bien ban A4', {
         pageSetup: {
             paperSize: 9,
-            orientation: 'landscape',
+            orientation: 'portrait',
             fitToPage: true,
             fitToWidth: 1,
             fitToHeight: 0,
-            margins: { left: 0.25, right: 0.25, top: 0.38, bottom: 0.38, header: 0.15, footer: 0.15 },
+            horizontalCentered: true,
+            margins: { left: 0.25, right: 0.25, top: 0.35, bottom: 0.35, header: 0.15, footer: 0.15 },
         },
     });
 
     ws.columns = [
-        { width: 6 },
-        { width: 17 },
-        { width: 26 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 18 },
-        { width: 15 },
+        { width: 5 },
+        { width: 14 },
+        { width: 22 },
         { width: 16 },
-        { width: 17 },
-        { width: 28 },
+        { width: 13 },
+        { width: 13 },
         { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 16 },
-        { width: 24 },
     ];
-    ws.views = [{ state: 'frozen', ySplit: 15, showGridLines: false }];
+    ws.views = [{ showGridLines: false }];
 
-    const batch = detail.batch ?? {};
-    const items = Array.isArray(detail.items) ? detail.items : [];
-    const summary = detail.summary ?? {};
-
-    mergeValue(ws, 'A1:H1', 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG', {
-        font: { name: FONT, size: 12, bold: true },
-    });
-    mergeValue(ws, 'A2:H2', 'Địa chỉ CS1: Khu 23, Xã Thanh Ba, Tỉnh Phú Thọ', {
-        font: { name: FONT, size: 11, italic: true },
-    });
-    mergeValue(ws, 'M1:P1', `Mã đợt: ${text(batch.code)}`, {
+    mergeValue(ws, 'A1:D1', 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG', {
         font: { name: FONT, size: 11, bold: true },
+    });
+    mergeValue(ws, 'A2:D2', 'Địa chỉ CS1: Khu 23, Xã Thanh Ba, Tỉnh Phú Thọ', {
+        font: { name: FONT, size: 9.5, italic: true },
+    });
+    mergeValue(ws, 'E1:G1', `Mã lô: ${text(batch.code)}`, {
+        font: { name: FONT, size: 10, bold: true },
         alignment: { horizontal: 'right', vertical: 'middle' },
     });
-    mergeValue(ws, 'M2:P2', `Ngày in: ${formatDateTime(new Date())}`, {
-        font: { name: FONT, size: 10, italic: true },
+    mergeValue(ws, 'E2:G2', `Ngày in: ${formatDateTime(new Date())}`, {
+        font: { name: FONT, size: 9.5, italic: true },
         alignment: { horizontal: 'right', vertical: 'middle' },
     });
 
-    mergeValue(ws, 'A4:P4', 'DANH SÁCH MÁY ĐỀ NGHỊ THANH LÝ', {
-        font: { name: FONT, size: 18, bold: true },
+    mergeValue(ws, 'A4:G4', 'BIÊN BẢN RÀ SOÁT MÁY ĐỀ NGHỊ THANH LÝ', {
+        font: { name: FONT, size: 15, bold: true },
         alignment: { horizontal: 'center', vertical: 'middle' },
     });
-    ws.getRow(4).height = 30;
-    mergeValue(ws, 'A5:P5', `Lập ngày ${dayjs(batch.createdAt || new Date()).format('DD/MM/YYYY')}`, {
-        font: { name: FONT, size: 11, italic: true },
-        alignment: { horizontal: 'center', vertical: 'middle' },
-    });
+    ws.getRow(4).height = 25;
 
-    setInfo(ws, 7, 'A7:B7', 'C7:F7', 'Cơ sở:', batch.plant?.name);
-    setInfo(ws, 7, 'G7:H7', 'I7:K7', 'Khu vực:', batch.area || 'Tất cả');
-    setInfo(ws, 7, 'L7:M7', 'N7:P7', 'Trạng thái:', BATCH_STATUS_LABEL[batch.status] || batch.status);
-    setInfo(ws, 8, 'A8:B8', 'C8:K8', 'Lý do thanh lý:', batch.reason);
-    setInfo(ws, 8, 'L8:M8', 'N8:P8', 'Người lập:', batch.createdByName || batch.submittedByName);
-    setInfo(ws, 9, 'A9:B9', 'C9:F9', 'Ngày gửi duyệt:', formatDateTime(batch.submittedAt));
-    setInfo(ws, 9, 'G9:H9', 'I9:K9', 'Ngày duyệt:', formatDateTime(batch.approvedAt));
-    setInfo(ws, 9, 'L9:M9', 'N9:P9', 'Ngày hoàn tất:', formatDateTime(batch.completedAt));
+    setInfo(ws, 6, 'A6:B6', 'C6:D6', 'Cơ sở:', batch.plant?.name || '-');
+    setInfo(ws, 6, 'E6:F6', 'G6:G6', 'Khu vực:', batch.area || 'Tất cả');
+    setInfo(ws, 7, 'A7:B7', 'C7:D7', 'Trạng thái:', BATCH_STATUS_LABEL[batch.status] || batch.status);
+    setInfo(ws, 7, 'E7:F7', 'G7:G7', 'Số máy:', summary.total ?? items.length);
+    setInfo(ws, 8, 'A8:B8', 'C8:G8', 'Lý do:', batch.reason || '-');
+    setInfo(ws, 9, 'A9:B9', 'C9:G9', 'Ghi chú:', batch.note || '-');
+    styleRangeBorder(ws, 6, 9);
 
-    const summaryRow = 11;
-    const summaryBoxes = [
-        { range: 'A11:D12', label: `Tổng máy\n${summary.total ?? items.length}` },
-        { range: 'E11:H12', label: `Trong hệ thống\n${summary.asset ?? 0}` },
-        { range: 'I11:L12', label: `Ngoài hệ thống/QR tạm\n${(summary.external ?? 0) + (summary.qrOnly ?? 0)}` },
-        { range: 'M11:P12', label: `Đã thanh lý\n${summary.disposed ?? 0}` },
-    ];
-    summaryBoxes.forEach((box) => {
-        mergeValue(ws, box.range, box.label, {
-            font: { name: FONT, size: 12, bold: true },
-            alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
-        });
-        styleBox(ws, box.range, 'FFEFF6FF');
-    });
-    ws.getRow(summaryRow).height = 26;
-    ws.getRow(summaryRow + 1).height = 26;
-
-    const headerRowIndex = 15;
-    const headers = [
-        'STT',
-        'Mã máy / QR',
-        'Tên máy',
-        'Nguồn',
-        'Loại',
-        'Model / Serial',
-        'Cơ sở',
-        'Khu vực',
-        'Tình trạng',
-        'Đề xuất xử lý',
-        'Lý do / Ghi nhận',
-        'Giá ước tính',
-        'Giá chốt',
-        'Trạng thái',
-        'Ngày rà soát',
-        'Ghi chú',
-    ];
-
-    const headerRow = ws.getRow(headerRowIndex);
-    headerRow.height = 34;
+    const tableHeaderRow = 11;
+    ws.pageSetup.printTitlesRow = `${tableHeaderRow}:${tableHeaderRow}`;
+    const headers = ['STT', 'Mã máy/QR', 'Tên máy', 'Model / Serial', 'Khu vực', 'Tình trạng', 'Xử lý / Giá'];
     headers.forEach((header, index) => {
-        const current = headerRow.getCell(index + 1);
+        const current = ws.getRow(tableHeaderRow).getCell(index + 1);
         current.value = header;
-        current.font = { name: FONT, size: 10.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        current.font = { name: FONT, size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
         current.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-        current.border = border;
+        current.border = { top: medium, left: thin, bottom: medium, right: thin };
         current.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
     });
+    ws.getRow(tableHeaderRow).height = 27;
 
-    let currentRowIndex = headerRowIndex + 1;
+    let rowIndex = tableHeaderRow + 1;
     const rows = items.length ? items : [{}];
     rows.forEach((item: any, index: number) => {
-        const row = ws.getRow(currentRowIndex);
-        row.height = 31;
+        const row = ws.getRow(rowIndex);
+        row.height = 38;
+        const finalValue = money(item.finalValue);
+        const estimatedValue = money(item.estimatedValue);
         const values = [
             index + 1,
-            resolveCode(item),
-            resolveName(item),
-            SOURCE_LABEL[item.sourceType] || item.sourceType || '',
-            item.type || item.asset?.type || '',
-            [item.model || item.asset?.model, item.serial || item.asset?.serial].filter(Boolean).join(' / '),
-            item.plant?.name || item.asset?.plant?.name || '',
-            item.area || item.asset?.area || '',
-            CONDITION_LABEL[item.condition] || item.condition || '',
-            ACTION_LABEL[item.suggestedAction] || item.suggestedAction || '',
-            item.reason || '',
-            Number(item.estimatedValue || 0) || '',
-            Number(item.finalValue || 0) || '',
-            ITEM_STATUS_LABEL[item.status] || item.status || '',
-            formatDateTime(item.checkedAt || item.disposedAt || item.updatedAt),
-            item.note || '',
+            codeText(item),
+            nameText(item),
+            modelSerialText(item),
+            text(item.area || item.asset?.area),
+            CONDITION_LABEL[item.condition] || item.condition || '-',
+            `${ACTION_LABEL[item.suggestedAction] || item.suggestedAction || '-'}\n${
+                finalValue
+                    ? finalValue.toLocaleString('vi-VN')
+                    : estimatedValue
+                      ? `ƯT ${estimatedValue.toLocaleString('vi-VN')}`
+                      : '-'
+            }`,
         ];
 
         values.forEach((value, valueIndex) => {
             const current = row.getCell(valueIndex + 1);
-            current.value = value as ExcelJS.CellValue;
-            current.font = { name: FONT, size: 10.5 };
+            current.value = value;
+            current.font = { name: FONT, size: 9 };
             current.border = border;
             current.alignment = {
-                horizontal: valueIndex === 0 ? 'center' : valueIndex === 11 || valueIndex === 12 ? 'right' : 'left',
+                horizontal: valueIndex === 0 ? 'center' : 'left',
                 vertical: 'middle',
                 wrapText: true,
             };
-            if (valueIndex === 11 || valueIndex === 12) {
-                current.numFmt = '#,##0';
-            }
         });
-
-        currentRowIndex += 1;
+        rowIndex += 1;
     });
 
-    ws.autoFilter = {
-        from: { row: headerRowIndex, column: 1 },
-        to: { row: headerRowIndex, column: headers.length },
-    };
-
-    const totalRow = ws.getRow(currentRowIndex);
-    totalRow.height = 25;
-    mergeValue(ws, `A${currentRowIndex}:K${currentRowIndex}`, `Tổng cộng: ${items.length} máy`, {
-        font: { name: FONT, size: 11, bold: true },
+    const totalRow = rowIndex;
+    mergeValue(ws, `A${totalRow}:D${totalRow}`, `Tổng số máy đề nghị thanh lý: ${items.length}`, {
+        font: { name: FONT, size: 10, bold: true },
         alignment: { horizontal: 'right', vertical: 'middle' },
     });
-    [12, 13].forEach((col) => {
-        const current = totalRow.getCell(col);
-        current.value = col === 12 ? sumNumber(items, 'estimatedValue') : sumNumber(items, 'finalValue');
-        current.font = { name: FONT, size: 11, bold: true };
-        current.alignment = { horizontal: 'right', vertical: 'middle' };
-        current.border = border;
-        current.numFmt = '#,##0';
-    });
-    mergeValue(ws, `N${currentRowIndex}:P${currentRowIndex}`, BATCH_STATUS_LABEL[batch.status] || batch.status || '-', {
-        font: { name: FONT, size: 11, bold: true },
-        alignment: { horizontal: 'center', vertical: 'middle' },
-    });
-
-    const noteRow = currentRowIndex + 2;
     mergeValue(
         ws,
-        `A${noteRow}:P${noteRow + 1}`,
-        'Ghi chú: Danh sách này dùng cho rà soát tình trạng, phê duyệt và lưu hồ sơ thanh lý máy. Máy đã hoàn tất thanh lý cần giữ hồ sơ trên hệ thống để tra cứu mã máy, QR, nguyên giá tham chiếu và lịch sử xử lý.',
+        `E${totalRow}:G${totalRow}`,
+        `Tổng giá chốt: ${items.reduce((sum: number, item: any) => sum + money(item.finalValue), 0).toLocaleString('vi-VN')} đ`,
         {
-            font: { name: FONT, size: 10, italic: true },
+            font: { name: FONT, size: 10, bold: true },
+            alignment: { horizontal: 'right', vertical: 'middle' },
+        }
+    );
+    styleRangeBorder(ws, totalRow, totalRow);
+
+    const noteRow = totalRow + 2;
+    mergeValue(
+        ws,
+        `A${noteRow}:G${noteRow + 1}`,
+        'Ghi chú: Biên bản này dùng để rà soát, phê duyệt và lưu hồ sơ thanh lý. Các thông tin chi tiết phục vụ lọc/tra cứu nằm tại sheet "Du lieu chi tiet".',
+        {
+            font: { name: FONT, size: 9, italic: true },
             alignment: { vertical: 'middle', wrapText: true },
         }
     );
@@ -318,52 +246,147 @@ export const generateAssetDisposalXlsx = async (detail: any): Promise<Buffer> =>
     const nameRow = signatureRow + 5;
     const signatures = [
         {
-            range: `A${signatureRow}:D${signatureRow}`,
-            hint: `A${hintRow}:D${hintRow}`,
-            name: `A${nameRow}:D${nameRow}`,
-            label: 'Người lập danh sách',
+            range: `A${signatureRow}:B${signatureRow}`,
+            hint: `A${hintRow}:B${hintRow}`,
+            name: `A${nameRow}:B${nameRow}`,
+            label: 'Người lập',
             value: batch.createdByName || batch.submittedByName || '',
         },
         {
-            range: `E${signatureRow}:H${signatureRow}`,
-            hint: `E${hintRow}:H${hintRow}`,
-            name: `E${nameRow}:H${nameRow}`,
-            label: 'Bộ phận kỹ thuật',
+            range: `C${signatureRow}:D${signatureRow}`,
+            hint: `C${hintRow}:D${hintRow}`,
+            name: `C${nameRow}:D${nameRow}`,
+            label: 'Kỹ thuật',
             value: '',
         },
         {
-            range: `I${signatureRow}:L${signatureRow}`,
-            hint: `I${hintRow}:L${hintRow}`,
-            name: `I${nameRow}:L${nameRow}`,
-            label: 'Kế toán / QL tài sản',
+            range: `E${signatureRow}:F${signatureRow}`,
+            hint: `E${hintRow}:F${hintRow}`,
+            name: `E${nameRow}:F${nameRow}`,
+            label: 'Kế toán / QLTS',
             value: batch.approvedByName || '',
         },
         {
-            range: `M${signatureRow}:P${signatureRow}`,
-            hint: `M${hintRow}:P${hintRow}`,
-            name: `M${nameRow}:P${nameRow}`,
-            label: 'Ban giám đốc',
+            range: `G${signatureRow}:G${signatureRow}`,
+            hint: `G${hintRow}:G${hintRow}`,
+            name: `G${nameRow}:G${nameRow}`,
+            label: 'Duyệt',
             value: batch.completedByName || '',
         },
     ];
 
     signatures.forEach((signature) => {
         mergeValue(ws, signature.range, signature.label, {
-            font: { name: FONT, size: 11, bold: true },
+            font: { name: FONT, size: 10, bold: true },
             alignment: { horizontal: 'center', vertical: 'middle' },
         });
         mergeValue(ws, signature.hint, '(Ký, ghi rõ họ tên)', {
-            font: { name: FONT, size: 10, italic: true },
+            font: { name: FONT, size: 9, italic: true },
             alignment: { horizontal: 'center', vertical: 'middle' },
         });
         mergeValue(ws, signature.name, signature.value, {
-            font: { name: FONT, size: 11, bold: true },
+            font: { name: FONT, size: 10, bold: true },
             alignment: { horizontal: 'center', vertical: 'middle' },
         });
     });
 
-    ws.getRow(nameRow).height = 24;
-    ws.pageSetup.printArea = `A1:P${nameRow}`;
+    ws.pageSetup.printArea = `A1:G${nameRow}`;
+};
+
+const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
+    const batch = detail.batch ?? {};
+    const items = Array.isArray(detail.items) ? detail.items : [];
+    const ws = workbook.addWorksheet('Du lieu chi tiet', {
+        pageSetup: {
+            paperSize: 9,
+            orientation: 'landscape',
+            fitToPage: true,
+            fitToWidth: 1,
+            fitToHeight: 0,
+        },
+    });
+
+    ws.columns = [
+        { header: 'STT', key: 'index', width: 6 },
+        { header: 'Mã lô', key: 'batchCode', width: 16 },
+        { header: 'Mã máy/QR', key: 'code', width: 18 },
+        { header: 'Tên máy', key: 'name', width: 28 },
+        { header: 'Nguồn', key: 'source', width: 15 },
+        { header: 'Loại', key: 'type', width: 16 },
+        { header: 'Model', key: 'model', width: 16 },
+        { header: 'Serial', key: 'serial', width: 18 },
+        { header: 'Cơ sở', key: 'plant', width: 22 },
+        { header: 'Khu vực', key: 'area', width: 18 },
+        { header: 'Tình trạng', key: 'condition', width: 18 },
+        { header: 'Đề xuất', key: 'suggestedAction', width: 18 },
+        { header: 'Giá ước tính', key: 'estimatedValue', width: 15 },
+        { header: 'Giá chốt', key: 'finalValue', width: 15 },
+        { header: 'Trạng thái', key: 'status', width: 16 },
+        { header: 'Ngày rà soát', key: 'checkedAt', width: 18 },
+        { header: 'Lý do', key: 'reason', width: 26 },
+        { header: 'Ghi chú', key: 'note', width: 26 },
+    ];
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+    const header = ws.getRow(1);
+    header.height = 28;
+    header.eachCell((current) => {
+        current.font = { name: FONT, size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        current.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        current.border = border;
+        current.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    });
+
+    items.forEach((item: any, index: number) => {
+        ws.addRow({
+            index: index + 1,
+            batchCode: batch.code,
+            code: codeText(item),
+            name: nameText(item),
+            source: SOURCE_LABEL[item.sourceType] || item.sourceType,
+            type: item.type || item.asset?.type || '',
+            model: item.model || item.asset?.model || '',
+            serial: item.serial || item.asset?.serial || '',
+            plant: item.plant?.name || item.asset?.plant?.name || '',
+            area: item.area || item.asset?.area || '',
+            condition: CONDITION_LABEL[item.condition] || item.condition || '',
+            suggestedAction: ACTION_LABEL[item.suggestedAction] || item.suggestedAction || '',
+            estimatedValue: money(item.estimatedValue) || '',
+            finalValue: money(item.finalValue) || '',
+            status: ITEM_STATUS_LABEL[item.status] || item.status,
+            checkedAt: formatDate(item.checkedAt || item.disposedAt || item.updatedAt),
+            reason: item.reason || batch.reason || '',
+            note: item.note || '',
+        });
+    });
+
+    ws.eachRow((row, rowNumber) => {
+        row.eachCell((current, colNumber) => {
+            current.font = { name: FONT, size: rowNumber === 1 ? 10 : 9.5 };
+            current.border = border;
+            current.alignment = {
+                horizontal: colNumber === 1 ? 'center' : colNumber === 13 || colNumber === 14 ? 'right' : 'left',
+                vertical: 'middle',
+                wrapText: true,
+            };
+            if (colNumber === 13 || colNumber === 14) current.numFmt = '#,##0';
+        });
+        if (rowNumber > 1) row.height = 24;
+    });
+
+    ws.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: Math.max(items.length + 1, 1), column: ws.columns.length },
+    };
+};
+
+export const generateAssetDisposalXlsx = async (detail: any): Promise<Buffer> => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Hai Dang Management';
+    workbook.created = new Date();
+
+    buildPrintableSheet(workbook, detail);
+    buildDetailSheet(workbook, detail);
 
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer);

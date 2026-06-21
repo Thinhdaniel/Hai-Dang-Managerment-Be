@@ -43,6 +43,13 @@ const ITEM_POPULATE = [
 const toId = (value: any) => String(value?._id ?? value?.id ?? value ?? '');
 const trim = (value?: string | null) => value?.trim() || undefined;
 const normalizePublicId = (value: string) => value.trim().toUpperCase();
+const idsEqual = (a: any, b: any) => {
+    const left = toId(a);
+    const right = toId(b);
+    return Boolean(left && right && left === right);
+};
+const getBatchPlantId = (batch: any) => batch?.plantId?._id ?? batch?.plantId;
+const getPlantName = (value: any) => value?.name || value?.code || toId(value) || 'khong ro co so';
 
 const getParamValue = (value: string | string[]) => (Array.isArray(value) ? value[0] : value);
 
@@ -201,6 +208,45 @@ const findAssetByScanCandidate = async (candidate: string) => {
         .populate('plantId');
 };
 
+const findAssetByManualIdentity = async (payload: Record<string, any>) => {
+    const candidates = [payload.publicId, payload.machineCode, payload.serial]
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter(Boolean);
+
+    for (const candidate of candidates) {
+        const asset = await findAssetByScanCandidate(candidate);
+        if (asset) return asset;
+    }
+
+    return null;
+};
+
+const assertAssetBelongsToBatchPlant = (asset: any, batch: any) => {
+    if (idsEqual(asset.plantId?._id ?? asset.plantId, getBatchPlantId(batch))) return;
+    throw new BadRequestError(
+        `May ${asset.machineCode || asset.name || ''} thuoc ${getPlantName(
+            asset.plantId
+        )}, khong the dua vao lo thanh ly cua ${getPlantName(batch.plantId)}`
+    );
+};
+
+const assertPublicIdAvailableForBatch = async (publicId?: string, batchId?: string, excludeItemId?: string) => {
+    if (!publicId) return;
+    const filter: Record<string, any> = {
+        publicId,
+        isDeleted: { $ne: true },
+        status: { $nin: FINAL_ITEM_STATUSES },
+    };
+    if (batchId) filter.batchId = { $ne: batchId };
+    if (excludeItemId) filter._id = { $ne: excludeItemId };
+
+    const item = await AssetDisposalItem.findOne(filter).populate('batchId');
+    if (!item) return;
+
+    const openBatch = (item as any).batchId;
+    throw new DuplicateError(`QR nay dang nam trong dot thanh ly ${openBatch?.code || toId(openBatch)}`);
+};
+
 const buildAssetItemPayload = (asset: any, batch: any, req: Request, overrides: Record<string, any> = {}) => ({
     batchId: batch._id,
     sourceType: ASSET_DISPOSAL_SOURCE_TYPE.ASSET,
@@ -231,6 +277,7 @@ const addAssetToBatch = async (asset: any, batch: any, req: Request, overrides: 
     if (asset.ownershipType && asset.ownershipType !== ASSET_OWNERSHIP_TYPE.OWNED) {
         throw new BadRequestError('May muon/thue khong duoc dua vao quy trinh thanh ly tai san cong ty');
     }
+    assertAssetBelongsToBatchPlant(asset, batch);
     if (asset.status === ASSET_STATUS.DISPOSED || asset.status === ASSET_STATUS.RETURNED_TO_PARTNER) {
         throw new BadRequestError('May da dong vong doi, khong the dua vao dot thanh ly moi');
     }
@@ -242,6 +289,16 @@ const addAssetToBatch = async (asset: any, batch: any, req: Request, overrides: 
     });
     if (existingInBatch) {
         return { item: await populateItem(existingInBatch._id), duplicate: true };
+    }
+
+    if (asset.status === ASSET_STATUS.PENDING_DISPOSAL) {
+        const openItem = await findOpenItemByAssetId(String(asset._id), String(batch._id));
+        const openBatch = (openItem as any)?.batchId;
+        throw new DuplicateError(
+            openBatch?.code
+                ? `May nay dang nam trong dot thanh ly ${openBatch.code}`
+                : 'May nay dang o trang thai chuan bi thanh ly, khong the dua vao dot moi'
+        );
     }
 
     const openItem = await findOpenItemByAssetId(String(asset._id), String(batch._id));
@@ -266,6 +323,44 @@ const addAssetToBatch = async (asset: any, batch: any, req: Request, overrides: 
     }
 
     return { item: await populateItem(item._id), duplicate: false };
+};
+
+const validateBatchItemsBeforeWorkflow = async (batch: any) => {
+    const items = await applyPopulate(
+        AssetDisposalItem.find({
+            batchId: batch._id,
+            isDeleted: { $ne: true },
+            status: { $nin: [ASSET_DISPOSAL_ITEM_STATUS.CANCELLED, ASSET_DISPOSAL_ITEM_STATUS.KEPT] },
+        }),
+        ITEM_POPULATE
+    );
+
+    if (!items.length) throw new BadRequestError('Dot thanh ly chua co may nao');
+
+    for (const item of items as any[]) {
+        if (item.assetId) {
+            assertAssetBelongsToBatchPlant(item.assetId, batch);
+        } else if (!idsEqual(item.plantId?._id ?? item.plantId, getBatchPlantId(batch))) {
+            throw new BadRequestError(
+                `Dong ${item.machineCode || item.publicId || item.name || ''} khong thuoc co so cua lo thanh ly`
+            );
+        }
+
+        const codeOrQr = trim(item.machineCode) || trim(item.publicId);
+        const name = trim(item.name) || item.assetId?.name;
+        if (!codeOrQr && !name) {
+            throw new BadRequestError('Moi dong thanh ly can co ma may/QR hoac ten may');
+        }
+        if (!item.condition || item.condition === 'unknown') {
+            throw new BadRequestError(`Dong ${codeOrQr || name} chua co tinh trang ra soat`);
+        }
+        if (!item.suggestedAction || item.suggestedAction === 'unknown') {
+            throw new BadRequestError(`Dong ${codeOrQr || name} chua co de xuat xu ly`);
+        }
+        if (!trim(item.reason) && !trim(batch.reason)) {
+            throw new BadRequestError(`Dong ${codeOrQr || name} chua co ly do/ghi nhan`);
+        }
+    }
 };
 
 const populateItem = (id: any) =>
@@ -437,6 +532,40 @@ export const addDisposalItem = async (req: Request, res: Response, _next: NextFu
     }
 
     const publicId = req.body.publicId ? normalizePublicId(req.body.publicId) : undefined;
+    const matchedAsset = await findAssetByManualIdentity({ ...req.body, publicId });
+    if (matchedAsset) {
+        const { item, duplicate } = await addAssetToBatch(matchedAsset, batch, req, { ...req.body, publicId });
+        return res.status(duplicate ? StatusCodes.OK : StatusCodes.CREATED).json(
+            customResponse({
+                data: serializeAssetDisposalItem(item),
+                message: duplicate
+                    ? 'May da nam trong dot thanh ly'
+                    : 'Ma nhap khop may trong he thong, da them theo ho so may',
+                status: duplicate ? StatusCodes.OK : StatusCodes.CREATED,
+                success: true,
+            })
+        );
+    }
+    if (publicId) {
+        const existingQrItem = await AssetDisposalItem.findOne({
+            batchId: batch._id,
+            publicId,
+            isDeleted: { $ne: true },
+            status: { $nin: FINAL_ITEM_STATUSES },
+        });
+        if (existingQrItem) {
+            return res.status(StatusCodes.OK).json(
+                customResponse({
+                    data: serializeAssetDisposalItem(await populateItem(existingQrItem._id)),
+                    message: 'QR nay da nam trong dot thanh ly',
+                    status: StatusCodes.OK,
+                    success: true,
+                })
+            );
+        }
+    }
+    await assertPublicIdAvailableForBatch(publicId, String(batch._id));
+
     const sourceType =
         req.body.sourceType ?? (publicId ? ASSET_DISPOSAL_SOURCE_TYPE.QR_ONLY : ASSET_DISPOSAL_SOURCE_TYPE.EXTERNAL);
     const item = await AssetDisposalItem.create({
@@ -444,6 +573,8 @@ export const addDisposalItem = async (req: Request, res: Response, _next: NextFu
         batchId: batch._id,
         sourceType,
         publicId,
+        plantId: getBatchPlantId(batch),
+        area: trim(req.body.area) ?? batch.area,
         status: req.body.status ?? ASSET_DISPOSAL_ITEM_STATUS.PENDING,
         createdBy: req.userId,
         updatedBy: req.userId,
@@ -536,6 +667,7 @@ export const scanDisposalQr = async (req: Request, res: Response, _next: NextFun
             })
         );
     }
+    await assertPublicIdAvailableForBatch(publicId, String(batch._id));
 
     const item = await AssetDisposalItem.create({
         batchId: batch._id,
@@ -578,6 +710,17 @@ export const updateDisposalItem = async (req: Request, res: Response, _next: Nex
 
     const payload = { ...req.body, updatedBy: req.userId };
     if (payload.publicId) payload.publicId = normalizePublicId(payload.publicId);
+    if (!(current as any).assetId) {
+        const matchedAsset = await findAssetByManualIdentity(payload);
+        if (matchedAsset) {
+            throw new BadRequestError(
+                `Ma nhap khop may trong he thong ${matchedAsset.machineCode || matchedAsset.name}. Hay them bang chuc nang chon/quet may trong he thong de tranh tao dong ngoai he thong sai.`
+            );
+        }
+        await assertPublicIdAvailableForBatch(payload.publicId, String(batch._id), String((current as any)._id));
+        payload.plantId = getBatchPlantId(batch);
+        payload.area = trim(payload.area) ?? batch.area;
+    }
     if (payload.status === ASSET_DISPOSAL_ITEM_STATUS.CHECKED && !(current as any).checkedAt) {
         payload.checkedBy = req.userId;
         payload.checkedAt = new Date();
@@ -613,8 +756,7 @@ export const submitDisposalBatch = async (req: Request, res: Response, _next: Ne
         throw new BadRequestError('Chi dot dang ra soat moi duoc gui duyet');
     }
 
-    const itemCount = await AssetDisposalItem.countDocuments({ batchId, isDeleted: { $ne: true } });
-    if (!itemCount) throw new BadRequestError('Dot thanh ly chua co may nao');
+    await validateBatchItemsBeforeWorkflow(batch);
 
     await AssetDisposalBatch.updateOne(
         { _id: batchId },
@@ -643,6 +785,7 @@ export const approveDisposalBatch = async (req: Request, res: Response, _next: N
     if (batch.status !== ASSET_DISPOSAL_BATCH_STATUS.REVIEWING) {
         throw new BadRequestError('Chi dot dang cho duyet moi duoc phe duyet');
     }
+    await validateBatchItemsBeforeWorkflow(batch);
 
     await AssetDisposalBatch.updateOne(
         { _id: batchId },
