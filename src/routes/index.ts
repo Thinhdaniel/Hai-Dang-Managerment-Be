@@ -29,6 +29,7 @@ import qrScanLogRoutes from './qr-scan-log.route';
 import chatRoutes from './chat.route';
 import systemSettingRoutes from './system-setting.route';
 import dataQualityRoutes from './data-quality.route';
+import assetDisposalRoutes from './asset-disposal.route';
 
 const router = Router();
 
@@ -61,5 +62,6 @@ router.use('/qr-scan-logs', qrScanLogRoutes);
 router.use('/chat', chatRoutes);
 router.use('/system-settings', systemSettingRoutes);
 router.use('/data-quality', dataQualityRoutes);
+router.use('/asset-disposals', assetDisposalRoutes);
 
 export default router;

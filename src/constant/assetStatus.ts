@@ -4,6 +4,8 @@ export enum ASSET_STATUS {
     BROKEN = 'broken',
     BORROWING = 'borrowing',
     STORAGE = 'storage',
+    PENDING_DISPOSAL = 'pending_disposal',
+    DISPOSED = 'disposed',
     RETURNED_TO_PARTNER = 'returned_to_partner',
 }
 

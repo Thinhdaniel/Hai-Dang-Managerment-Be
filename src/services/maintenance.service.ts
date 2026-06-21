@@ -321,10 +321,7 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
     // Gộp máy chính + danh sách máy → 1 phiếu có thể chứa nhiều máy
     const requestedIds: string[] = Array.from(
         new Set(
-            [
-                ...(Array.isArray(req.body.assetIds) ? req.body.assetIds : []),
-                req.body.assetId,
-            ]
+            [...(Array.isArray(req.body.assetIds) ? req.body.assetIds : []), req.body.assetId]
                 .map((id) => (id ? String(id) : ''))
                 .filter(Boolean)
         )
@@ -334,15 +331,21 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
     const assets = await Asset.find({ _id: { $in: requestedIds }, isDeleted: { $ne: true } }).populate('plantId');
     if (assets.length !== requestedIds.length) throw new NotFoundError('Khong tim thay mot so thiet bi');
 
-    if (assets.some((a) => a.status === ASSET_STATUS.RETURNED_TO_PARTNER)) {
-        throw new BadRequestError('Co thiet bi da tra doi tac, khong the tao phieu bao tri moi');
+    if (
+        assets.some((a) =>
+            [ASSET_STATUS.RETURNED_TO_PARTNER, ASSET_STATUS.PENDING_DISPOSAL, ASSET_STATUS.DISPOSED].includes(
+                a.status as ASSET_STATUS
+            )
+        )
+    ) {
+        throw new BadRequestError(
+            'Co thiet bi da dong hoac dang vao quy trinh thanh ly, khong the tao phieu bao tri moi'
+        );
     }
 
     // Một phiếu bảo trì chỉ gộp máy cùng một cơ sở — để snapshot cơ sở của phiếu đúng cho mọi máy
     // (giống lệnh điều chuyển: cùng cơ sở xuất phát). Tránh máy cơ sở khác bị tính nhầm cơ sở.
-    const distinctPlantIds = new Set(
-        assets.map((a) => String((a as any).plantId?._id ?? (a as any).plantId ?? ''))
-    );
+    const distinctPlantIds = new Set(assets.map((a) => String((a as any).plantId?._id ?? (a as any).plantId ?? '')));
     if (distinctPlantIds.size > 1) {
         throw new BadRequestError('Cac may trong cung mot phieu bao tri phai thuoc cung mot co so');
     }
@@ -357,7 +360,10 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
     }
 
     // Máy chính = máy đầu tiên (giữ snapshot cơ sở + logic per-máy)
-    const primaryId = req.body.assetId && requestedIds.includes(String(req.body.assetId)) ? String(req.body.assetId) : requestedIds[0];
+    const primaryId =
+        req.body.assetId && requestedIds.includes(String(req.body.assetId))
+            ? String(req.body.assetId)
+            : requestedIds[0];
     const asset = assets.find((a) => String(a._id) === primaryId) ?? assets[0];
 
     const repairMode = req.body.repairMode ?? 'internal';
@@ -417,13 +423,12 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
     });
 
     // Send notification to admins about new maintenance
-    const createdAssets = Array.isArray((createdItem as any).assetIds) && (createdItem as any).assetIds.length
-        ? (createdItem as any).assetIds
-        : [(createdItem as any).assetId].filter(Boolean);
+    const createdAssets =
+        Array.isArray((createdItem as any).assetIds) && (createdItem as any).assetIds.length
+            ? (createdItem as any).assetIds
+            : [(createdItem as any).assetId].filter(Boolean);
     const assetName =
-        createdAssets.length > 1
-            ? `${createdAssets.length} máy`
-            : (createdItem.assetId as any)?.name || 'Thiết bị';
+        createdAssets.length > 1 ? `${createdAssets.length} máy` : (createdItem.assetId as any)?.name || 'Thiết bị';
     const actorName = await getActorName(req.userId);
     await notifyAdmins(
         'notify:new',
@@ -555,11 +560,7 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
 
     if (!item) throw new NotFoundError('Khong tim thay phieu bao tri');
 
-    const updatedAssets = await applyStatusToMaintenanceAssets(
-        getMaintenanceAssetIds(item),
-        'done',
-        req.body.endDate
-    );
+    const updatedAssets = await applyStatusToMaintenanceAssets(getMaintenanceAssetIds(item), 'done', req.body.endDate);
 
     // Send notification about completed maintenance
     const assetName = (item.assetId as any)?.name || 'Thiết bị';

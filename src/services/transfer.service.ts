@@ -181,10 +181,14 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
         throw new NotFoundError('Mot so thiet bi khong ton tai');
     }
 
-    const returnedPartnerAssets = assets.filter((asset) => asset.status === ASSET_STATUS.RETURNED_TO_PARTNER);
-    if (returnedPartnerAssets.length) {
+    const blockedLifecycleAssets = assets.filter((asset) =>
+        [ASSET_STATUS.RETURNED_TO_PARTNER, ASSET_STATUS.PENDING_DISPOSAL, ASSET_STATUS.DISPOSED].includes(
+            asset.status as ASSET_STATUS
+        )
+    );
+    if (blockedLifecycleAssets.length) {
         throw new BadRequestError(
-            `Khong the dieu chuyen may da tra doi tac: ${returnedPartnerAssets.map((asset) => asset.name).join(', ')}`
+            `Khong the dieu chuyen may da dong hoac dang vao quy trinh thanh ly: ${blockedLifecycleAssets.map((asset) => asset.name).join(', ')}`
         );
     }
 

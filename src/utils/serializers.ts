@@ -25,6 +25,8 @@ const mapAssetStatus = (status?: string) => {
     if (status === 'broken') return 'broken';
     if (status === 'borrowing') return 'borrowing';
     if (status === 'storage') return 'storage';
+    if (status === 'pending_disposal') return 'pending_disposal';
+    if (status === 'disposed') return 'disposed';
     if (status === 'returned_to_partner') return 'returned_to_partner';
     return 'active';
 };
@@ -90,6 +92,11 @@ export const serializeUser = (input: any) => {
     };
 };
 
+const getDisplayName = (input: any) => {
+    const value = toPlain(input);
+    return value?.name ?? value?.fullname ?? value?.username ?? value?.email;
+};
+
 export const serializeAsset = (input: any) => {
     const asset = toPlain(input);
     const brand =
@@ -102,7 +109,8 @@ export const serializeAsset = (input: any) => {
             : undefined;
 
     const ls = asset?.lastSeen;
-    const lsPlant = ls?.plantId && typeof ls.plantId === 'object' && ls.plantId.name ? serializePlant(ls.plantId) : undefined;
+    const lsPlant =
+        ls?.plantId && typeof ls.plantId === 'object' && ls.plantId.name ? serializePlant(ls.plantId) : undefined;
     const lsActor = ls?.scannedBy && typeof ls.scannedBy === 'object' ? ls.scannedBy : undefined;
     const lastSeen =
         ls && (ls.plantId || ls.scannedAt)
@@ -402,5 +410,114 @@ export const serializeBorrowingBatch = (input: any) => {
         closedAt: toIso(batch?.closedAt),
         createdAt: toIso(batch?.createdAt),
         updatedAt: toIso(batch?.updatedAt),
+    };
+};
+
+export const serializeAssetDisposalBatch = (input: any) => {
+    const batch = toPlain(input);
+    const plant =
+        batch?.plantId && typeof batch.plantId === 'object' && batch.plantId.name
+            ? serializePlant(batch.plantId)
+            : undefined;
+
+    return {
+        id: toId(batch),
+        code: batch?.code,
+        plantId: plant?.id ?? toId(batch?.plantId),
+        plant,
+        area: batch?.area,
+        status: batch?.status,
+        reason: batch?.reason,
+        note: batch?.note,
+        submittedBy: toId(batch?.submittedBy),
+        submittedByName: getDisplayName(batch?.submittedBy),
+        submittedAt: toIso(batch?.submittedAt),
+        approvedBy: toId(batch?.approvedBy),
+        approvedByName: getDisplayName(batch?.approvedBy),
+        approvedAt: toIso(batch?.approvedAt),
+        approvalNote: batch?.approvalNote,
+        completedBy: toId(batch?.completedBy),
+        completedByName: getDisplayName(batch?.completedBy),
+        completedAt: toIso(batch?.completedAt),
+        cancelledBy: toId(batch?.cancelledBy),
+        cancelledByName: getDisplayName(batch?.cancelledBy),
+        cancelledAt: toIso(batch?.cancelledAt),
+        cancelReason: batch?.cancelReason,
+        totalItems: batch?.totalItems,
+        assetItems: batch?.assetItems,
+        externalItems: batch?.externalItems,
+        pendingItems: batch?.pendingItems,
+        checkedItems: batch?.checkedItems,
+        approvedItems: batch?.approvedItems,
+        disposedItems: batch?.disposedItems,
+        keptItems: batch?.keptItems,
+        createdBy: toId(batch?.createdBy),
+        createdByName: getDisplayName(batch?.createdBy),
+        updatedBy: toId(batch?.updatedBy),
+        updatedByName: getDisplayName(batch?.updatedBy),
+        createdAt: toIso(batch?.createdAt),
+        updatedAt: toIso(batch?.updatedAt),
+    };
+};
+
+export const serializeAssetDisposalItem = (input: any) => {
+    const item = toPlain(input);
+    const asset =
+        item?.assetId && typeof item.assetId === 'object' && item.assetId.name
+            ? serializeAsset(item.assetId)
+            : undefined;
+    const plant =
+        item?.plantId && typeof item.plantId === 'object' && item.plantId.name
+            ? serializePlant(item.plantId)
+            : undefined;
+    const qrLabel = item?.qrLabelId && typeof item.qrLabelId === 'object' ? toPlain(item.qrLabelId) : undefined;
+    const batch =
+        item?.batchId && typeof item.batchId === 'object' && item.batchId.code
+            ? serializeAssetDisposalBatch(item.batchId)
+            : undefined;
+
+    return {
+        id: toId(item),
+        batchId: batch?.id ?? toId(item?.batchId),
+        batch,
+        sourceType: item?.sourceType,
+        assetId: asset?.id ?? toId(item?.assetId),
+        asset,
+        qrLabelId: qrLabel ? toId(qrLabel) : toId(item?.qrLabelId),
+        qrLabel: qrLabel
+            ? {
+                  id: toId(qrLabel),
+                  publicId: qrLabel.publicId,
+                  status: qrLabel.status,
+              }
+            : undefined,
+        publicId: item?.publicId,
+        machineCode: item?.machineCode ?? asset?.machineCode,
+        name: item?.name ?? asset?.name,
+        type: item?.type ?? asset?.type,
+        model: item?.model ?? asset?.model,
+        serial: item?.serial ?? asset?.serial,
+        plantId: plant?.id ?? asset?.plantId ?? toId(item?.plantId),
+        plant: plant ?? asset?.plant,
+        area: item?.area ?? asset?.area,
+        condition: item?.condition,
+        reason: item?.reason,
+        suggestedAction: item?.suggestedAction,
+        estimatedValue: item?.estimatedValue,
+        finalValue: item?.finalValue,
+        photos: item?.photos ?? [],
+        status: item?.status,
+        previousAssetStatus: item?.previousAssetStatus,
+        checkedBy: toId(item?.checkedBy),
+        checkedByName: getDisplayName(item?.checkedBy),
+        checkedAt: toIso(item?.checkedAt),
+        disposedAt: toIso(item?.disposedAt),
+        note: item?.note,
+        createdBy: toId(item?.createdBy),
+        createdByName: getDisplayName(item?.createdBy),
+        updatedBy: toId(item?.updatedBy),
+        updatedByName: getDisplayName(item?.updatedBy),
+        createdAt: toIso(item?.createdAt),
+        updatedAt: toIso(item?.updatedAt),
     };
 };

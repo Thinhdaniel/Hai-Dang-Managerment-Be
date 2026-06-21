@@ -8,8 +8,9 @@ import { ensureTypeCode, generateMachineCode } from '@/services/machine-code.ser
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import { generateUniqueMachinePublicId } from '@/utils/publicId';
 import { buildSearchRegex } from '@/utils/search';
-import { serializeAsset, serializePublicAsset } from '@/utils/serializers';
+import { serializeAsset, serializeAssetDisposalItem, serializePublicAsset } from '@/utils/serializers';
 import Brand from '@/models/Brand';
+import AssetDisposalItem from '@/models/AssetDisposalItem';
 import Transfer from '@/models/Transfer';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
@@ -40,6 +41,8 @@ const broadcastAssetChange = (
     });
 };
 
+const getQueryValue = (value: unknown) => (Array.isArray(value) ? value[0] : value);
+
 const buildFilter = (query: Request['query']) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
     const andConditions: Record<string, any>[] = [];
@@ -52,7 +55,21 @@ const buildFilter = (query: Request['query']) => {
         });
     }
 
-    if (query.status) filter.status = query.status;
+    const status = getQueryValue(query.status);
+    const lifecycle = getQueryValue(query.lifecycle);
+
+    if (status) {
+        filter.status = status;
+    } else if (lifecycle === 'operating') {
+        filter.status = {
+            $nin: [ASSET_STATUS.PENDING_DISPOSAL, ASSET_STATUS.DISPOSED, ASSET_STATUS.RETURNED_TO_PARTNER],
+        };
+    } else if (lifecycle === 'pending_disposal') {
+        filter.status = ASSET_STATUS.PENDING_DISPOSAL;
+    } else if (lifecycle === 'disposed') {
+        filter.status = ASSET_STATUS.DISPOSED;
+    }
+
     if (query.ownershipType) {
         if (query.ownershipType === ASSET_OWNERSHIP_TYPE.OWNED) {
             andConditions.push({
@@ -282,12 +299,28 @@ export const getAssetById = async (req: Request, res: Response, next: NextFuncti
         status: { $in: ['pending', 'approved'] },
         $or: [{ assetId: asset._id }, { assetIds: asset._id }],
     });
+    const disposalRecords = await AssetDisposalItem.find({
+        isDeleted: { $ne: true },
+        assetId: asset._id,
+    })
+        .populate({ path: 'assetId', populate: ['brandId', 'plantId'] })
+        .populate('plantId')
+        .populate('qrLabelId')
+        .populate({
+            path: 'batchId',
+            populate: ['plantId', 'submittedBy', 'approvedBy', 'completedBy', 'cancelledBy', 'createdBy', 'updatedBy'],
+        })
+        .populate('checkedBy')
+        .populate('createdBy')
+        .populate('updatedBy')
+        .sort('-createdAt');
 
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: {
                 ...serializeAsset(asset),
                 hasOpenTransfer: !!openTransfer,
+                disposalRecords: disposalRecords.map(serializeAssetDisposalItem),
             },
             message: 'Lay thong tin thiet bi thanh cong',
             status: StatusCodes.OK,
