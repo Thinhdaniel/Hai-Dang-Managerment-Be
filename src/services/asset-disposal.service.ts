@@ -749,6 +749,39 @@ export const updateDisposalItem = async (req: Request, res: Response, _next: Nex
     );
 };
 
+export const deleteDisposalItem = async (req: Request, res: Response, _next: NextFunction) => {
+    const current = await populateItem(getParamValue(req.params.itemId));
+    if (!current) throw new NotFoundError('Khong tim thay dong thanh ly');
+
+    const batch = await getBatchOrThrow(toId((current as any).batchId));
+    assertBatchEditable(batch);
+
+    if (FINAL_ITEM_STATUSES.includes((current as any).status)) {
+        throw new BadRequestError('Dong thanh ly da ket thuc, khong the xoa');
+    }
+
+    await revertAssetIfNeeded(current, req);
+
+    await AssetDisposalItem.updateOne(
+        { _id: (current as any)._id, isDeleted: { $ne: true } },
+        {
+            status: ASSET_DISPOSAL_ITEM_STATUS.CANCELLED,
+            isDeleted: true,
+            deletedAt: new Date(),
+            updatedBy: req.userId,
+        }
+    );
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: await buildDetail(toId((current as any).batchId)),
+            message: 'Da xoa dong thanh ly khoi dot',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
 export const submitDisposalBatch = async (req: Request, res: Response, _next: NextFunction) => {
     const batchId = getParamValue(req.params.id);
     const batch = await getBatchOrThrow(batchId);

@@ -79,5 +79,6 @@ router.patch(
     validator(updateAssetDisposalItemSchema),
     asyncHandler(assetDisposalService.updateDisposalItem)
 );
+router.delete('/items/:itemId', validateObjectId, asyncHandler(assetDisposalService.deleteDisposalItem));
 
 export default router;
