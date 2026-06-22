@@ -105,13 +105,7 @@ export const buildPurchaseRequestItems = ({
     };
 };
 
-export const buildPurchaseOrderItems = ({
-    items,
-    materialsMap,
-}: {
-    items: any[];
-    materialsMap: MaterialMap;
-}) => {
+export const buildPurchaseOrderItems = ({ items, materialsMap }: { items: any[]; materialsMap: MaterialMap }) => {
     const normalizedItems = items.map((item) => {
         const material = materialsMap.get(String(item.materialId));
         const quantity = Number(item.quantity ?? 0);
@@ -121,9 +115,19 @@ export const buildPurchaseOrderItems = ({
             materialId: material._id,
             materialName: material.name,
             unit: item.unit?.trim() || material.unit,
-            quantity,
+            quantityRequested: quantity,
+            quantityOrdered: quantity,
+            quantityReceived: 0,
+            quantityMissing: quantity,
+            receiveStatus: 'pending',
             unitPrice,
             totalPrice: computeLineTotal(quantity, unitPrice),
+            vatRate: 0,
+            vatAmount: 0,
+            totalWithVat: computeLineTotal(quantity, unitPrice),
+            catalogStatus: 'matched',
+            quantityInventoried: 0,
+            inventoryStatus: 'pending',
             note: item.note?.trim() || undefined,
         };
     });
@@ -133,16 +137,12 @@ export const buildPurchaseOrderItems = ({
     return {
         items: normalizedItems,
         totalAmount: Number(totalAmount.toFixed(2)),
+        totalVat: 0,
+        totalWithVat: Number(totalAmount.toFixed(2)),
     };
 };
 
-export const buildDistributionItems = ({
-    items,
-    materialsMap,
-}: {
-    items: any[];
-    materialsMap: MaterialMap;
-}) => {
+export const buildDistributionItems = ({ items, materialsMap }: { items: any[]; materialsMap: MaterialMap }) => {
     return items.map((item) => {
         const material = materialsMap.get(String(item.materialId));
 

@@ -218,6 +218,7 @@ const serializePurchaseOrderItem = (input: any) => {
 
 export const serializePurchaseOrder = (input: any) => {
     const order = toPlain(input);
+    const status = order?.status === 'draft' && order?.orderedAt ? 'ordered' : order?.status;
     const createdBy =
         order?.createdBy && typeof order.createdBy === 'object' && order.createdBy.email
             ? serializeUser(order.createdBy)
@@ -237,7 +238,7 @@ export const serializePurchaseOrder = (input: any) => {
         purchaseRequestIds: Array.isArray(order?.purchaseRequestIds) ? order.purchaseRequestIds.map(toId) : [],
         purchaseRequestCodes: order?.purchaseRequestCodes ?? [],
         plantId: toId(order?.plantId),
-        status: order?.status,
+        status,
         items: Array.isArray(order?.items) ? order.items.map(serializePurchaseOrderItem) : [],
         totalAmount: order?.totalAmount ?? 0,
         totalVat: order?.totalVat ?? 0,

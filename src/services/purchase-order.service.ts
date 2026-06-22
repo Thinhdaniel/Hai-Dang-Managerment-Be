@@ -70,6 +70,13 @@ const getOrderReceiveStatus = (items: any[], fallbackStatus = 'confirmed') => {
         : 'partially_received';
 };
 
+const getEffectiveOrderStatus = (order: any) => {
+    if ((order as any)?.status === 'draft' && (order as any)?.orderedAt) {
+        return 'ordered';
+    }
+    return (order as any)?.status;
+};
+
 const resolveMaterialForReceipt = async (item: any, session: mongoose.ClientSession) => {
     const rawId = toId(item.materialId);
     if (rawId && mongoose.Types.ObjectId.isValid(rawId)) {
@@ -291,7 +298,7 @@ const syncOriginalOrderAfterShortageResolution = async ({
         item.quantityReceived <= 0 ? 'pending' : item.quantityMissing > 0 ? 'partially_received' : 'received';
     items[index] = item;
 
-    const status = getOrderReceiveStatus(items, (originalOrder as any).status);
+    const status = getOrderReceiveStatus(items, getEffectiveOrderStatus(originalOrder));
     await PurchaseOrder.updateOne({ _id: (originalOrder as any)._id }, { $set: { items, status } }, { session });
 
     if (status === 'received') {
@@ -305,9 +312,21 @@ const syncOriginalOrderAfterShortageResolution = async ({
 
 const buildFilter = (query: Request['query'], req: Request) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
+    const andConditions: Record<string, any>[] = [];
     const regex = buildSearchRegex(query.search, { flexibleWhitespace: true });
-    if (regex) filter.$or = [{ orderCode: regex }, { 'items.materialName': regex }, { 'items.supplierName': regex }];
-    if (query.status) filter.status = query.status;
+    if (regex) {
+        andConditions.push({
+            $or: [{ orderCode: regex }, { 'items.materialName': regex }, { 'items.supplierName': regex }],
+        });
+    }
+    if (query.status === 'draft') {
+        andConditions.push({ status: 'draft' }, { $or: [{ orderedAt: { $exists: false } }, { orderedAt: null }] });
+    } else if (query.status === 'ordered') {
+        andConditions.push({ $or: [{ status: 'ordered' }, { status: 'draft', orderedAt: { $ne: null } }] });
+    } else if (query.status) {
+        filter.status = query.status;
+    }
+    if (andConditions.length) filter.$and = andConditions;
     if (query.plantId) filter.plantId = query.plantId;
     if (query.startDate || query.endDate) {
         filter.createdAt = {};
@@ -344,6 +363,7 @@ export const getAllPurchaseOrders = async (req: Request, res: Response, next: Ne
 export const getPurchaseOrderById = async (req: Request, res: Response, next: NextFunction) => {
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
+    ensureOrderMutationScope(req, order);
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: serializePurchaseOrder(order),
@@ -504,10 +524,10 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
             );
             createdId = String((order as any)._id);
 
-            // Cáº­p nháº­t PurchaseRequest â†’ ordered
+            // Gan phieu de xuat vao PO nhap; chi chuyen sang ordered sau khi giam doc xac nhan PO.
             await PurchaseRequest.updateMany(
                 { _id: { $in: purchaseRequestIds } },
-                { $set: { status: 'ordered' } },
+                { $set: { status: 'in_progress' } },
                 { session }
             );
         });
@@ -543,7 +563,8 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
 export const updatePurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
-    if (!['draft', 'confirmed'].includes((order as any).status)) {
+    ensureOrderMutationScope(req, order);
+    if (!['draft', 'confirmed'].includes(getEffectiveOrderStatus(order))) {
         throw new BadRequestError('Chi co the cap nhat don hang o trang thai nhap hoac da xac nhan');
     }
 
@@ -590,13 +611,34 @@ export const updatePurchaseOrder = async (req: Request, res: Response, next: Nex
 export const confirmPurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
-    if ((order as any).status !== 'draft') throw new BadRequestError('Chi co the xac nhan don hang o trang thai nhap');
+    ensureOrderMutationScope(req, order);
+    if (getEffectiveOrderStatus(order) !== 'draft') {
+        throw new BadRequestError('Chi co the xac nhan don hang o trang thai nhap');
+    }
 
-    const updated = await purchaseOrderRepository.updateById(String(req.params.id), {
-        status: 'confirmed',
-        orderedBy: req.userId,
-        orderedAt: new Date(),
-    });
+    const session = await mongoose.startSession();
+    let updated: any;
+    try {
+        await session.withTransaction(async () => {
+            updated = await purchaseOrderRepository.updateById(
+                String(req.params.id),
+                {
+                    status: 'ordered',
+                    orderedBy: req.userId,
+                    orderedAt: new Date(),
+                },
+                session
+            );
+
+            await PurchaseRequest.updateMany(
+                { _id: { $in: (order as any).purchaseRequestIds }, isDeleted: { $ne: true } },
+                { $set: { status: 'ordered' } },
+                { session }
+            );
+        });
+    } finally {
+        await session.endSession();
+    }
 
     return res.status(StatusCodes.OK).json(
         customResponse({
@@ -611,8 +653,9 @@ export const confirmPurchaseOrder = async (req: Request, res: Response, next: Ne
 export const receivePurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
+    ensureOrderMutationScope(req, order);
 
-    const currentStatus = (order as any).status;
+    const currentStatus = getEffectiveOrderStatus(order);
     if (!['confirmed', 'ordered', 'partially_received'].includes(currentStatus)) {
         throw new BadRequestError(`Khong the nhan hang o trang thai: ${currentStatus}`);
     }
@@ -787,7 +830,9 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
 export const deletePurchaseOrder = async (req: Request, res: Response, next: NextFunction) => {
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
-    if ((order as any).status !== 'draft') throw new BadRequestError('Chi co the huy don hang o trang thai nhap');
+    ensureOrderMutationScope(req, order);
+    if (getEffectiveOrderStatus(order) !== 'draft')
+        throw new BadRequestError('Chi co the huy don hang o trang thai nhap');
 
     const session = await mongoose.startSession();
     try {
@@ -1009,6 +1054,7 @@ export const exportPurchaseOrderXlsx = async (req: Request, res: Response, next:
     const { generatePurchaseOrderXlsx } = await import('@/utils/generatePurchaseOrderXlsx');
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
+    ensureOrderMutationScope(req, order);
 
     const data = serializePurchaseOrder(order);
 

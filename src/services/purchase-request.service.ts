@@ -515,6 +515,22 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
                 throw new BadRequestError('Chi co the tong hop cac phieu de xuat da duyet');
             }
 
+            const requestPlantIds = [
+                ...new Set(
+                    requests
+                        .map((request) => String((request as any).plantId?._id ?? (request as any).plantId ?? ''))
+                        .filter(Boolean)
+                ),
+            ];
+            if (requestPlantIds.length !== 1) {
+                throw new BadRequestError('Chi co the tong hop cac phieu cung mot co so');
+            }
+            const orderPlantId = requestPlantIds[0];
+            await ensurePlantExists(orderPlantId, session);
+            if (req.role !== 'admin' && getUserPlantId(req) !== orderPlantId) {
+                throw new BadRequestError('Ban chi co the tao don hang cho co so cua minh');
+            }
+
             const resolvedSupplierId = ensureSingleSupplierForItems(
                 requests,
                 req.body.supplierId ? String(req.body.supplierId) : undefined
@@ -583,14 +599,17 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
             const purchaseOrder = await purchaseOrderRepository.create(
                 {
                     orderCode,
+                    plantId: orderPlantId,
                     supplierId: supplier?._id,
                     supplierName: supplier?.name,
-                    requestIds: requests.map((request) => request._id),
+                    purchaseRequestIds: requests.map((request) => request._id),
+                    purchaseRequestCodes: requests.map((request) => (request as any).requestCode).filter(Boolean),
                     status: 'draft',
                     items: preparedItems.items,
                     totalAmount: preparedItems.totalAmount,
-                    orderedBy: req.userId,
-                    orderedAt: new Date(),
+                    totalVat: preparedItems.totalVat,
+                    totalWithVat: preparedItems.totalWithVat,
+                    createdBy: req.userId,
                     note: req.body.note?.trim() || undefined,
                 },
                 session
@@ -604,7 +623,7 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
                     isDeleted: { $ne: true },
                 },
                 {
-                    status: 'ordered',
+                    status: 'in_progress',
                 },
                 session
             );
