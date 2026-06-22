@@ -449,10 +449,7 @@ export const dashboardRepository = {
                 { $group: { _id: null, avgMs: { $avg: '$durationMs' }, count: { $sum: 1 } } },
             ]);
 
-        const [[overall], [thisMonth]] = await Promise.all([
-            buildAvg({}),
-            buildAvg({ endDate: { $gte: monthStart } }),
-        ]);
+        const [[overall], [thisMonth]] = await Promise.all([buildAvg({}), buildAvg({ endDate: { $gte: monthStart } })]);
 
         return {
             avgDaysAll: overall?.avgMs ? round1(overall.avgMs / MS_PER_DAY) : 0,
@@ -600,8 +597,9 @@ export const dashboardRepository = {
         };
         if (plantId) match.plantId = plantId;
         return Asset.find(match)
-            .select('name machineCode status plantId lastSeen ownershipType')
+            .select('name machineCode publicId type model brandId area status plantId lastSeen ownershipType')
             .populate('plantId', 'name code coordinates')
+            .populate('brandId', 'name')
             .populate('lastSeen.plantId', 'name code')
             .populate('lastSeen.scannedBy', 'name fullname username')
             .lean();

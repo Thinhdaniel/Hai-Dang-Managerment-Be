@@ -16,7 +16,14 @@ const toIso = (value?: Date | string | null) => {
 
 export const getDashboardOverview = async (req: Request, res: Response, next: NextFunction) => {
     const monthStart = startOfMonth(new Date());
-    const [summary, facilityStatsRaw, recentActivitiesRaw, externalRepairAgg, externalRepairPendingApproval, externalRepairInProgress] = await Promise.all([
+    const [
+        summary,
+        facilityStatsRaw,
+        recentActivitiesRaw,
+        externalRepairAgg,
+        externalRepairPendingApproval,
+        externalRepairInProgress,
+    ] = await Promise.all([
         dashboardRepository.getSummaryMetrics(),
         dashboardRepository.getFacilityStats(),
         dashboardRepository.getRecentActivities(10),
@@ -130,7 +137,12 @@ export const getAssetLocations = async (req: Request, res: Response, next: NextF
         .map((asset) => ({
             id: asset.id,
             machineCode: asset.machineCode,
+            publicId: asset.publicId,
             name: asset.name,
+            type: asset.type,
+            model: asset.model,
+            brandName: asset.brand?.name,
+            area: asset.area,
             status: asset.status,
             plantId: asset.plant?.id,
             plantName: asset.plant?.name,
