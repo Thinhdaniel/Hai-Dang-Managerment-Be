@@ -59,6 +59,37 @@ const mergeAdd = (a: Map<string, number>, b: Map<string, number>) => {
     return out;
 };
 
+// Cấp phát vật tư: KHỚP công thức báo cáo chi phí cơ sở (report.service) để AI không lệch số liệu:
+//  - Giá trị = tổng các dòng items (totalWithVat/totalPrice), fallback tổng ở cấp phiếu.
+//  - Ngày hiệu lực = distributedAt || confirmedAt || createdAt (KHÔNG chỉ dùng createdAt).
+//  - Gom theo cơ sở nhận (toPlantId — gồm cả cấp phát nội bộ vì to=from).
+const groupDistByPlant = async (s: Date, e: Date) => {
+    const rows = await DistributionRecord.aggregate([
+        {
+            $addFields: {
+                _eff: { $ifNull: ['$distributedAt', { $ifNull: ['$confirmedAt', '$createdAt'] }] },
+                _items: {
+                    $sum: {
+                        $map: {
+                            input: { $ifNull: ['$items', []] },
+                            as: 'it',
+                            in: { $ifNull: ['$$it.totalWithVat', { $ifNull: ['$$it.totalPrice', 0] }] },
+                        },
+                    },
+                },
+            },
+        },
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] }, _eff: { $gte: s, $lte: e } } },
+        {
+            $group: {
+                _id: '$toPlantId',
+                v: { $sum: { $cond: [{ $gt: ['$_items', 0] }, '$_items', { $ifNull: ['$totalWithVat', { $ifNull: ['$totalAmount', 0] }] }] } },
+            },
+        },
+    ]);
+    return new Map<string, number>(rows.map((r: any) => [String(r._id), Number(r.v) || 0]));
+};
+
 // Lấy 2 map (kỳ này / kỳ trước) theo cơ sở cho từng chỉ số.
 const buildMaps = async (metric: Metric, r: ReturnType<typeof periodRange>) => {
     const repairMatch = (s: Date, e: Date) => ({
@@ -66,11 +97,6 @@ const buildMaps = async (metric: Metric, r: ReturnType<typeof periodRange>) => {
         repairMode: 'external',
         status: 'completed',
         endDate: { $gte: s, $lte: e },
-    });
-    const distMatch = (s: Date, e: Date) => ({
-        isDeleted: { $ne: true },
-        status: { $in: ['distributed', 'confirmed'] },
-        createdAt: { $gte: s, $lte: e },
     });
     const ticketMatch = (s: Date, e: Date) => ({ isDeleted: { $ne: true }, createdAt: { $gte: s, $lte: e } });
     const purchaseMatch = (s: Date, e: Date) => ({
@@ -93,8 +119,8 @@ const buildMaps = async (metric: Metric, r: ReturnType<typeof periodRange>) => {
     }
     if (metric === 'distribution_cost') {
         return {
-            cur: await groupByPlant(DistributionRecord, distMatch(r.start, r.end), DIST_VALUE, 'toPlantId'),
-            prev: await groupByPlant(DistributionRecord, distMatch(r.prevStart, r.prevEnd), DIST_VALUE, 'toPlantId'),
+            cur: await groupDistByPlant(r.start, r.end),
+            prev: await groupDistByPlant(r.prevStart, r.prevEnd),
         };
     }
     if (metric === 'maintenance_tickets') {
@@ -106,9 +132,9 @@ const buildMaps = async (metric: Metric, r: ReturnType<typeof periodRange>) => {
     // total_cost = sửa ngoài + cấp phát
     const [rcCur, dcCur, rcPrev, dcPrev] = await Promise.all([
         groupByPlant(Maintenance, repairMatch(r.start, r.end), REPAIR_VALUE, 'plantId'),
-        groupByPlant(DistributionRecord, distMatch(r.start, r.end), DIST_VALUE, 'toPlantId'),
+        groupDistByPlant(r.start, r.end),
         groupByPlant(Maintenance, repairMatch(r.prevStart, r.prevEnd), REPAIR_VALUE, 'plantId'),
-        groupByPlant(DistributionRecord, distMatch(r.prevStart, r.prevEnd), DIST_VALUE, 'toPlantId'),
+        groupDistByPlant(r.prevStart, r.prevEnd),
     ]);
     return { cur: mergeAdd(rcCur, dcCur), prev: mergeAdd(rcPrev, dcPrev) };
 };

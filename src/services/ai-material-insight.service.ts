@@ -54,6 +54,8 @@ const loadPlants = async () => {
 
 const DIST_VALUE = { $ifNull: ['$items.totalWithVat', { $ifNull: ['$items.totalPrice', 0] }] };
 const DIST_QTY = { $ifNull: ['$items.quantityDistributed', '$items.quantity'] };
+// Ngày hiệu lực của phiếu cấp phát — khớp report.service (distributedAt > confirmedAt > createdAt).
+const DIST_EFF = { $ifNull: ['$distributedAt', { $ifNull: ['$confirmedAt', '$createdAt'] }] };
 const PO_VALUE = { $ifNull: ['$items.totalWithVat', { $ifNull: ['$items.totalPrice', 0] }] };
 
 // ============================================================
@@ -69,17 +71,19 @@ export const materialUsageByPlant = async (args: {
     const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 15);
     const plantId = resolve(args.plantName);
 
-    const periodMatch: Record<string, any> = {};
     let periodLabel = 'toàn bộ thời gian';
+    let periodFilter: { $gte: Date; $lte: Date } | null = null;
     if (args.period === 'week' || args.period === 'month') {
         const r = periodRange(args.period);
-        periodMatch.createdAt = { $gte: r.start, $lte: r.end };
+        periodFilter = { $gte: r.start, $lte: r.end };
         periodLabel = r.label;
     }
 
     // Lọc theo cơ sở (toPlantId) thực hiện sau khi gom, để giữ đúng phân rã từng cơ sở.
     const pipeline: any[] = [
-        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] }, ...periodMatch } },
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] } } },
+        // Lọc kỳ theo ngày hiệu lực (distributedAt||confirmedAt||createdAt) cho khớp báo cáo.
+        ...(periodFilter ? [{ $addFields: { _eff: DIST_EFF } }, { $match: { _eff: periodFilter } }] : []),
         { $unwind: '$items' },
         { $match: { 'items.materialId': { $ne: null } } },
         {
@@ -406,15 +410,18 @@ export const distributionAnalysis = async (args: { plantName?: string; period?: 
 
     const match: Record<string, any> = { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] } };
     let periodLabel = 'toàn bộ thời gian';
+    let periodFilter: { $gte: Date; $lte: Date } | null = null;
     if (args.period === 'week' || args.period === 'month') {
         const r = periodRange(args.period);
-        match.createdAt = { $gte: r.start, $lte: r.end };
+        periodFilter = { $gte: r.start, $lte: r.end };
         periodLabel = r.label;
     }
     if (plantId) match.toPlantId = plantId;
 
     const rows = await DistributionRecord.aggregate([
         { $match: match },
+        // Lọc kỳ theo ngày hiệu lực (distributedAt||confirmedAt||createdAt) cho khớp báo cáo.
+        ...(periodFilter ? [{ $addFields: { _eff: DIST_EFF } }, { $match: { _eff: periodFilter } }] : []),
         { $unwind: '$items' },
         {
             $group: {
