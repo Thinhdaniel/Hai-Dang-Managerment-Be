@@ -333,7 +333,11 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     if (n.includes('mua') && (n.includes('phan tich') || n.includes('chi tiet') || n.includes('vat tu nao') || n.includes('nha cung cap') || n.includes('ncc') || n.includes('so sanh'))) {
         return { tool: 'purchase_analysis', args: { period: detectPeriod(q), groupBy: n.includes('nha cung cap') || n.includes('ncc') ? 'supplier' : 'material' } };
     }
-    if (n.includes('cap phat') && (n.includes('thieu hut') || n.includes('thieu hang') || n.includes('shortage') || n.includes('chi tiet') || n.includes('cap bu'))) {
+    if (
+        n.includes('cap phat') &&
+        (n.includes('thieu hut') || n.includes('thieu hang') || n.includes('shortage') || n.includes('chi tiet') || n.includes('cap bu') || n.includes('chi phi') || n.includes('bao nhieu') || n.includes('tong'))
+    ) {
+        // "chi phí cấp phát của CS X" -> phân tích cấp phát LỌC theo cơ sở (giá trị tuyệt đối), KHÔNG dùng cost_variance (tổng hệ thống).
         return { tool: 'distribution_analysis', args: { plantName: q, period: n.includes('thang') || n.includes('tuan') ? detectPeriod(q) : undefined } };
     }
     if (n.includes('cap phat') || n.includes('su dung nhieu') || n.includes('dung nhieu') || n.includes('cap nhieu') || n.includes('tieu thu') || (n.includes('vat tu') && n.includes('co so'))) {
@@ -471,11 +475,11 @@ const SYSTEM_PROMPT = [
     '- low_stock_materials(args:{limit?}): vat tu duoi dinh muc ton.',
     '- top_used_materials(args:{limit?}): vat tu cap phat nhieu nhat (tong).',
     '- material_usage_by_plant(args:{plantName?, period?:week|month, limit?}): vat tu cap phat nhieu nhat PHAN RA THEO CO SO nhan.',
-    '- distribution_analysis(args:{plantName?, period?:week|month, limit?}): phan tich CAP PHAT chi tiet + THIEU HUT (shortage) theo vat tu/co so. Dung khi hoi ve cap phat, thieu hut, cap bu.',
+    '- distribution_analysis(args:{plantName?, period?:week|month, limit?}): CHI PHI CAP PHAT (tong gia tri) + top vat tu + THIEU HUT, CO THE LOC 1 CO SO qua plantName. ƯU TIEN dung tool nay khi hoi "chi phi cap phat cua co so X", "CS2 cap phat bao nhieu", "cap phat o <co so>". Truyen plantName = ten co so trong cau hoi.',
     '- search_materials(args:{search?,category?,limit?}): tim vat tu.',
     '',
     'TOOL CHI PHI MUA & DON HANG:',
-    '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): TONG chi phi & bien dong vs ky truoc, phan ra theo CO SO. "mua"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost.',
+    '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): current la TONG TOAN HE THONG (TAT CA co so) + bien dong vs ky truoc, kem top co so bien dong. KHONG LOC duoc 1 co so. ⚠ TUYET DOI KHONG dung cho cau hoi ve 1 co so cu the (vd "CS2 bao nhieu") — luc do dung distribution_analysis (cap phat) / purchase_analysis (mua) voi plantName. "mua"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost.',
     '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): chi phi MUA chi tiet ky nay vs ky truoc, phan ra theo VAT TU hoac NHA CUNG CAP.',
     '- purchase_orders(args:{search?, orderCode?, supplierName?, plantName?, status?, period?:week|month, limit?}): tra cuu DON HANG. Truyen orderCode/search de SOI SAU 1 don (tung dong vat tu, SL dat/nhan).',
     '- material_price_history(args:{materialName, limit?}): LICH SU GIA mua 1 vat tu qua tung don + xu huong tang/giam. Dung khi hoi "gia ... thay doi the nao", "mua bao nhieu lan".',
