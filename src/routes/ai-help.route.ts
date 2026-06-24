@@ -12,7 +12,7 @@ import {
 import { askAiHelp } from '@/services/ai-help.service';
 import { aiAssetSearch } from '@/services/ai-asset-search.service';
 import { askAssetAssistant } from '@/services/ai-asset-assistant.service';
-import { askAgentAssistant } from '@/services/ai-agent.service';
+import { askAgentAssistant, streamAgentAssistant } from '@/services/ai-agent.service';
 import { matchMaterialsByAi } from '@/services/ai-material-match.service';
 import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
 
@@ -24,6 +24,7 @@ router.post('/help', validator(askAiHelpSchema), asyncHandler(askAiHelp));
 router.post('/asset-search', validator(aiAssetSearchSchema), asyncHandler(aiAssetSearch));
 router.post('/assistant/assets', validator(aiAssetAssistantSchema), asyncHandler(askAssetAssistant));
 router.post('/assistant', validator(aiAssetAssistantSchema), asyncHandler(askAgentAssistant));
+router.post('/assistant/stream', validator(aiAssetAssistantSchema), asyncHandler(streamAgentAssistant));
 router.post('/material-match', validator(aiMaterialMatchSchema), asyncHandler(matchMaterialsByAi));
 router.post('/chat-summary', validator(aiChatSummarySchema), asyncHandler(summarizeChatConversation));
 

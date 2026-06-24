@@ -45,11 +45,25 @@ const pct = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) 
 const vnd = (v: number) => `${Math.round(v).toLocaleString('vi-VN')}đ`;
 
 const REPAIR_VALUE = { $sum: { $ifNull: ['$cost', 0] } };
-const DIST_VALUE = { $sum: { $ifNull: ['$totalWithVat', { $ifNull: ['$totalAmount', 0] }] } };
 const COUNT_VALUE = { $sum: 1 };
 
 const groupByPlant = async (model: any, match: Record<string, any>, valueExpr: any, plantField: string) => {
     const rows = await model.aggregate([{ $match: match }, { $group: { _id: `$${plantField}`, v: valueExpr } }]);
+    return new Map<string, number>(rows.map((r: any) => [String(r._id), Number(r.v) || 0]));
+};
+
+// Chi phí MUA gom theo cơ sở ở CẤP DÒNG: mỗi dòng vật tư trong PO có cơ sở riêng (plantId cấp phiếu thường rỗng).
+const groupPurchaseByPlant = async (s: Date, e: Date) => {
+    const rows = await PurchaseOrder.aggregate([
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] }, createdAt: { $gte: s, $lte: e } } },
+        { $unwind: '$items' },
+        {
+            $group: {
+                _id: '$items.plantId',
+                v: { $sum: { $ifNull: ['$items.totalWithVat', { $ifNull: ['$items.totalPrice', 0] }] } },
+            },
+        },
+    ]);
     return new Map<string, number>(rows.map((r: any) => [String(r._id), Number(r.v) || 0]));
 };
 
@@ -99,16 +113,11 @@ const buildMaps = async (metric: Metric, r: ReturnType<typeof periodRange>) => {
         endDate: { $gte: s, $lte: e },
     });
     const ticketMatch = (s: Date, e: Date) => ({ isDeleted: { $ne: true }, createdAt: { $gte: s, $lte: e } });
-    const purchaseMatch = (s: Date, e: Date) => ({
-        isDeleted: { $ne: true },
-        status: { $in: ['ordered', 'partially_received', 'received'] },
-        createdAt: { $gte: s, $lte: e },
-    });
 
     if (metric === 'purchase_cost') {
         return {
-            cur: await groupByPlant(PurchaseOrder, purchaseMatch(r.start, r.end), DIST_VALUE, 'plantId'),
-            prev: await groupByPlant(PurchaseOrder, purchaseMatch(r.prevStart, r.prevEnd), DIST_VALUE, 'plantId'),
+            cur: await groupPurchaseByPlant(r.start, r.end),
+            prev: await groupPurchaseByPlant(r.prevStart, r.prevEnd),
         };
     }
     if (metric === 'repair_cost') {

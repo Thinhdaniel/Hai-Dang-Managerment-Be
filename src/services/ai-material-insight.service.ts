@@ -5,6 +5,7 @@ import PurchaseOrder from '@/models/PurchaseOrder';
 import Plant from '@/models/Plant';
 import Material from '@/models/Material';
 import InventoryStock from '@/models/InventoryStock';
+import Maintenance from '@/models/Maintenance';
 
 // ===== Tiện ích dùng chung =====
 type PeriodType = 'week' | 'month';
@@ -86,9 +87,11 @@ export const materialUsageByPlant = async (args: {
         periodLabel = r.label;
     }
 
-    // Lọc theo cơ sở (toPlantId) thực hiện sau khi gom, để giữ đúng phân rã từng cơ sở.
+    // Nếu lọc 1 cơ sở: match toPlantId NGAY ĐẦU pipeline để top-N tính trên đúng cơ sở đó (tránh lấy top toàn hệ thống rồi mới lọc -> sót/sai tổng).
+    const baseMatch: Record<string, any> = { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] } };
+    if (plantId) baseMatch.toPlantId = new Types.ObjectId(plantId);
     const pipeline: any[] = [
-        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] } } },
+        { $match: baseMatch },
         // Lọc kỳ theo ngày hiệu lực (distributedAt||confirmedAt||createdAt) cho khớp báo cáo.
         ...(periodFilter ? [{ $addFields: { _eff: DIST_EFF } }, { $match: { _eff: periodFilter } }] : []),
         { $unwind: '$items' },
@@ -161,11 +164,13 @@ export const materialUsageByPlant = async (args: {
 // 2) Phân tích chi tiết chi phí MUA vật tư: kỳ này vs kỳ trước,
 //    phân rã theo vật tư hoặc nhà cung cấp.
 // ============================================================
-export const analyzePurchases = async (args: { period?: string; groupBy?: string; limit?: number }) => {
+export const analyzePurchases = async (args: { period?: string; groupBy?: string; plantName?: string; limit?: number }) => {
     const periodType: PeriodType = args.period === 'week' ? 'week' : 'month';
     const groupBy = args.groupBy === 'supplier' ? 'supplier' : 'material';
     const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 15);
     const r = periodRange(periodType);
+    const { nameById, resolve } = await loadPlants();
+    const plantId = resolve(args.plantName);
 
     const baseMatch = (s: Date, e: Date) => ({
         isDeleted: { $ne: true },
@@ -179,6 +184,8 @@ export const analyzePurchases = async (args: { period?: string; groupBy?: string
         const rows = await PurchaseOrder.aggregate([
             { $match: baseMatch(s, e) },
             { $unwind: '$items' },
+            // Lọc theo cơ sở ở CẤP DÒNG (mỗi dòng vật tư có cơ sở riêng), KHÔNG dùng plantId cấp phiếu (thường rỗng).
+            ...(plantId ? [{ $match: { 'items.plantId': new Types.ObjectId(plantId) } }] : []),
             {
                 $group: {
                     _id: { $ifNull: [keyField, groupBy === 'supplier' ? 'Chưa rõ NCC' : 'Chưa rõ vật tư'] },
@@ -223,6 +230,7 @@ export const analyzePurchases = async (args: { period?: string; groupBy?: string
         periodLabel: r.label,
         prevLabel: r.prevLabel,
         groupBy,
+        plantName: plantId ? nameById.get(plantId) : undefined,
         current: Math.round(cur.total),
         previous: Math.round(prev.total),
         deltaPct: pct(cur.total, prev.total),
@@ -259,50 +267,72 @@ export const listPurchaseOrders = async (args: {
     const code = args.orderCode || args.search;
     const wantDetail = Boolean(args.orderCode) || Boolean(args.search && /^[A-Za-z0-9._/-]+$/.test(String(args.search).trim()) && String(args.search).trim().length >= 4);
 
+    // Gộp nhiều điều kiện bằng $and (mỗi điều kiện là 1 nhóm $or) để không ghi đè nhau.
+    const and: Record<string, any>[] = [];
     if (code) {
-        filter.$or = [
-            { orderCode: rx(String(code)) },
-            { supplierName: rx(String(code)) },
-            { 'items.materialName': rx(String(code)) },
-            { 'items.supplierName': rx(String(code)) },
-        ];
+        and.push({
+            $or: [
+                { orderCode: rx(String(code)) },
+                { supplierName: rx(String(code)) },
+                { 'items.materialName': rx(String(code)) },
+                { 'items.supplierName': rx(String(code)) },
+            ],
+        });
     }
-    if (args.supplierName) filter.supplierName = rx(String(args.supplierName));
+    // NCC có thể nằm ở cấp phiếu HOẶC từng dòng -> khớp cả hai.
+    if (args.supplierName) and.push({ $or: [{ supplierName: rx(String(args.supplierName)) }, { 'items.supplierName': rx(String(args.supplierName)) }] });
     if (args.status && PO_STATUS_LABEL[args.status]) filter.status = args.status;
     const plantId = resolve(args.plantName);
-    if (plantId) filter.plantId = plantId;
+    // Cơ sở cũng nằm ở cấp phiếu hoặc từng dòng (dòng là chính xác nhất).
+    if (plantId) and.push({ $or: [{ plantId: new Types.ObjectId(plantId) }, { 'items.plantId': new Types.ObjectId(plantId) }] });
     if (args.period === 'week' || args.period === 'month') {
         const r = periodRange(args.period);
         filter.createdAt = { $gte: r.start, $lte: r.end };
     }
+    if (and.length) filter.$and = and;
 
     const count = await PurchaseOrder.countDocuments(filter);
     const docs = await PurchaseOrder.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
 
     const detail = wantDetail && docs.length <= 3;
 
+    // Gom danh sách NCC / cơ sở DUY NHẤT từ các dòng (1 PO có thể gồm nhiều NCC & nhiều cơ sở).
+    const distinct = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => (v || '').trim()).filter(Boolean))];
+
     const orders = docs.map((o: any) => {
+        const its = o.items || [];
+        const suppliers = distinct([o.supplierName, ...its.map((it: any) => it.supplierName)]);
+        const plants = distinct(its.map((it: any) => nameById.get(String(it.plantId)) || it.plantName)).concat(
+            o.plantId && nameById.get(String(o.plantId)) ? [nameById.get(String(o.plantId))!] : []
+        );
+        const uniqPlants = [...new Set(plants)];
         const base = {
             orderCode: o.orderCode || '(chưa có mã)',
-            supplierName: o.supplierName || (o.items?.[0]?.supplierName ?? 'Chưa rõ NCC'),
-            plantName: nameById.get(String(o.plantId)) || o.items?.[0]?.plantName || undefined,
+            // Hiển thị: 1 NCC -> tên; nhiều NCC -> "N nhà cung cấp" (kèm danh sách suppliers để FE liệt kê).
+            supplierName: suppliers.length > 1 ? `${suppliers.length} nhà cung cấp` : suppliers[0] || 'Chưa rõ NCC',
+            suppliers,
+            supplierCount: suppliers.length,
+            multiSupplier: suppliers.length > 1,
+            plantName: uniqPlants.length > 1 ? `${uniqPlants.length} cơ sở` : uniqPlants[0] || undefined,
+            plants: uniqPlants,
             status: o.status,
             statusLabel: PO_STATUS_LABEL[o.status] || o.status,
             totalWithVat: Math.round(o.totalWithVat || o.totalAmount || 0),
-            itemCount: o.items?.length || 0,
+            itemCount: its.length,
             createdAt: o.createdAt,
         };
         if (!detail) return base;
         return {
             ...base,
-            items: (o.items || []).map((it: any) => ({
+            items: its.map((it: any) => ({
                 materialName: it.materialName || 'Vật tư',
                 unit: it.unit || '',
                 quantityOrdered: Math.round(it.quantityOrdered || 0),
                 quantityReceived: Math.round(it.quantityReceived || 0),
                 unitPrice: Math.round(it.unitPrice || 0),
                 totalWithVat: Math.round(it.totalWithVat || it.totalPrice || 0),
-                supplierName: it.supplierName || undefined,
+                supplierName: it.supplierName || o.supplierName || undefined,
+                plantName: nameById.get(String(it.plantId)) || it.plantName || undefined,
             })),
         };
     });
@@ -527,4 +557,94 @@ export const purchaseSuggestion = async (args: { limit?: number }) => {
         .slice(0, limit);
 
     return { count: suggestions.length, suggestions };
+};
+
+// ============================================================
+// 8) Tổng giá trị 3 loại chi phí trong 1 kỳ (khớp công thức báo cáo)
+// ============================================================
+// Chi phí MUA: tổng item-level (totalWithVat/totalPrice) của PO đã đặt/nhận trong kỳ.
+const purchaseTotal = async (s: Date, e: Date): Promise<number> => {
+    const rows = await PurchaseOrder.aggregate([
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] }, createdAt: { $gte: s, $lte: e } } },
+        { $unwind: '$items' },
+        { $group: { _id: null, v: { $sum: PO_VALUE } } },
+    ]);
+    return Math.round(rows[0]?.v || 0);
+};
+// Chi phí CẤP PHÁT: khớp report.service (item-level + ngày hiệu lực distributedAt||confirmedAt||createdAt).
+const distributionTotal = async (s: Date, e: Date): Promise<number> => {
+    const rows = await DistributionRecord.aggregate([
+        {
+            $addFields: {
+                _eff: DIST_EFF,
+                _items: {
+                    $sum: {
+                        $map: {
+                            input: { $ifNull: ['$items', []] },
+                            as: 'it',
+                            in: { $ifNull: ['$$it.totalWithVat', { $ifNull: ['$$it.totalPrice', 0] }] },
+                        },
+                    },
+                },
+            },
+        },
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] }, _eff: { $gte: s, $lte: e } } },
+        { $group: { _id: null, v: { $sum: { $cond: [{ $gt: ['$_items', 0] }, '$_items', { $ifNull: ['$totalWithVat', { $ifNull: ['$totalAmount', 0] }] }] } } } },
+    ]);
+    return Math.round(rows[0]?.v || 0);
+};
+// Chi phí SỬA NGOÀI: tổng cost của phiếu bảo trì sửa ngoài đã hoàn tất trong kỳ.
+const repairTotal = async (s: Date, e: Date): Promise<number> => {
+    const rows = await Maintenance.aggregate([
+        { $match: { isDeleted: { $ne: true }, repairMode: 'external', status: 'completed', endDate: { $gte: s, $lte: e } } },
+        { $group: { _id: null, v: { $sum: { $ifNull: ['$cost', 0] } } } },
+    ]);
+    return Math.round(rows[0]?.v || 0);
+};
+
+const block = (current: number, previous: number) => ({ current, previous, deltaPct: pct(current, previous) });
+
+// Tách rõ 3 loại chi phí (mua / cấp phát / sửa ngoài) — dùng cho câu hỏi chi phí MƠ HỒ ("chi phí tháng này thế nào").
+export const costOverview = async (args: { period?: string }) => {
+    const periodType: PeriodType = args.period === 'week' ? 'week' : 'month';
+    const r = periodRange(periodType);
+    const [pCur, pPrev, dCur, dPrev, rCur, rPrev] = await Promise.all([
+        purchaseTotal(r.start, r.end),
+        purchaseTotal(r.prevStart, r.prevEnd),
+        distributionTotal(r.start, r.end),
+        distributionTotal(r.prevStart, r.prevEnd),
+        repairTotal(r.start, r.end),
+        repairTotal(r.prevStart, r.prevEnd),
+    ]);
+    const totalCur = pCur + dCur + rCur;
+    const totalPrev = pPrev + dPrev + rPrev;
+    return {
+        periodLabel: r.label,
+        prevLabel: r.prevLabel,
+        purchase: block(pCur, pPrev),
+        distribution: block(dCur, dPrev),
+        repair: block(rCur, rPrev),
+        total: block(totalCur, totalPrev),
+    };
+};
+
+// So sánh chi phí MUA vs CẤP PHÁT trong kỳ (2 dòng tiền khác bản chất: nhập kho vs xuất dùng).
+export const comparePurchaseVsIssue = async (args: { period?: string }) => {
+    const periodType: PeriodType = args.period === 'week' ? 'week' : 'month';
+    const r = periodRange(periodType);
+    const [pCur, pPrev, dCur, dPrev] = await Promise.all([
+        purchaseTotal(r.start, r.end),
+        purchaseTotal(r.prevStart, r.prevEnd),
+        distributionTotal(r.start, r.end),
+        distributionTotal(r.prevStart, r.prevEnd),
+    ]);
+    const gap = pCur - dCur;
+    return {
+        periodLabel: r.label,
+        prevLabel: r.prevLabel,
+        purchase: block(pCur, pPrev),
+        distribution: block(dCur, dPrev),
+        gap, // mua - cấp phát: dương = nhập nhiều hơn xuất (tăng tồn), âm = xuất nhiều hơn nhập (giảm tồn)
+        higher: gap > 0 ? 'purchase' : gap < 0 ? 'distribution' : 'equal',
+    };
 };

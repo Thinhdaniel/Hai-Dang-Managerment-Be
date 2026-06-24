@@ -10,6 +10,8 @@ import { assetQueryTool, type AssistantMessage } from '@/services/ai-asset-assis
 import { computeVarianceData } from '@/services/variance.service';
 import {
     analyzePurchases,
+    comparePurchaseVsIssue,
+    costOverview,
     distributionAnalysis,
     listPurchaseOrders,
     materialPriceHistory,
@@ -105,6 +107,8 @@ type ToolName =
     | 'distribution_analysis'
     | 'purchase_suggestion'
     | 'cost_variance'
+    | 'cost_overview'
+    | 'compare_cost'
     | 'summary_metrics';
 
 type ToolOutcome = {
@@ -199,6 +203,7 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
                 ai: {
                     ky: p.periodLabel,
                     kyTruoc: p.prevLabel,
+                    coSo: p.plantName || 'toàn hệ thống',
                     phanRaTheo: p.groupBy === 'supplier' ? 'nhà cung cấp' : 'vật tư',
                     tongKyNay: p.current,
                     tongKyTruoc: p.previous,
@@ -217,11 +222,14 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
                     donHang: o.orders.slice(0, 10).map((d: any) => ({
                         ma: d.orderCode,
                         ncc: d.supplierName,
+                        danhSachNcc: d.suppliers, // 1 PO có thể gồm NHIỀU nhà cung cấp (mỗi dòng 1 NCC)
+                        soNcc: d.supplierCount,
                         coSo: d.plantName,
+                        cacCoSo: d.plants,
                         trangThai: d.statusLabel,
                         tongTien: d.totalWithVat,
                         soDongVatTu: d.itemCount,
-                        ...(d.items ? { vatTu: d.items.map((it: any) => ({ ten: it.materialName, sl: `${it.quantityOrdered} ${it.unit}`, gia: it.totalWithVat })) } : {}),
+                        ...(d.items ? { vatTu: d.items.map((it: any) => ({ ten: it.materialName, sl: `${it.quantityOrdered} ${it.unit}`, gia: it.totalWithVat, ncc: it.supplierName, coSo: it.plantName })) } : {}),
                     })),
                 },
                 render: { domain: 'material', count: o.count, items: [], aggregates: { purchaseOrders: { detail: o.detail, orders: o.orders } } },
@@ -278,6 +286,34 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
                 render: { domain: 'material', count: p.count, items: [], aggregates: { purchaseSuggestion: p } },
             };
         }
+        case 'cost_overview': {
+            const c = await costOverview(args || {});
+            return {
+                ai: {
+                    ky: c.periodLabel,
+                    kyTruoc: c.prevLabel,
+                    muaVatTu: { kyNay: c.purchase.current, kyTruoc: c.purchase.previous, deltaPct: c.purchase.deltaPct },
+                    capPhat: { kyNay: c.distribution.current, kyTruoc: c.distribution.previous, deltaPct: c.distribution.deltaPct },
+                    suaNgoai: { kyNay: c.repair.current, kyTruoc: c.repair.previous, deltaPct: c.repair.deltaPct },
+                    tongCong: { kyNay: c.total.current, kyTruoc: c.total.previous, deltaPct: c.total.deltaPct },
+                    ghiChu: 'Mua = nhập kho; Cấp phát = xuất dùng; Sửa ngoài = chi phí sửa chữa. 3 dòng tiền khác bản chất, không cộng gộp để so sánh hiệu quả.',
+                },
+                render: { domain: 'cost', count: 0, items: [], aggregates: { costOverview: c } },
+            };
+        }
+        case 'compare_cost': {
+            const c = await comparePurchaseVsIssue(args || {});
+            return {
+                ai: {
+                    ky: c.periodLabel,
+                    muaVatTu: c.purchase.current,
+                    capPhat: c.distribution.current,
+                    chenhLech: c.gap,
+                    caoHon: c.higher === 'purchase' ? 'mua nhiều hơn cấp phát (tăng tồn kho)' : c.higher === 'distribution' ? 'cấp phát nhiều hơn mua (giảm tồn kho)' : 'bằng nhau',
+                },
+                render: { domain: 'cost', count: 0, items: [], aggregates: { compareCost: c } },
+            };
+        }
         case 'cost_variance': {
             const v = await computeVarianceData(args?.metric, args?.period);
             return {
@@ -330,8 +366,16 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     if (n.includes('nen mua') || n.includes('de xuat mua') || n.includes('len ke hoach mua') || n.includes('ke hoach mua') || n.includes('can mua gi') || n.includes('can bo sung')) {
         return { tool: 'purchase_suggestion', args: {} };
     }
+    // So sánh MUA vs CẤP PHÁT.
+    if (n.includes('so sanh') && n.includes('mua') && n.includes('cap phat')) {
+        return { tool: 'compare_cost', args: { period: detectPeriod(q) } };
+    }
+    const hasPlant = /co so|\bc\.?\s*s\.?\s*\d/.test(n);
     if (n.includes('mua') && (n.includes('phan tich') || n.includes('chi tiet') || n.includes('vat tu nao') || n.includes('nha cung cap') || n.includes('ncc') || n.includes('so sanh'))) {
-        return { tool: 'purchase_analysis', args: { period: detectPeriod(q), groupBy: n.includes('nha cung cap') || n.includes('ncc') ? 'supplier' : 'material' } };
+        return {
+            tool: 'purchase_analysis',
+            args: { period: detectPeriod(q), groupBy: n.includes('nha cung cap') || n.includes('ncc') ? 'supplier' : 'material', plantName: hasPlant ? q : undefined },
+        };
     }
     if (
         n.includes('cap phat') &&
@@ -347,6 +391,9 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
         return { tool: 'low_stock_materials', args: {} };
     }
     if (n.includes('chi phi') || n.includes('bien dong') || n.includes('chi tieu') || n.includes('ton bao nhieu tien') || n.includes('tieu ton')) {
+        // Chi phí CHUNG CHUNG (không nói rõ mua/cấp phát/sửa) -> tách 3 loại để không gây hiểu nhầm.
+        const hasType = n.includes('mua') || n.includes('cap phat') || n.includes('sua ngoai') || n.includes('sua chua') || n.includes('bao tri');
+        if (!hasType) return { tool: 'cost_overview', args: { period: detectPeriod(q) } };
         return { tool: 'cost_variance', args: { metric: detectMetric(q), period: detectPeriod(q) } };
     }
     if (n.includes('hong') && (n.includes('nhieu') || n.includes('top') || n.includes('hay '))) {
@@ -375,7 +422,8 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
     }
     if (a.purchaseAnalysis) {
         const p = a.purchaseAnalysis;
-        const head = `Chi phí mua vật tư ${p.periodLabel}: ${fmtVnd(p.current)} (${p.deltaPct >= 0 ? '+' : ''}${p.deltaPct}% so ${p.prevLabel} ${fmtVnd(p.previous)}).`;
+        const at = p.plantName ? ` ở ${p.plantName}` : '';
+        const head = `Chi phí mua vật tư${at} ${p.periodLabel}: ${fmtVnd(p.current)} (${p.deltaPct >= 0 ? '+' : ''}${p.deltaPct}% so ${p.prevLabel} ${fmtVnd(p.previous)}).`;
         const top = p.rows[0];
         if (!top) return head;
         // rows đã sắp theo |delta| -> mô tả yếu tố biến động mạnh nhất (đúng cả khi kỳ này = 0).
@@ -414,6 +462,23 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
         if (!p.count) return 'Hiện không có vật tư nào cần mua thêm (tồn đủ định mức & nhu cầu).';
         const top = p.suggestions.slice(0, 3).map((s: any) => `${s.materialName} (nên mua ${s.suggestQty} ${s.unit}, tồn ${s.stock})`);
         return `Đề xuất mua ${p.count} vật tư. Ưu tiên: ${top.join('; ')}.`;
+    }
+    if (a.costOverview) {
+        const c = a.costOverview;
+        const d = (b: any) => `${b.deltaPct >= 0 ? '+' : ''}${b.deltaPct}%`;
+        return (
+            `Chi phí ${c.periodLabel} tách theo 3 loại: ` +
+            `Mua vật tư ${fmtVnd(c.purchase.current)} (${d(c.purchase)}); ` +
+            `Cấp phát ${fmtVnd(c.distribution.current)} (${d(c.distribution)}); ` +
+            `Sửa ngoài ${fmtVnd(c.repair.current)} (${d(c.repair)}). ` +
+            `Tổng cộng ${fmtVnd(c.total.current)} (${d(c.total)} so ${c.prevLabel}). ` +
+            `Lưu ý: mua = nhập kho, cấp phát = xuất dùng — 2 dòng tiền khác bản chất.`
+        );
+    }
+    if (a.compareCost) {
+        const c = a.compareCost;
+        const which = c.higher === 'purchase' ? 'MUA nhiều hơn cấp phát (đang tăng tồn kho)' : c.higher === 'distribution' ? 'CẤP PHÁT nhiều hơn mua (đang giảm tồn kho)' : 'mua bằng cấp phát';
+        return `So sánh ${c.periodLabel}: mua vật tư ${fmtVnd(c.purchase.current)} vs cấp phát ${fmtVnd(c.distribution.current)} → ${which}, chênh ${fmtVnd(Math.abs(c.gap))}.`;
     }
     if (a.variance) {
         const v = a.variance;
@@ -461,6 +526,8 @@ const SYSTEM_PROMPT = [
     'QUY TAC VANG:',
     '- TUYET DOI khong bia so lieu/ten. Moi con so phai den tu ket qua tool. Neu thieu du lieu, noi ro "chua co du lieu".',
     '- Cau hoi PHUC TAP (lap ke hoach, so sanh, "co nen", ghep nhieu mang): goi LAN LUOT nhieu tool roi TONG HOP. Vd "don can may 1 kim hikari, con may ranh khong?" -> goi search_assets{search:"1 kim", brandName:"hikari", status:["storage"]} roi ket luan co/khong + de xuat dieu chuyen.',
+    '- Cau hoi DIEU HANH/TONG HOP rong (vd "bao cao tong hop may + bao tri + dieu chuyen + vat tu + chi phi", "tinh hinh chung thang nay"): TUYET DOI khong tra ve 1 mang duy nhat. Phai goi NHIEU tool (vd summary_metrics + cost_overview + top_broken_assets + transfer_orders + low_stock_materials) roi tong hop thanh bao cao co muc. Neu cau hoi liet ke nhieu khia canh, moi khia canh can it nhat 1 tool.',
+    '- Cau hoi SO SANH 2 thu (vd "mua vs cap phat", "thang nay vs thang truoc") -> phai tra ca 2 ve + chenh lech, KHONG chi tra 1 ve.',
     '- Cau hoi MO HO/thieu thong tin -> tra {"final":"cau hoi lai ngan gon"} de hoi ro (vd thieu ky, thieu ten vat tu).',
     '- Luon TRICH NGUON trong cau tra loi (ten co so, ma don, ten NCC) de giam doc tin.',
     '- Khi du du lieu thi tra {"final":...} ngay, dung goi tool thua.',
@@ -481,9 +548,13 @@ const SYSTEM_PROMPT = [
     'TOOL CHI PHI MUA & DON HANG:',
     '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): current la TONG TOAN HE THONG (TAT CA co so) + bien dong vs ky truoc, kem top co so bien dong. KHONG LOC duoc 1 co so. ⚠ TUYET DOI KHONG dung cho cau hoi ve 1 co so cu the (vd "CS2 bao nhieu") — luc do dung distribution_analysis (cap phat) / purchase_analysis (mua) voi plantName. "mua"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost.',
     '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): chi phi MUA chi tiet ky nay vs ky truoc, phan ra theo VAT TU hoac NHA CUNG CAP.',
+    '- purchase_analysis CHO 1 CO SO: truyen them plantName de loc chi phi mua cua RIENG co so do (loc o cap DONG vat tu). KHONG dung cost_variance(purchase_cost) cho 1 co so.',
     '- purchase_orders(args:{search?, orderCode?, supplierName?, plantName?, status?, period?:week|month, limit?}): tra cuu DON HANG. Truyen orderCode/search de SOI SAU 1 don (tung dong vat tu, SL dat/nhan).',
+    '  ⚠ QUAN TRONG: MOI PO gom NHIEU dong vat tu, MOI dong co NHA CUNG CAP & CO SO RIENG (co the trung hoac khac nhau). 1 PO KHONG phai chi 1 NCC. Ket qua tra "danhSachNcc"/"soNcc" cho moi don; khi soNcc>1 phai noi "don X gom N nha cung cap: ..." chu KHONG gan ca don cho 1 NCC. Khi soi chi tiet, neu can thi nhom cac dong theo NCC.',
     '- material_price_history(args:{materialName, limit?}): LICH SU GIA mua 1 vat tu qua tung don + xu huong tang/giam. Dung khi hoi "gia ... thay doi the nao", "mua bao nhieu lan".',
     '- supplier_comparison(args:{materialName, limit?}): SO SANH GIA giua cac NHA CUNG CAP cho 1 vat tu. Dung khi hoi "mua cho nao re", "ncc nao gia tot".',
+    '- cost_overview(args:{period:week|month}): TACH RO 3 LOAI CHI PHI (mua / cap phat / sua ngoai) + tong, kem bien dong vs ky truoc. BAT BUOC dung khi cau hoi chi phi CHUNG CHUNG/MO HO ("chi phi thang nay the nao", "tong chi phi", "thang nay ton bao nhieu") — KHONG tu chon 1 loai roi tra mot so de gay hieu nham.',
+    '- compare_cost(args:{period:week|month}): SO SANH chi phi MUA vs CAP PHAT trong ky (2 dong tien khac ban chat). Dung khi hoi "so sanh mua va cap phat", "mua nhieu hay xuat nhieu".',
     '',
     'TOOL LAP KE HOACH & TONG QUAN:',
     '- purchase_suggestion(args:{limit?}): DE XUAT MUA SAM (tu ton duoi dinh muc + tieu hao 30 ngay). Dung khi hoi "nen mua gi", "len ke hoach mua", "can bo sung vat tu nao".',
@@ -506,16 +577,62 @@ const VALID_TOOLS = new Set<ToolName>([
     'distribution_analysis',
     'purchase_suggestion',
     'cost_variance',
+    'cost_overview',
+    'compare_cost',
     'summary_metrics',
 ]);
 // Ngan sach suy luan: cau giam doc thuong can ghep nhieu nguon -> cho nhieu luot hon.
 const MAX_TOOL_CALLS = 5;
 const MAX_ITERATIONS = 10;
 
-export const askAgentAssistant = async (req: Request, res: Response) => {
-    const messages = (req.body.messages ?? []) as AssistantMessage[];
+// ===== Grounding: mô tả NGUỒN dữ liệu mỗi câu trả lời (để giám đốc tin) =====
+const TOOL_LABEL: Record<ToolName, string> = {
+    search_assets: 'Máy móc',
+    locate_asset: 'Tra cứu máy',
+    transfer_orders: 'Lệnh điều chuyển',
+    top_broken_assets: 'Máy hỏng nhiều',
+    low_stock_materials: 'Vật tư sắp hết',
+    top_used_materials: 'Vật tư cấp phát nhiều',
+    search_materials: 'Danh mục vật tư',
+    material_usage_by_plant: 'Cấp phát theo cơ sở',
+    purchase_analysis: 'Phân tích mua',
+    purchase_orders: 'Đơn hàng mua',
+    material_price_history: 'Lịch sử giá',
+    supplier_comparison: 'So sánh nhà cung cấp',
+    distribution_analysis: 'Chi phí cấp phát',
+    purchase_suggestion: 'Đề xuất mua sắm',
+    cost_variance: 'Biến động chi phí',
+    cost_overview: 'Tổng quan chi phí',
+    compare_cost: 'Mua vs Cấp phát',
+    summary_metrics: 'Tổng quan hệ thống',
+};
+
+type SourceMeta = { tool: string; label: string; module: string; scope?: string; records?: number };
+
+// Lấy "phạm vi" (cơ sở · kỳ) từ kết quả tool đã chạy để hiển thị minh bạch.
+const scopeOfRender = (render: ToolOutcome['render']): string | undefined => {
+    const a: any = render?.aggregates || {};
+    const src =
+        a.distributionAnalysis || a.usageByPlant || a.purchaseAnalysis || a.priceHistory || a.supplierComparison || a.costOverview || a.compareCost || a.transferOrders || a.variance;
+    if (!src) return undefined;
+    const parts: string[] = [];
+    if (src.plantName) parts.push(String(src.plantName));
+    if (src.periodLabel) parts.push(String(src.periodLabel));
+    return parts.length ? parts.join(' · ') : undefined;
+};
+
+// Sự kiện tiến trình bắn ra trong lúc agent chạy (cho streaming SSE).
+export type AgentStep =
+    | { type: 'analyze'; tier: 'light' | 'standard' | 'heavy' }
+    | { type: 'tool'; tool: string; label: string }
+    | { type: 'synthesize' };
+
+// Lõi agent: chạy vòng lặp ReAct, trả về data object. emit() (tuỳ chọn) bắn tiến trình cho streaming.
+export const runAssistant = async (messages: AssistantMessage[], emit?: (step: AgentStep) => void) => {
+    const startedAt = Date.now();
     const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content?.trim() || '';
     const feature = tierFor(lastUser);
+    emit?.({ type: 'analyze', tier: tierLabelOf(feature) });
 
     const convo: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -527,6 +644,16 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
     let model: string | undefined;
     let lastRender: ToolOutcome['render'] | undefined;
     let answer = '';
+    const sources = new Map<string, SourceMeta>();
+    const recordSource = (tool: ToolName, render: ToolOutcome['render']) => {
+        sources.set(tool, {
+            tool,
+            label: TOOL_LABEL[tool] || tool,
+            module: render?.domain === 'asset' ? 'Máy móc' : render?.domain === 'material' ? 'Vật tư & kho' : render?.domain === 'cost' ? 'Chi phí' : 'Hệ thống',
+            scope: scopeOfRender(render),
+            records: render?.count || undefined,
+        });
+    };
 
     for (let i = 0; i < MAX_ITERATIONS; i += 1) {
         let parsed: any;
@@ -552,7 +679,7 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
             convo.push({
                 role: 'user',
                 content:
-                    'Tool do khong ton tai. Chi duoc dung: search_assets, locate_asset, transfer_orders, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
+                    'Tool do khong ton tai. Chi duoc dung: search_assets, locate_asset, transfer_orders, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, cost_overview, compare_cost, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
             });
             continue;
         }
@@ -563,8 +690,12 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
         }
 
         toolCalls += 1;
+        emit?.({ type: 'tool', tool: toolName, label: TOOL_LABEL[toolName] || toolName });
         const outcome = await executeTool(toolName, parsed.args);
-        if (outcome.render) lastRender = outcome.render;
+        if (outcome.render) {
+            lastRender = outcome.render;
+            recordSource(toolName, outcome.render);
+        }
         convo.push({ role: 'assistant', content: JSON.stringify({ tool: toolName, args: parsed.args }) });
         convo.push({ role: 'user', content: `KET QUA ${toolName}: ${JSON.stringify(outcome.ai).slice(0, 3500)}` });
     }
@@ -575,8 +706,12 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
         const guess = classifyIntent(lastUser);
         if (guess) {
             try {
+                emit?.({ type: 'tool', tool: guess.tool, label: TOOL_LABEL[guess.tool] || guess.tool });
                 const outcome = await executeTool(guess.tool, guess.args);
-                if (outcome.render) lastRender = outcome.render;
+                if (outcome.render) {
+                    lastRender = outcome.render;
+                    recordSource(guess.tool, outcome.render);
+                }
                 const built = buildDeterministicAnswer(lastRender);
                 if (built) {
                     answer = built;
@@ -593,8 +728,10 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
             buildDeterministicAnswer(lastRender) ||
             (lastRender
                 ? `Tìm thấy ${lastRender.count} kết quả phù hợp.`
-                : 'Mình hỗ trợ hỏi đáp về: máy & bảo trì, vật tư & tồn kho, và chi phí (sửa ngoài, cấp phát, mua vật tư). Bạn thử diễn đạt lại câu hỏi theo các mảng này nhé.');
+                : 'Mình chưa chắc ý câu hỏi nên chưa truy vấn được dữ liệu phù hợp. Mình tra được: máy & bảo trì (vị trí, hỏng, điều chuyển, QR), vật tư & tồn kho, và chi phí (mua / cấp phát / sửa ngoài, theo cơ sở & theo kỳ). Bạn nêu rõ hơn cơ sở/khoảng thời gian/loại chi phí giúp mình nhé — ví dụ "chi phí mua của Cơ Sở 2 tháng này".');
     }
+
+    emit?.({ type: 'synthesize' });
 
     const followups = (lastRender as any)?.followups?.filter?.((f: any) => typeof f === 'string') ?? [
         'Máy nào quá hạn bảo trì?',
@@ -602,24 +739,80 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
         'Vật tư nào sắp hết?',
     ];
 
+    const sourceList = [...sources.values()];
+    // Mức tin cậy: có truy vấn dữ liệu thật + AI grounded = cao; heuristic = trung bình; fallback/không nguồn = thấp/tham khảo.
+    const confidence: 'high' | 'medium' | 'low' | 'none' =
+        provider === 'fallback'
+            ? sourceList.length
+                ? 'medium'
+                : 'none'
+            : provider === 'heuristic'
+              ? 'medium'
+              : sourceList.length
+                ? 'high'
+                : 'none';
+
+    // Log gọn để debug (network_error / fallback / câu chậm) — soi theo reqId.
+    const reqId = `ai_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const tookMs = Date.now() - startedAt;
+    if (provider === 'fallback' || tookMs > 30000) {
+        // eslint-disable-next-line no-console
+        console.warn(`[ai-assistant ${reqId}] provider=${provider} tools=${toolCalls} took=${tookMs}ms q="${lastUser.slice(0, 120)}"`);
+    }
+
+    return {
+        domain: lastRender?.domain ?? 'asset',
+        answer,
+        intent: 'agent',
+        count: lastRender?.count ?? 0,
+        items: lastRender?.items ?? [],
+        aggregates: lastRender?.aggregates ?? {},
+        appliedFilters: lastRender?.appliedFilters,
+        followups: followups.slice(0, 3),
+        sources: sourceList,
+        confidence,
+        reqId,
+        tookMs,
+        provider,
+        model,
+        tier: tierLabelOf(feature),
+    };
+};
+
+// Endpoint thường (JSON 1 lần) — giữ nguyên hợp đồng cũ.
+export const askAgentAssistant = async (req: Request, res: Response) => {
+    const messages = (req.body.messages ?? []) as AssistantMessage[];
+    const data = await runAssistant(messages);
     return res.status(StatusCodes.OK).json(
-        customResponse({
-            data: {
-                domain: lastRender?.domain ?? 'asset',
-                answer,
-                intent: 'agent',
-                count: lastRender?.count ?? 0,
-                items: lastRender?.items ?? [],
-                aggregates: lastRender?.aggregates ?? {},
-                appliedFilters: lastRender?.appliedFilters,
-                followups: followups.slice(0, 3),
-                provider,
-                model,
-                tier: tierLabelOf(feature),
-            },
-            message: 'Tro ly da xu ly cau hoi',
-            status: StatusCodes.OK,
-            success: true,
-        })
+        customResponse({ data, message: 'Tro ly da xu ly cau hoi', status: StatusCodes.OK, success: true })
     );
+};
+
+// Endpoint STREAMING (SSE): bắn tiến trình "đang phân tích / đang truy vấn <tool> / đang tổng hợp"
+// theo thời gian thực, rồi gửi 'done' kèm toàn bộ data. FE đọc bằng fetch + ReadableStream.
+export const streamAgentAssistant = async (req: Request, res: Response) => {
+    const messages = (req.body.messages ?? []) as AssistantMessage[];
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // tránh proxy (nginx/render) buffer mất tính realtime
+    (res as any).flushHeaders?.();
+
+    const send = (event: string, payload: unknown) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    // Tim đập giữ kết nối sống nếu một bước kéo dài (proxy free hay cắt khi im lặng).
+    const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+    try {
+        send('open', { ok: true });
+        const data = await runAssistant(messages, (step) => send('step', step));
+        send('done', data);
+    } catch {
+        send('error', { message: 'Khong xu ly duoc cau hoi' });
+    } finally {
+        clearInterval(heartbeat);
+        res.end();
+    }
 };
