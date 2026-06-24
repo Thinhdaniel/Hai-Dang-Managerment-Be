@@ -3,6 +3,7 @@ import Asset from '@/models/Asset';
 import Transfer from '@/models/Transfer';
 import Plant from '@/models/Plant';
 import Brand from '@/models/Brand';
+import { expandPlantAlias } from '@/services/ai-material-insight.service';
 
 const normalize = (v?: string) =>
     (v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
@@ -30,10 +31,13 @@ const loadPlants = async () => {
     const nameById = new Map(plants.map((p: any) => [String(p._id), String(p.name)]));
     const resolve = (input?: string): string | undefined => {
         if (!input) return undefined;
-        const q = normalize(input);
+        const q = expandPlantAlias(input);
         const hit =
-            plants.find((p: any) => normalize(p.name) === q) ||
-            plants.find((p: any) => normalize(p.name).includes(q) || q.includes(normalize(p.name)));
+            plants.find((p: any) => expandPlantAlias(p.name) === q) ||
+            plants.find((p: any) => {
+                const pn = expandPlantAlias(p.name);
+                return pn.includes(q) || q.includes(pn);
+            });
         return hit ? String((hit as any)._id) : undefined;
     };
     return { nameById, resolve };

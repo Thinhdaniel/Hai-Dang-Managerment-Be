@@ -11,6 +11,9 @@ type PeriodType = 'week' | 'month';
 const normalize = (v?: string) =>
     (v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
 
+// Mở viết tắt cơ sở: "cs2", "cs 2", "c.s 2" -> "co so 2" để khớp tên "Cơ Sở 2".
+export const expandPlantAlias = (v?: string) => normalize(v).replace(/\bc\.?\s*s\.?\s*(\d+)/g, 'co so $1');
+
 export const vnd = (v: number) => `${Math.round(v || 0).toLocaleString('vi-VN')}đ`;
 
 const pct = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : cur > 0 ? 100 : 0);
@@ -43,10 +46,13 @@ const loadPlants = async () => {
     const nameById = new Map(plants.map((p: any) => [String(p._id), String(p.name)]));
     const resolve = (input?: string): string | undefined => {
         if (!input) return undefined;
-        const q = normalize(input);
+        const q = expandPlantAlias(input);
         const hit =
-            plants.find((p: any) => normalize(p.name) === q) ||
-            plants.find((p: any) => normalize(p.name).includes(q) || q.includes(normalize(p.name)));
+            plants.find((p: any) => expandPlantAlias(p.name) === q) ||
+            plants.find((p: any) => {
+                const pn = expandPlantAlias(p.name);
+                return pn.includes(q) || q.includes(pn);
+            });
         return hit ? String((hit as any)._id) : undefined;
     };
     return { nameById, resolve };
