@@ -172,7 +172,8 @@ const callOllama = async (options: AiGenerateTextOptions): Promise<AiGenerateTex
 };
 
 export const extractJsonObject = (content: string) => {
-    const trimmed = content.trim();
+    // Gỡ khối suy luận <thinking>...</thinking> mà model "thinking" chèn trước JSON (tránh phá parse).
+    const trimmed = content.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) return trimmed;
 
     const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);

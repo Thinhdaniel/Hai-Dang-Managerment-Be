@@ -45,19 +45,19 @@ export type AiFeature = (typeof AI_FEATURES)[keyof typeof AI_FEATURES];
  * Quy tắc: bước SUY LUẬN/LẬP KẾ HOẠCH của trợ lý phải dùng model mạnh; câu diễn giải/đơn giản dùng model nhanh-rẻ.
  */
 export const DEFAULT_FEATURE_MODELS: Record<string, string> = {
-    // Trợ lý agentic (lõi suy luận + gọi tool)
-    'asset-search-light': 'gc/gemini-2.5-flash', // câu đơn giản: liệt kê/đếm/tìm
-    'asset-search': 'gh/claude-sonnet-4.6', // tiêu chuẩn: suy luận + tool-loop tốt
-    'asset-search-heavy': 'gc/gemini-3-pro-preview', // phân tích/so sánh/lập kế hoạch: model đỉnh
+    // Trợ lý agentic (lõi suy luận + gọi tool) — dùng biến thể "-agentic" của Kiro (tinh chỉnh cho tool-calling)
+    'asset-search-light': 'kr/claude-haiku-4.5-agentic', // câu đơn giản: liệt kê/đếm/tìm — nhanh
+    'asset-search': 'kr/claude-sonnet-4.5-agentic', // tiêu chuẩn: suy luận + tool-loop mạnh, JSON ổn định
+    'asset-search-heavy': 'kr/claude-sonnet-4.5-agentic', // phân tích/so sánh/lập kế hoạch (KHÔNG dùng -thinking: emit <thinking> phá JSON tool-loop)
     'asset-answer': 'gc/gemini-2.5-flash', // diễn giải kết quả: nhanh-rẻ
     // Các tác vụ khác
-    'material-match': 'gc/gemini-2.5-flash', // khớp tên vật tư (JSON, cần ổn định)
+    'material-match': 'kr/claude-haiku-4.5', // khớp tên vật tư (JSON, cần ổn định)
     'supply-request-draft': 'gc/gemini-2.5-flash',
     'chat-summary': 'gc/gemini-2.5-flash',
-    help: 'gh/claude-sonnet-4.6',
-    digest: 'gc/gemini-3-pro-preview', // bản tin giám đốc: chất lượng cao, chạy ít
-    variance: 'gh/claude-haiku-4.5',
+    help: 'kr/claude-sonnet-4.5',
+    digest: 'gc/gemini-2.5-pro', // bản tin giám đốc: chất lượng cao, chạy ít
+    variance: 'kr/claude-haiku-4.5',
 };
 
 /** Model mạnh dùng làm lưới cuối khi không resolve được gì (thay cho deepseek nhỏ). */
-export const STRONG_FALLBACK_MODEL = 'gh/claude-sonnet-4.6';
+export const STRONG_FALLBACK_MODEL = 'kr/claude-sonnet-4.5-agentic';
