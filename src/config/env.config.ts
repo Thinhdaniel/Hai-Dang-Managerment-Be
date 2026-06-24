@@ -63,6 +63,29 @@ const envVarsSchema = z.object({
     WEB_PUSH_PUBLIC_KEY: z.string().optional(),
     WEB_PUSH_PRIVATE_KEY: z.string().optional(),
     WEB_PUSH_SUBJECT: z.string().optional(),
+    // AI PROVIDER
+    AI_ENABLED: z
+        .string()
+        .optional()
+        .transform((value) => value !== 'false'),
+    AI_PROVIDER: z.enum(['ollama', '9router', 'openrouter', 'disabled']).default('ollama'),
+    AI_BASE_URL: z.string().optional(),
+    AI_API_KEY: z.string().optional(),
+    AI_MODEL_DEFAULT: z.string().optional(),
+    AI_MODEL_JSON: z.string().optional(),
+    // Map model theo từng tác vụ AI (JSON). Vd: {"material-match":"oc/deepseek-v4-flash-free","asset-search":"oc/nemotron-3-ultra-free"}
+    AI_FEATURE_MODELS: z.string().optional(),
+    AI_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+    OLLAMA_BASE_URL: z.string().optional(),
+    OLLAMA_MODEL: z.string().optional(),
+    OLLAMA_SEARCH_MODEL: z.string().optional(),
+    OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+    OLLAMA_SEARCH_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+    OPENROUTER_API_KEY: z.string().optional(),
+    OPENROUTER_MODEL_DEFAULT: z.string().optional(),
+    OPENROUTER_MODEL_JSON: z.string().optional(),
+    OPENROUTER_HTTP_REFERER: z.string().optional(),
+    OPENROUTER_APP_TITLE: z.string().optional(),
 });
 
 const result = envVarsSchema.safeParse(process.env);
@@ -78,6 +101,26 @@ if (!result.success) {
 }
 
 const envVars = result.data;
+
+// Parse map model theo tác vụ AI (feature -> model). Sai JSON thì bỏ qua, không làm chết app.
+const parseFeatureModels = (raw?: string): Record<string, string> => {
+    if (!raw) return {};
+    try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return Object.fromEntries(
+                Object.entries(parsed)
+                    .filter(([, v]) => typeof v === 'string' && v)
+                    .map(([k, v]) => [k, String(v)])
+            );
+        }
+        return {};
+    } catch {
+        console.warn('⚠️ AI_FEATURE_MODELS không phải JSON hợp lệ — bỏ qua, dùng model mặc định.');
+        return {};
+    }
+};
+
 const config = {
     port: envVars.PORT,
     hostname: envVars.APP_HOST,
@@ -134,6 +177,30 @@ const config = {
         privateKey: envVars.WEB_PUSH_PRIVATE_KEY,
         subject: envVars.WEB_PUSH_SUBJECT || `mailto:${envVars.EMAIL_FROM || envVars.EMAIL_USER}`,
         enabled: Boolean(envVars.WEB_PUSH_PUBLIC_KEY && envVars.WEB_PUSH_PRIVATE_KEY),
+    },
+    ai: {
+        enabled: envVars.AI_ENABLED,
+        provider: envVars.AI_PROVIDER,
+        baseUrl: envVars.AI_BASE_URL,
+        apiKey: envVars.AI_API_KEY,
+        defaultModel: envVars.AI_MODEL_DEFAULT,
+        jsonModel: envVars.AI_MODEL_JSON,
+        featureModels: parseFeatureModels(envVars.AI_FEATURE_MODELS),
+        timeoutMs: envVars.AI_TIMEOUT_MS,
+        ollama: {
+            baseUrl: envVars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+            defaultModel: envVars.OLLAMA_MODEL || envVars.AI_MODEL_DEFAULT || 'qwen2.5:3b',
+            searchModel: envVars.OLLAMA_SEARCH_MODEL || envVars.AI_MODEL_JSON || 'qwen2.5:7b',
+            timeoutMs: envVars.OLLAMA_TIMEOUT_MS || envVars.AI_TIMEOUT_MS,
+            searchTimeoutMs: envVars.OLLAMA_SEARCH_TIMEOUT_MS || envVars.OLLAMA_TIMEOUT_MS || envVars.AI_TIMEOUT_MS,
+        },
+        openRouter: {
+            apiKey: envVars.OPENROUTER_API_KEY || envVars.AI_API_KEY,
+            defaultModel: envVars.OPENROUTER_MODEL_DEFAULT || envVars.AI_MODEL_DEFAULT,
+            jsonModel: envVars.OPENROUTER_MODEL_JSON || envVars.AI_MODEL_JSON,
+            httpReferer: envVars.OPENROUTER_HTTP_REFERER || envVars.CLIENT_URL,
+            appTitle: envVars.OPENROUTER_APP_TITLE || 'Hai Dang Management',
+        },
     },
 };
 

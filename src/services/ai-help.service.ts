@@ -1,7 +1,7 @@
-import axios from 'axios';
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import customResponse from '@/utils/response';
+import { aiProviderService } from '@/services/ai/ai-provider.service';
 
 type HelpContextTopic = {
     title: string;
@@ -13,16 +13,6 @@ type HelpContextTopic = {
     commonMistakes?: string[];
     notes?: string[];
 };
-
-type OllamaChatResponse = {
-    message?: {
-        content?: string;
-    };
-};
-
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 75000);
 
 const formatContext = (topics: HelpContextTopic[]) => {
     if (!topics.length) {
@@ -41,9 +31,7 @@ const formatContext = (topics: HelpContextTopic[]) => {
             const commonMistakes = topic.commonMistakes?.length
                 ? `\nLoi hay gap va cach tranh:\n${topic.commonMistakes.map((item) => `- ${item}`).join('\n')}`
                 : '';
-            const notes = topic.notes?.length
-                ? `\nLuu y:\n${topic.notes.map((note) => `- ${note}`).join('\n')}`
-                : '';
+            const notes = topic.notes?.length ? `\nLuu y:\n${topic.notes.map((note) => `- ${note}`).join('\n')}` : '';
 
             return [
                 `Tai lieu ${index + 1}: ${topic.title}`,
@@ -96,7 +84,7 @@ const buildFallbackAnswer = (question: string, route: string | undefined, topics
         .join('\n');
 };
 
-const askOllama = async (question: string, route: string | undefined, topics: HelpContextTopic[]) => {
+const askAiProvider = async (question: string, route: string | undefined, topics: HelpContextTopic[]) => {
     const systemPrompt = [
         'Ban la tro ly huong dan su dung noi bo cho he thong quan ly may moc va vat tu trong cong ty.',
         'Muc tieu cua ban la viet huong dan van hanh chi tiet nhu SOP noi bo, khong tra loi qua loa.',
@@ -124,32 +112,15 @@ const askOllama = async (question: string, route: string | undefined, topics: He
         formatContext(topics),
     ].join('\n\n');
 
-    const response = await axios.post<OllamaChatResponse>(
-        `${OLLAMA_BASE_URL.replace(/\/$/, '')}/api/chat`,
-        {
-            model: OLLAMA_MODEL,
-            stream: false,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt },
-            ],
-            options: {
-                temperature: 0.15,
-                top_p: 0.85,
-                num_predict: 1100,
-            },
-        },
-        {
-            timeout: OLLAMA_TIMEOUT_MS,
-        }
-    );
-
-    const answer = response.data?.message?.content?.trim();
-    if (!answer) {
-        throw new Error('Ollama response is empty');
-    }
-
-    return answer;
+    return aiProviderService.generateText({
+        feature: 'help',
+        temperature: 0.15,
+        maxTokens: 1100,
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+        ],
+    });
 };
 
 export const askAiHelp = async (req: Request, res: Response) => {
@@ -158,16 +129,17 @@ export const askAiHelp = async (req: Request, res: Response) => {
     const contextTopics = (req.body.contextTopics || []) as HelpContextTopic[];
 
     try {
-        const answer = await askOllama(question, route, contextTopics);
+        const result = await askAiProvider(question, route, contextTopics);
 
         return res.status(StatusCodes.OK).json(
             customResponse({
                 data: {
-                    answer,
-                    provider: 'ollama',
-                    model: OLLAMA_MODEL,
+                    answer: result.content,
+                    provider: result.provider,
+                    model: result.model,
                     available: true,
                     usedFallback: false,
+                    latencyMs: result.latencyMs,
                 },
                 message: 'Da tao cau tra loi AI thanh cong',
                 status: StatusCodes.OK,
@@ -182,11 +154,11 @@ export const askAiHelp = async (req: Request, res: Response) => {
                 data: {
                     answer,
                     provider: 'fallback',
-                    model: OLLAMA_MODEL,
+                    model: undefined,
                     available: false,
                     usedFallback: true,
                 },
-                message: 'AI local khong kha dung, da tra loi bang huong dan noi bo',
+                message: 'AI khong kha dung, da tra loi bang huong dan noi bo',
                 status: StatusCodes.OK,
                 success: true,
             })

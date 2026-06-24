@@ -1,16 +1,10 @@
-import axios from 'axios';
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import Plant from '@/models/Plant';
 import Brand from '@/models/Brand';
 import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import customResponse from '@/utils/response';
-
-type OllamaChatResponse = {
-    message?: {
-        content?: string;
-    };
-};
+import { aiProviderService } from '@/services/ai/ai-provider.service';
 
 type ResolvedFilters = {
     search?: string;
@@ -27,12 +21,8 @@ type AssetSearchResult = {
     matchedPlantName?: string;
     matchedBrandName?: string;
     suggestedActions: { label: string; hint: string }[];
-    provider: 'ollama' | 'fallback';
+    provider: string;
 };
-
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
-const OLLAMA_SEARCH_MODEL = process.env.OLLAMA_SEARCH_MODEL || 'qwen2.5:7b';
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_SEARCH_TIMEOUT_MS || process.env.OLLAMA_TIMEOUT_MS || 60000);
 
 // Bo dau tieng Viet de so khop ten co so / hang / tu khoa
 const normalize = (value?: string) =>
@@ -191,30 +181,18 @@ const heuristicParse = (query: string) => {
     return { status, ownershipType, intent };
 };
 
-const askOllama = async (query: string, plantNames: string[], brandNames: string[]) => {
-    const response = await axios.post<OllamaChatResponse>(
-        `${OLLAMA_BASE_URL.replace(/\/$/, '')}/api/chat`,
-        {
-            model: OLLAMA_SEARCH_MODEL,
-            stream: false,
-            format: 'json',
-            messages: [
-                { role: 'system', content: buildSystemPrompt(plantNames, brandNames) },
-                { role: 'user', content: query },
-            ],
-            options: {
-                temperature: 0.1,
-                top_p: 0.8,
-                num_predict: 400,
-            },
-        },
-        { timeout: OLLAMA_TIMEOUT_MS }
-    );
+const askAiProvider = async (query: string, plantNames: string[], brandNames: string[]) => {
+    const result = await aiProviderService.generateJson<Record<string, unknown>>({
+        feature: 'asset-search',
+        temperature: 0.1,
+        maxTokens: 400,
+        messages: [
+            { role: 'system', content: buildSystemPrompt(plantNames, brandNames) },
+            { role: 'user', content: query },
+        ],
+    });
 
-    const content = response.data?.message?.content?.trim();
-    if (!content) throw new Error('Ollama response is empty');
-
-    return JSON.parse(content) as Record<string, unknown>;
+    return result;
 };
 
 export const aiAssetSearch = async (req: Request, res: Response) => {
@@ -235,11 +213,12 @@ export const aiAssetSearch = async (req: Request, res: Response) => {
     let result: AssetSearchResult;
 
     try {
-        const parsed = await askOllama(
+        const aiResult = await askAiProvider(
             query,
             plants.map((plant) => plant.name),
             brands.map((brand) => brand.name)
         );
+        const parsed = aiResult.data;
 
         const rawStatus = typeof parsed.status === 'string' ? String(parsed.status).trim() : '';
         const rawOwnership = typeof parsed.ownershipType === 'string' ? String(parsed.ownershipType).trim() : '';
@@ -274,7 +253,7 @@ export const aiAssetSearch = async (req: Request, res: Response) => {
                 intent === 'create_transfer'
                     ? [{ label: 'Tao lenh dieu chuyen', hint: 'Chon may trong bang roi bam nut Dieu chuyen' }]
                     : [],
-            provider: 'ollama',
+            provider: aiResult.provider,
         };
     } catch {
         const { status, ownershipType, intent } = heuristicParse(query);

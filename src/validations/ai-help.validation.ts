@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { zObjectId } from '@/lib/validation';
 
 const helpContextTopicSchema = z.object({
     title: z.string().trim().min(1).max(160),
@@ -19,4 +20,35 @@ export const askAiHelpSchema = z.object({
 
 export const aiAssetSearchSchema = z.object({
     query: z.string().trim().min(2).max(500),
+});
+
+export const aiAssetAssistantSchema = z.object({
+    messages: z
+        .array(
+            z.object({
+                role: z.enum(['user', 'assistant']),
+                content: z.string().trim().min(1).max(2000),
+            })
+        )
+        .min(1, { message: 'Can it nhat 1 tin nhan' })
+        .max(20),
+});
+
+export const aiMaterialMatchSchema = z.object({
+    items: z
+        .array(
+            z.object({
+                key: z.string().trim().min(1).max(120),
+                materialName: z.string().trim().min(1).max(300),
+                unit: z.string().trim().max(80).optional(),
+                note: z.string().trim().max(500).optional(),
+            })
+        )
+        .min(1, { message: 'Phai co it nhat 1 dong vat tu can so khop' })
+        .max(50, { message: 'Chi so khop toi da 50 dong moi lan' }),
+});
+
+export const aiChatSummarySchema = z.object({
+    conversationId: zObjectId('Hoi thoai'),
+    limit: z.number().int().min(10).max(120).optional(),
 });

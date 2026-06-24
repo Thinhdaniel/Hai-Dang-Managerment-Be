@@ -13,6 +13,7 @@ export type NotificationActionType =
     | 'purchase_order'
     | 'distribution'
     | 'chat'
+    | 'digest'
     | 'system';
 
 export interface INotification {
@@ -57,6 +58,7 @@ const NotificationSchema = new mongoose.Schema<INotification>(
                 'purchase_order',
                 'distribution',
                 'chat',
+                'digest',
                 'system',
             ],
             default: 'system',

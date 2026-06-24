@@ -3,6 +3,7 @@ import app from './app';
 import connectDB from './config/database.config';
 import config from './config/env.config';
 import { checkAndNotifyOverdueMaintenance } from './services/notification.helper';
+import { startDigestSchedules } from './services/digest.service';
 import { initSocketServer } from './lib/socket';
 
 const PORT = config.port || 8080;
@@ -25,6 +26,9 @@ connectDB().then(async () => {
 
     // Also run immediately on startup
     await checkAndNotifyOverdueMaintenance();
+
+    // Lên lịch bản tin AI định kỳ (tuần/tháng) + đẩy thông báo cho giám đốc.
+    startDigestSchedules();
 });
 
 const exitHandler = () => {
