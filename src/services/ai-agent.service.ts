@@ -23,8 +23,22 @@ import customResponse from '@/utils/response';
 const normalize = (v?: string) =>
     (v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
 
-const HEAVY_SIGNALS = ['phan tich', 'so sanh', 'tai sao', 'vi sao', 'danh gia', 'du doan', 'xu huong', 'khuyen nghi', 'tu van', 'de xuat', 'toi uu', 'co nen'];
-const tierFor = (q: string) => (HEAVY_SIGNALS.some((k) => normalize(q).includes(k)) ? ASSET_SEARCH_TIERS.heavy : ASSET_SEARCH_TIERS.standard);
+// Câu cần SUY LUẬN SÂU / TỔNG HỢP / LẬP KẾ HOẠCH -> tầng nặng (model mạnh nhất).
+const HEAVY_SIGNALS = [
+    'phan tich', 'so sanh', 'tai sao', 'vi sao', 'danh gia', 'du doan', 'xu huong', 'khuyen nghi', 'tu van',
+    'de xuat', 'toi uu', 'co nen', 'lap ke hoach', 'ke hoach', 'nen mua', 'du bao', 'tong hop', 'vi sao',
+    'chi tiet', 'co du', 'con du', 'dieu chuyen co', // câu ghép xuyên mảng thường phức tạp
+];
+// Câu tra cứu ĐƠN GIẢN (liệt kê/đếm/tìm/vị trí) -> tầng nhẹ (model nhanh-rẻ).
+const LIGHT_SIGNALS = ['liet ke', 'danh sach', 'bao nhieu', 'dem ', 'co may nao', 'may nao dang', 'o dau', 'vi tri', 'tim may', 'sap het'];
+const tierFor = (q: string) => {
+    const n = normalize(q);
+    if (HEAVY_SIGNALS.some((k) => n.includes(k))) return ASSET_SEARCH_TIERS.heavy;
+    if (LIGHT_SIGNALS.some((k) => n.includes(k)) || n.length <= 28) return ASSET_SEARCH_TIERS.light;
+    return ASSET_SEARCH_TIERS.standard;
+};
+const tierLabelOf = (feature: string): 'light' | 'standard' | 'heavy' =>
+    feature === ASSET_SEARCH_TIERS.heavy ? 'heavy' : feature === ASSET_SEARCH_TIERS.light ? 'light' : 'standard';
 
 // ===== Tools (đều trả dữ liệu THẬT) =====
 const materialItem = (id: string, m: any, badge?: string) => ({
@@ -597,6 +611,7 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
                 followups: followups.slice(0, 3),
                 provider,
                 model,
+                tier: tierLabelOf(feature),
             },
             message: 'Tro ly da xu ly cau hoi',
             status: StatusCodes.OK,

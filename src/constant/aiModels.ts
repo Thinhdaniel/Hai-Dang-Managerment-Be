@@ -46,9 +46,9 @@ export type AiFeature = (typeof AI_FEATURES)[keyof typeof AI_FEATURES];
  */
 export const DEFAULT_FEATURE_MODELS: Record<string, string> = {
     // Trợ lý agentic (lõi suy luận + gọi tool) — dùng biến thể "-agentic" của Kiro (tinh chỉnh cho tool-calling)
-    'asset-search-light': 'kr/claude-haiku-4.5-agentic', // câu đơn giản: liệt kê/đếm/tìm — nhanh
+    'asset-search-light': 'kr/claude-haiku-4.5-agentic', // câu đơn giản (liệt kê/đếm/tìm/vị trí) — nhanh, rẻ
     'asset-search': 'kr/claude-sonnet-4.5-agentic', // tiêu chuẩn: suy luận + tool-loop mạnh, JSON ổn định
-    'asset-search-heavy': 'kr/claude-sonnet-4.5-agentic', // phân tích/so sánh/lập kế hoạch (KHÔNG dùng -thinking: emit <thinking> phá JSON tool-loop)
+    'asset-search-heavy': 'gc/gemini-2.5-pro', // phân tích/so sánh/lập kế hoạch: model mạnh khác (KHÔNG dùng -thinking vì emit <thinking> phá JSON)
     'asset-answer': 'gc/gemini-2.5-flash', // diễn giải kết quả: nhanh-rẻ
     // Các tác vụ khác
     'material-match': 'kr/claude-haiku-4.5', // khớp tên vật tư (JSON, cần ổn định)
