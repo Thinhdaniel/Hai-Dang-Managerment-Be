@@ -50,7 +50,8 @@ const login = async () => {
     });
     if (!r.ok) throw new Error(`Login HTTP ${r.status}`);
     const j = await r.json();
-    const token = j?.data?.access_token;
+    // access_token nằm ở top-level (login KHÔNG bọc trong "data"); vẫn fallback data.* cho chắc.
+    const token = j?.access_token || j?.data?.access_token;
     if (!token) throw new Error('Login không trả access_token');
     return token;
 };
