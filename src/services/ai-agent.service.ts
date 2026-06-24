@@ -405,6 +405,24 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     return null;
 };
 
+// Pre-route BẮT BUỘC: với vài câu rõ ý mà model hay "hỏi lại", ta chạy tool TRƯỚC rồi nạp dữ liệu
+// vào hội thoại để model buộc phải trả lời từ số liệu (không hỏi lại, không tự chọn lệch).
+const forceRoute = (q: string): { tool: ToolName; args: any } | null => {
+    const n = normalize(q);
+    // So sánh mua vs cấp phát.
+    if (n.includes('so sanh') && n.includes('mua') && n.includes('cap phat')) {
+        return { tool: 'compare_cost', args: { period: detectPeriod(q) } };
+    }
+    // Chi phí CHUNG CHUNG (không nói rõ loại, không 1 cơ sở cụ thể) -> tách 3 loại.
+    const isCost = n.includes('chi phi') || n.includes('tong chi') || n.includes('ton bao nhieu tien') || n.includes('tieu ton') || n.includes('chi tieu');
+    const hasType = n.includes('mua') || n.includes('cap phat') || n.includes('sua ngoai') || n.includes('sua chua') || n.includes('bao tri');
+    const hasPlant = /co so|\bc\.?\s*s\.?\s*\d/.test(n);
+    if (isCost && !hasType && !hasPlant) {
+        return { tool: 'cost_overview', args: { period: detectPeriod(q) } };
+    }
+    return null;
+};
+
 // Dựng câu trả lời TỪ SỐ LIỆU THẬT trong render (không để AI bịa). Trả null nếu không có gì để nói.
 const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null => {
     if (!render) return null;
@@ -654,6 +672,27 @@ export const runAssistant = async (messages: AssistantMessage[], emit?: (step: A
             records: render?.count || undefined,
         });
     };
+
+    // Pre-route: chạy sẵn tool cho câu rõ ý (chi phí chung chung / so sánh) rồi nạp dữ liệu
+    // -> model có số liệu để trả lời ngay, KHÔNG hỏi lại / không tự chọn lệch.
+    const forced = forceRoute(lastUser);
+    if (forced) {
+        try {
+            emit?.({ type: 'tool', tool: forced.tool, label: TOOL_LABEL[forced.tool] || forced.tool });
+            const outcome = await executeTool(forced.tool, forced.args);
+            if (outcome.render) {
+                lastRender = outcome.render;
+                recordSource(forced.tool, outcome.render);
+            }
+            toolCalls += 1;
+            convo.push({
+                role: 'user',
+                content: `DU LIEU DA TRUY VAN SAN (${forced.tool}) — HAY DUNG NGAY de tra loi, TUYET DOI khong hoi lai: ${JSON.stringify(outcome.ai).slice(0, 3500)}`,
+            });
+        } catch {
+            /* lỗi tool -> để model tự xử lý như thường */
+        }
+    }
 
     for (let i = 0; i < MAX_ITERATIONS; i += 1) {
         let parsed: any;
