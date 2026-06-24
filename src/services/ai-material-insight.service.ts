@@ -1,7 +1,9 @@
-import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subMonths, subWeeks } from 'date-fns';
+import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths, subWeeks } from 'date-fns';
 import DistributionRecord from '@/models/DistributionRecord';
 import PurchaseOrder from '@/models/PurchaseOrder';
 import Plant from '@/models/Plant';
+import Material from '@/models/Material';
+import InventoryStock from '@/models/InventoryStock';
 
 // ===== Tiện ích dùng chung =====
 type PeriodType = 'week' | 'month';
@@ -295,4 +297,219 @@ export const listPurchaseOrders = async (args: {
     });
 
     return { count, detail, orders };
+};
+
+const rxOf = (v: string) => new RegExp(v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+
+// ============================================================
+// 4) Lịch sử & xu hướng GIÁ MUA của 1 vật tư (theo từng đơn)
+// ============================================================
+export const materialPriceHistory = async (args: { materialName?: string; limit?: number }) => {
+    const q = (args.materialName || '').trim();
+    if (!q) return { materialName: '', count: 0, points: [], minPrice: 0, maxPrice: 0, avgPrice: 0, trendPct: 0 };
+    const limit = Math.min(Math.max(Number(args.limit) || 12, 1), 30);
+
+    const rows = await PurchaseOrder.aggregate([
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] } } },
+        { $unwind: '$items' },
+        { $match: { 'items.materialName': rxOf(q) } },
+        {
+            $project: {
+                orderCode: 1,
+                createdAt: 1,
+                supplierName: { $ifNull: ['$items.supplierName', '$supplierName'] },
+                unit: '$items.unit',
+                materialName: '$items.materialName',
+                qty: { $ifNull: ['$items.quantityOrdered', 0] },
+                unitPrice: { $ifNull: ['$items.unitPrice', 0] },
+                totalWithVat: PO_VALUE,
+            },
+        },
+        { $sort: { createdAt: 1 } },
+    ]);
+
+    const points = rows.map((r: any) => ({
+        orderCode: r.orderCode || '(chưa có mã)',
+        date: r.createdAt,
+        supplierName: String(r.supplierName || '').trim() || 'Chưa rõ NCC',
+        unit: r.unit || '',
+        qty: Math.round(r.qty || 0),
+        unitPrice: Math.round(r.unitPrice || 0),
+        totalWithVat: Math.round(r.totalWithVat || 0),
+    }));
+    const prices = points.map((p) => p.unitPrice).filter((v) => v > 0);
+    const minPrice = prices.length ? Math.min(...prices) : 0;
+    const maxPrice = prices.length ? Math.max(...prices) : 0;
+    const avgPrice = prices.length ? Math.round(prices.reduce((s, v) => s + v, 0) / prices.length) : 0;
+    const trendPct = prices.length >= 2 && prices[0] > 0 ? Math.round(((prices[prices.length - 1] - prices[0]) / prices[0]) * 100) : 0;
+
+    return {
+        materialName: rows[0]?.materialName || q,
+        unit: points[0]?.unit || '',
+        count: points.length,
+        points: points.slice(-limit),
+        minPrice,
+        maxPrice,
+        avgPrice,
+        trendPct,
+    };
+};
+
+// ============================================================
+// 5) So sánh GIÁ giữa các NHÀ CUNG CẤP cho 1 vật tư (mua đâu rẻ)
+// ============================================================
+export const supplierComparison = async (args: { materialName?: string; limit?: number }) => {
+    const q = (args.materialName || '').trim();
+    if (!q) return { materialName: '', suppliers: [] };
+    const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 15);
+
+    const rows = await PurchaseOrder.aggregate([
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] } } },
+        { $unwind: '$items' },
+        { $match: { 'items.materialName': rxOf(q), 'items.unitPrice': { $gt: 0 } } },
+        {
+            $group: {
+                _id: { $ifNull: ['$items.supplierName', { $ifNull: ['$supplierName', 'Chưa rõ NCC'] }] },
+                avgPrice: { $avg: '$items.unitPrice' },
+                minPrice: { $min: '$items.unitPrice' },
+                maxPrice: { $max: '$items.unitPrice' },
+                qty: { $sum: { $ifNull: ['$items.quantityOrdered', 0] } },
+                value: { $sum: PO_VALUE },
+                orders: { $sum: 1 },
+                unit: { $first: '$items.unit' },
+            },
+        },
+        { $sort: { avgPrice: 1 } },
+        { $limit: limit },
+    ]);
+
+    const suppliers = rows.map((r: any) => ({
+        supplierName: String(r._id).trim() || 'Chưa rõ NCC',
+        avgPrice: Math.round(r.avgPrice || 0),
+        minPrice: Math.round(r.minPrice || 0),
+        maxPrice: Math.round(r.maxPrice || 0),
+        qty: Math.round(r.qty || 0),
+        value: Math.round(r.value || 0),
+        orders: r.orders || 0,
+        unit: r.unit || '',
+    }));
+    return { materialName: q, unit: suppliers[0]?.unit || '', cheapest: suppliers[0]?.supplierName, suppliers };
+};
+
+// ============================================================
+// 6) Phân tích CẤP PHÁT chi tiết + THIẾU HỤT (shortage)
+// ============================================================
+export const distributionAnalysis = async (args: { plantName?: string; period?: string; limit?: number }) => {
+    const { nameById, resolve } = await loadPlants();
+    const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 15);
+    const plantId = resolve(args.plantName);
+
+    const match: Record<string, any> = { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] } };
+    let periodLabel = 'toàn bộ thời gian';
+    if (args.period === 'week' || args.period === 'month') {
+        const r = periodRange(args.period);
+        match.createdAt = { $gte: r.start, $lte: r.end };
+        periodLabel = r.label;
+    }
+    if (plantId) match.toPlantId = plantId;
+
+    const rows = await DistributionRecord.aggregate([
+        { $match: match },
+        { $unwind: '$items' },
+        {
+            $group: {
+                _id: '$items.materialName',
+                qty: { $sum: DIST_QTY },
+                value: { $sum: DIST_VALUE },
+                shortageQty: { $sum: { $ifNull: ['$items.quantityShortage', 0] } },
+                shortageLines: { $sum: { $cond: [{ $gt: [{ $ifNull: ['$items.quantityShortage', 0] }, 0] }, 1, 0] } },
+                unit: { $first: '$items.unit' },
+            },
+        },
+        { $sort: { value: -1 } },
+    ]);
+
+    const totalValue = rows.reduce((s: number, r: any) => s + (r.value || 0), 0);
+    const totalQty = rows.reduce((s: number, r: any) => s + (r.qty || 0), 0);
+    const totalShortageQty = rows.reduce((s: number, r: any) => s + (r.shortageQty || 0), 0);
+    const totalShortageLines = rows.reduce((s: number, r: any) => s + (r.shortageLines || 0), 0);
+
+    const topMaterials = rows.slice(0, limit).map((r: any) => ({
+        materialName: r._id || 'Vật tư',
+        unit: r.unit || '',
+        qty: Math.round(r.qty || 0),
+        value: Math.round(r.value || 0),
+        shortageQty: Math.round(r.shortageQty || 0),
+    }));
+    const topShortages = rows
+        .filter((r: any) => (r.shortageQty || 0) > 0)
+        .sort((a: any, b: any) => b.shortageQty - a.shortageQty)
+        .slice(0, limit)
+        .map((r: any) => ({ materialName: r._id || 'Vật tư', unit: r.unit || '', shortageQty: Math.round(r.shortageQty || 0) }));
+
+    return {
+        periodLabel,
+        plantName: plantId ? nameById.get(plantId) : undefined,
+        totalValue: Math.round(totalValue),
+        totalQty: Math.round(totalQty),
+        totalShortageQty: Math.round(totalShortageQty),
+        totalShortageLines,
+        topMaterials,
+        topShortages,
+    };
+};
+
+// ============================================================
+// 7) ĐỀ XUẤT MUA: tồn dưới định mức + tốc độ tiêu hao 30 ngày
+// ============================================================
+export const purchaseSuggestion = async (args: { limit?: number }) => {
+    const limit = Math.min(Math.max(Number(args.limit) || 12, 1), 25);
+    const since = subDays(new Date(), 30);
+
+    // Tồn hiện tại theo vật tư.
+    const stockRows = await InventoryStock.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        { $group: { _id: '$materialId', stock: { $sum: '$currentStock' } } },
+    ]);
+    const stockByMaterial = new Map<string, number>(stockRows.map((r: any) => [String(r._id), Number(r.stock) || 0]));
+
+    // Tiêu hao 30 ngày (đã cấp phát).
+    const usageRows = await DistributionRecord.aggregate([
+        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] }, createdAt: { $gte: since } } },
+        { $unwind: '$items' },
+        { $match: { 'items.materialId': { $ne: null } } },
+        { $group: { _id: '$items.materialId', used: { $sum: DIST_QTY } } },
+    ]);
+    const usageByMaterial = new Map<string, number>(usageRows.map((r: any) => [String(r._id), Number(r.used) || 0]));
+
+    const materials = await Material.find({ isDeleted: { $ne: true }, isActive: { $ne: false }, trackInventory: { $ne: false } })
+        .select('_id name code unit minStockLevel')
+        .lean();
+
+    const suggestions = materials
+        .map((m: any) => {
+            const id = String(m._id);
+            const stock = stockByMaterial.get(id) ?? 0;
+            const used30 = usageByMaterial.get(id) ?? 0;
+            const minLevel = Number(m.minStockLevel) || 0;
+            // Cần mua khi: dưới định mức, HOẶC tồn không đủ tiêu hao 30 ngày tới.
+            const target = Math.max(minLevel, used30); // mục tiêu giữ đủ định mức + đủ dùng 1 tháng
+            const suggestQty = Math.ceil(target - stock);
+            return {
+                materialName: m.name,
+                code: m.code,
+                unit: m.unit || '',
+                stock: Math.round(stock),
+                minLevel: Math.round(minLevel),
+                used30: Math.round(used30),
+                suggestQty,
+                // ưu tiên: thiếu càng nhiều so với nhu cầu càng gấp
+                urgency: target > 0 ? (target - stock) / target : 0,
+            };
+        })
+        .filter((s) => s.suggestQty > 0 && (s.minLevel > 0 || s.used30 > 0))
+        .sort((a, b) => b.urgency - a.urgency)
+        .slice(0, limit);
+
+    return { count: suggestions.length, suggestions };
 };

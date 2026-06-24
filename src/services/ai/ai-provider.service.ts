@@ -1,5 +1,6 @@
 import axios from 'axios';
 import config from '@/config/env.config';
+import { STRONG_FALLBACK_MODEL } from '@/constant/aiModels';
 
 export type AiProviderName = 'ollama' | '9router' | 'openrouter' | 'fallback' | 'disabled';
 
@@ -82,8 +83,9 @@ const getOpenAiCompatibleConfig = (provider: AiProviderName) => {
     return {
         baseUrl: trimTrailingSlash(config.ai.baseUrl || 'http://127.0.0.1:20128/v1'),
         apiKey: config.ai.apiKey,
-        model: config.ai.defaultModel || 'kr/claude-sonnet-4.5',
-        jsonModel: config.ai.jsonModel || config.ai.defaultModel || 'kr/glm-5',
+        // Lưới cuối: model MẠNH (không để rơi về model nhỏ/yếu nếu env thiếu).
+        model: config.ai.defaultModel || STRONG_FALLBACK_MODEL,
+        jsonModel: config.ai.jsonModel || config.ai.defaultModel || STRONG_FALLBACK_MODEL,
         extraHeaders: {},
     };
 };

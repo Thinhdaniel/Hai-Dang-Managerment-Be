@@ -1,4 +1,5 @@
 import { VALIDATION_MESSAGES } from '@/constant/messages';
+import { DEFAULT_FEATURE_MODELS } from '@/constant/aiModels';
 import 'dotenv/config';
 import { SignOptions } from 'jsonwebtoken';
 import z from 'zod';
@@ -185,7 +186,8 @@ const config = {
         apiKey: envVars.AI_API_KEY,
         defaultModel: envVars.AI_MODEL_DEFAULT,
         jsonModel: envVars.AI_MODEL_JSON,
-        featureModels: parseFeatureModels(envVars.AI_FEATURE_MODELS),
+        // Default mạnh nhúng trong code làm nền; env AI_FEATURE_MODELS đè lên để tinh chỉnh.
+        featureModels: { ...DEFAULT_FEATURE_MODELS, ...parseFeatureModels(envVars.AI_FEATURE_MODELS) },
         timeoutMs: envVars.AI_TIMEOUT_MS,
         ollama: {
             baseUrl: envVars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',

@@ -35,3 +35,29 @@ export const ASSET_SEARCH_TIERS = {
 } as const;
 
 export type AiFeature = (typeof AI_FEATURES)[keyof typeof AI_FEATURES];
+
+/**
+ * Model MẶC ĐỊNH theo tác vụ — NHÚNG TRONG CODE (mạnh, hợp túi tiền quota).
+ * Mục đích: production luôn có "bộ não" tốt kể cả khi env AI_FEATURE_MODELS thiếu/sai
+ * (trước đây thiếu env -> rơi về AI_MODEL_JSON = deepseek nhỏ -> trả lời kém).
+ * env AI_FEATURE_MODELS sẽ ĐÈ LÊN bảng này (merge ở env.config) nếu muốn tinh chỉnh.
+ *
+ * Quy tắc: bước SUY LUẬN/LẬP KẾ HOẠCH của trợ lý phải dùng model mạnh; câu diễn giải/đơn giản dùng model nhanh-rẻ.
+ */
+export const DEFAULT_FEATURE_MODELS: Record<string, string> = {
+    // Trợ lý agentic (lõi suy luận + gọi tool)
+    'asset-search-light': 'gc/gemini-2.5-flash', // câu đơn giản: liệt kê/đếm/tìm
+    'asset-search': 'gh/claude-sonnet-4.6', // tiêu chuẩn: suy luận + tool-loop tốt
+    'asset-search-heavy': 'gc/gemini-3-pro-preview', // phân tích/so sánh/lập kế hoạch: model đỉnh
+    'asset-answer': 'gc/gemini-2.5-flash', // diễn giải kết quả: nhanh-rẻ
+    // Các tác vụ khác
+    'material-match': 'gc/gemini-2.5-flash', // khớp tên vật tư (JSON, cần ổn định)
+    'supply-request-draft': 'gc/gemini-2.5-flash',
+    'chat-summary': 'gc/gemini-2.5-flash',
+    help: 'gh/claude-sonnet-4.6',
+    digest: 'gc/gemini-3-pro-preview', // bản tin giám đốc: chất lượng cao, chạy ít
+    variance: 'gh/claude-haiku-4.5',
+};
+
+/** Model mạnh dùng làm lưới cuối khi không resolve được gì (thay cho deepseek nhỏ). */
+export const STRONG_FALLBACK_MODEL = 'gh/claude-sonnet-4.6';

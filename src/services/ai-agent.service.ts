@@ -8,7 +8,15 @@ import { aiProviderService, extractJsonObject } from '@/services/ai/ai-provider.
 import { ASSET_SEARCH_TIERS } from '@/constant/aiModels';
 import { assetQueryTool, type AssistantMessage } from '@/services/ai-asset-assistant.service';
 import { computeVarianceData } from '@/services/variance.service';
-import { analyzePurchases, listPurchaseOrders, materialUsageByPlant } from '@/services/ai-material-insight.service';
+import {
+    analyzePurchases,
+    distributionAnalysis,
+    listPurchaseOrders,
+    materialPriceHistory,
+    materialUsageByPlant,
+    purchaseSuggestion,
+    supplierComparison,
+} from '@/services/ai-material-insight.service';
 import customResponse from '@/utils/response';
 
 const normalize = (v?: string) =>
@@ -75,6 +83,10 @@ type ToolName =
     | 'material_usage_by_plant'
     | 'purchase_analysis'
     | 'purchase_orders'
+    | 'material_price_history'
+    | 'supplier_comparison'
+    | 'distribution_analysis'
+    | 'purchase_suggestion'
     | 'cost_variance'
     | 'summary_metrics';
 
@@ -160,6 +172,57 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
                 render: { domain: 'material', count: o.count, items: [], aggregates: { purchaseOrders: { detail: o.detail, orders: o.orders } } },
             };
         }
+        case 'material_price_history': {
+            const h = await materialPriceHistory(args || {});
+            return {
+                ai: {
+                    vatTu: h.materialName,
+                    soLanMua: h.count,
+                    giaThapNhat: h.minPrice,
+                    giaCaoNhat: h.maxPrice,
+                    giaTB: h.avgPrice,
+                    xuHuongGiaPct: h.trendPct,
+                    cacLanGanDay: h.points.slice(-6).map((p: any) => ({ ma: p.orderCode, ncc: p.supplierName, gia: p.unitPrice, sl: p.qty })),
+                },
+                render: { domain: 'cost', count: h.count, items: [], aggregates: { priceHistory: h } },
+            };
+        }
+        case 'supplier_comparison': {
+            const s = await supplierComparison(args || {});
+            return {
+                ai: {
+                    vatTu: s.materialName,
+                    reNhat: s.cheapest,
+                    nhaCungCap: s.suppliers.slice(0, 8).map((x: any) => ({ ncc: x.supplierName, giaTB: x.avgPrice, soDon: x.orders })),
+                },
+                render: { domain: 'cost', count: s.suppliers.length, items: [], aggregates: { supplierComparison: s } },
+            };
+        }
+        case 'distribution_analysis': {
+            const d = await distributionAnalysis(args || {});
+            return {
+                ai: {
+                    ky: d.periodLabel,
+                    coSo: d.plantName || 'tất cả',
+                    tongGiaTri: d.totalValue,
+                    tongThieuHut: d.totalShortageQty,
+                    soDongThieu: d.totalShortageLines,
+                    topVatTu: d.topMaterials.slice(0, 6).map((m: any) => ({ ten: m.materialName, sl: m.qty, giaTri: m.value })),
+                    topThieuHut: d.topShortages.slice(0, 5).map((m: any) => ({ ten: m.materialName, thieu: m.shortageQty })),
+                },
+                render: { domain: 'cost', count: d.topMaterials.length, items: [], aggregates: { distributionAnalysis: d } },
+            };
+        }
+        case 'purchase_suggestion': {
+            const p = await purchaseSuggestion(args || {});
+            return {
+                ai: {
+                    soVatTuCanMua: p.count,
+                    danhSach: p.suggestions.slice(0, 12).map((s: any) => ({ ten: s.materialName, ton: s.stock, dinhMuc: s.minLevel, dung30Ngay: s.used30, nenMua: s.suggestQty, donVi: s.unit })),
+                },
+                render: { domain: 'material', count: p.count, items: [], aggregates: { purchaseSuggestion: p } },
+            };
+        }
         case 'cost_variance': {
             const v = await computeVarianceData(args?.metric, args?.period);
             return {
@@ -199,8 +262,14 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     if (code || n.includes('don hang') || n.includes('don mua') || n.includes('don dat')) {
         return { tool: 'purchase_orders', args: { search: code, period: n.includes('thang') || n.includes('tuan') ? detectPeriod(q) : undefined } };
     }
+    if (n.includes('nen mua') || n.includes('de xuat mua') || n.includes('len ke hoach mua') || n.includes('ke hoach mua') || n.includes('can mua gi') || n.includes('can bo sung')) {
+        return { tool: 'purchase_suggestion', args: {} };
+    }
     if (n.includes('mua') && (n.includes('phan tich') || n.includes('chi tiet') || n.includes('vat tu nao') || n.includes('nha cung cap') || n.includes('ncc') || n.includes('so sanh'))) {
         return { tool: 'purchase_analysis', args: { period: detectPeriod(q), groupBy: n.includes('nha cung cap') || n.includes('ncc') ? 'supplier' : 'material' } };
+    }
+    if (n.includes('cap phat') && (n.includes('thieu hut') || n.includes('thieu hang') || n.includes('shortage') || n.includes('chi tiet') || n.includes('cap bu'))) {
+        return { tool: 'distribution_analysis', args: { plantName: q, period: n.includes('thang') || n.includes('tuan') ? detectPeriod(q) : undefined } };
     }
     if (n.includes('cap phat') || n.includes('su dung nhieu') || n.includes('dung nhieu') || n.includes('cap nhieu') || n.includes('tieu thu') || (n.includes('vat tu') && n.includes('co so'))) {
         return { tool: 'material_usage_by_plant', args: { plantName: q, period: n.includes('thang') || n.includes('tuan') ? detectPeriod(q) : undefined } };
@@ -252,6 +321,31 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
         }
         return `Có ${render.count} đơn hàng. Gần nhất: ${o.orders.slice(0, 3).map((d: any) => `${d.orderCode} ${fmtVnd(d.totalWithVat)}`).join(', ')}.`;
     }
+    if (a.priceHistory) {
+        const h = a.priceHistory;
+        if (!h.count) return `Chưa có dữ liệu mua "${h.materialName}".`;
+        const trend = h.trendPct > 0 ? `tăng ${h.trendPct}%` : h.trendPct < 0 ? `giảm ${Math.abs(h.trendPct)}%` : 'ổn định';
+        return `Giá mua "${h.materialName}" qua ${h.count} lần: thấp nhất ${fmtVnd(h.minPrice)}, cao nhất ${fmtVnd(h.maxPrice)}, TB ${fmtVnd(h.avgPrice)}/${h.unit}; xu hướng ${trend} (lần đầu→gần nhất).`;
+    }
+    if (a.supplierComparison) {
+        const s = a.supplierComparison;
+        if (!s.suppliers.length) return `Chưa có dữ liệu nhà cung cấp cho "${s.materialName}".`;
+        const cheap = s.suppliers[0];
+        return `"${s.materialName}" rẻ nhất ở ${cheap.supplierName} (TB ${fmtVnd(cheap.avgPrice)}/${cheap.unit}, ${cheap.orders} đơn)` + (s.suppliers[1] ? `; tiếp theo ${s.suppliers[1].supplierName} ${fmtVnd(s.suppliers[1].avgPrice)}.` : '.');
+    }
+    if (a.distributionAnalysis) {
+        const d = a.distributionAnalysis;
+        const at = d.plantName ? ` ở ${d.plantName}` : '';
+        const head = `Cấp phát ${d.periodLabel}${at}: tổng ${fmtVnd(d.totalValue)}.`;
+        const sh = d.totalShortageQty > 0 ? ` Thiếu hụt ${d.totalShortageQty} đơn vị ở ${d.totalShortageLines} dòng${d.topShortages[0] ? ` (nhiều nhất: ${d.topShortages[0].materialName} thiếu ${d.topShortages[0].shortageQty})` : ''}.` : ' Không có thiếu hụt.';
+        return head + sh;
+    }
+    if (a.purchaseSuggestion) {
+        const p = a.purchaseSuggestion;
+        if (!p.count) return 'Hiện không có vật tư nào cần mua thêm (tồn đủ định mức & nhu cầu).';
+        const top = p.suggestions.slice(0, 3).map((s: any) => `${s.materialName} (nên mua ${s.suggestQty} ${s.unit}, tồn ${s.stock})`);
+        return `Đề xuất mua ${p.count} vật tư. Ưu tiên: ${top.join('; ')}.`;
+    }
     if (a.variance) {
         const v = a.variance;
         const top = v.drivers[0];
@@ -270,26 +364,40 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
 };
 
 const SYSTEM_PROMPT = [
-    'Ban la tro ly van hanh cho cong ty may. Phan tich cau hoi roi TU GOI TOOL de lay du lieu THAT, sau do tra loi.',
-    'Moi buoc tra ve DUY NHAT 1 JSON, khong markdown:',
+    'Ban la TRO LY VAN HANH cap cao cho cong ty may, ho tro ban giam doc ra quyet dinh.',
+    'Nguyen tac: PHAN TICH ky cau hoi -> TU GOI TOOL lay du lieu THAT -> neu can ghep nhieu nguon thi goi nhieu tool -> roi tra loi/lap ke hoach.',
+    'Moi buoc chi tra ve DUY NHAT 1 JSON (khong markdown, khong giai thich ngoai JSON):',
     '- Goi tool: {"tool":"ten_tool","args":{...}}',
-    '- Tra loi cuoi: {"final":"cau tra loi tieng Viet","followups":["goi y 1","goi y 2"]}',
-    'Khi da co du du lieu tu ket qua tool, hay tra {"final":...}. CHI dung con so tu ket qua tool, TUYET DOI khong bia.',
+    '- Tra loi cuoi: {"final":"cau tra loi tieng Viet co dau, ro rang","followups":["cau hoi goi y 1","cau hoi goi y 2"]}',
     '',
-    'Cac tool:',
-    '- search_assets(args): tim/dem/liet ke may. args:{search?, status?:[active|maintenance|broken|borrowing|storage|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}',
-    '  Luu y: ten loai may o truong "search" (vd "1 kim"), KHONG nhet ten hang vao search (dung brandName).',
+    'QUY TAC VANG:',
+    '- TUYET DOI khong bia so lieu/ten. Moi con so phai den tu ket qua tool. Neu thieu du lieu, noi ro "chua co du lieu".',
+    '- Cau hoi PHUC TAP (lap ke hoach, so sanh, "co nen", ghep nhieu mang): goi LAN LUOT nhieu tool roi TONG HOP. Vd "don can may 1 kim hikari, con may ranh khong?" -> goi search_assets{search:"1 kim", brandName:"hikari", status:["storage"]} roi ket luan co/khong + de xuat dieu chuyen.',
+    '- Cau hoi MO HO/thieu thong tin -> tra {"final":"cau hoi lai ngan gon"} de hoi ro (vd thieu ky, thieu ten vat tu).',
+    '- Luon TRICH NGUON trong cau tra loi (ten co so, ma don, ten NCC) de giam doc tin.',
+    '- Khi du du lieu thi tra {"final":...} ngay, dung goi tool thua.',
+    '',
+    'TOOL MAY MOC:',
+    '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke may. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
     '- top_broken_assets(args:{plantName?,limit?}): may hong nhieu nhat.',
-    '- low_stock_materials(args:{limit?}): vat tu duoi dinh muc ton kho.',
-    '- top_used_materials(args:{limit?}): vat tu cap phat nhieu nhat (tong, khong chia co so).',
-    '- material_usage_by_plant(args:{plantName?, period?:week|month, limit?}): vat tu CAP PHAT nhieu nhat, PHAN RA THEO TUNG CO SO nhan. Dung khi hoi "vat tu nao dung nhieu nhat o cac co so", hoac dung nhieu o 1 co so cu the (truyen plantName).',
-    '- search_materials(args:{search?,category?,limit?}): tim vat tu.',
-    '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): phan tich CHI TIET chi phi MUA vat tu ky nay vs ky truoc, phan ra theo vat tu (mac dinh) hoac nha cung cap. Dung khi hoi "phan tich chi tiet chi phi mua vat tu", "mua nhieu nhat la vat tu/ncc nao".',
-    '- purchase_orders(args:{search?, orderCode?, supplierName?, plantName?, status?:draft|confirmed|ordered|partially_received|received|cancelled, period?:week|month, limit?}): tra cuu DON HANG mua vat tu. Truyen orderCode hoac search (ma don/ten vat tu/ten NCC) de SOI SAU 1 don (tra ve tung dong vat tu). Dung khi hoi ve don hang cu the.',
-    '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): chi phi va bien dong so voi ky truoc, phan ra theo CO SO. "mua vat tu"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost. (Muon phan ra theo vat tu/NCC thi dung purchase_analysis.)',
-    '- summary_metrics(): tong quan toan he thong.',
     '',
-    'Chon tool dung muc do: hoi TONG chi phi/bien dong theo co so -> cost_variance; hoi CHI TIET mua theo vat tu/NCC -> purchase_analysis; hoi 1 DON cu the -> purchase_orders; hoi vat tu dung nhieu o cac co so -> material_usage_by_plant.',
+    'TOOL VAT TU & KHO:',
+    '- low_stock_materials(args:{limit?}): vat tu duoi dinh muc ton.',
+    '- top_used_materials(args:{limit?}): vat tu cap phat nhieu nhat (tong).',
+    '- material_usage_by_plant(args:{plantName?, period?:week|month, limit?}): vat tu cap phat nhieu nhat PHAN RA THEO CO SO nhan.',
+    '- distribution_analysis(args:{plantName?, period?:week|month, limit?}): phan tich CAP PHAT chi tiet + THIEU HUT (shortage) theo vat tu/co so. Dung khi hoi ve cap phat, thieu hut, cap bu.',
+    '- search_materials(args:{search?,category?,limit?}): tim vat tu.',
+    '',
+    'TOOL CHI PHI MUA & DON HANG:',
+    '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): TONG chi phi & bien dong vs ky truoc, phan ra theo CO SO. "mua"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost.',
+    '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): chi phi MUA chi tiet ky nay vs ky truoc, phan ra theo VAT TU hoac NHA CUNG CAP.',
+    '- purchase_orders(args:{search?, orderCode?, supplierName?, plantName?, status?, period?:week|month, limit?}): tra cuu DON HANG. Truyen orderCode/search de SOI SAU 1 don (tung dong vat tu, SL dat/nhan).',
+    '- material_price_history(args:{materialName, limit?}): LICH SU GIA mua 1 vat tu qua tung don + xu huong tang/giam. Dung khi hoi "gia ... thay doi the nao", "mua bao nhieu lan".',
+    '- supplier_comparison(args:{materialName, limit?}): SO SANH GIA giua cac NHA CUNG CAP cho 1 vat tu. Dung khi hoi "mua cho nao re", "ncc nao gia tot".',
+    '',
+    'TOOL LAP KE HOACH & TONG QUAN:',
+    '- purchase_suggestion(args:{limit?}): DE XUAT MUA SAM (tu ton duoi dinh muc + tieu hao 30 ngay). Dung khi hoi "nen mua gi", "len ke hoach mua", "can bo sung vat tu nao".',
+    '- summary_metrics(): tong quan toan he thong.',
 ].join('\n');
 
 const VALID_TOOLS = new Set<ToolName>([
@@ -301,11 +409,16 @@ const VALID_TOOLS = new Set<ToolName>([
     'material_usage_by_plant',
     'purchase_analysis',
     'purchase_orders',
+    'material_price_history',
+    'supplier_comparison',
+    'distribution_analysis',
+    'purchase_suggestion',
     'cost_variance',
     'summary_metrics',
 ]);
-const MAX_TOOL_CALLS = 3;
-const MAX_ITERATIONS = 6;
+// Ngan sach suy luan: cau giam doc thuong can ghep nhieu nguon -> cho nhieu luot hon.
+const MAX_TOOL_CALLS = 5;
+const MAX_ITERATIONS = 10;
 
 export const askAgentAssistant = async (req: Request, res: Response) => {
     const messages = (req.body.messages ?? []) as AssistantMessage[];
@@ -326,7 +439,7 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
     for (let i = 0; i < MAX_ITERATIONS; i += 1) {
         let parsed: any;
         try {
-            const ai = await aiProviderService.generateJson<any>({ feature, temperature: 0.1, maxTokens: 700, messages: convo });
+            const ai = await aiProviderService.generateJson<any>({ feature, temperature: 0.1, maxTokens: 1200, messages: convo });
             provider = ai.provider;
             model = ai.model;
             parsed = typeof ai.data === 'object' ? ai.data : JSON.parse(extractJsonObject((ai as any).content));
@@ -347,7 +460,7 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
             convo.push({
                 role: 'user',
                 content:
-                    'Tool do khong ton tai. Chi duoc dung: search_assets, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, purchase_analysis, purchase_orders, cost_variance, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
+                    'Tool do khong ton tai. Chi duoc dung: search_assets, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
             });
             continue;
         }
