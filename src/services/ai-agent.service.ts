@@ -17,6 +17,7 @@ import {
     purchaseSuggestion,
     supplierComparison,
 } from '@/services/ai-material-insight.service';
+import { locateAsset, transferOrders } from '@/services/ai-asset-tools.service';
 import customResponse from '@/utils/response';
 
 const normalize = (v?: string) =>
@@ -76,6 +77,8 @@ const searchMaterials = async (args: { search?: string; category?: string; limit
 
 type ToolName =
     | 'search_assets'
+    | 'locate_asset'
+    | 'transfer_orders'
     | 'top_broken_assets'
     | 'low_stock_materials'
     | 'top_used_materials'
@@ -102,6 +105,44 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
             return {
                 ai: { count: r.count, sample: r.items.slice(0, 8).map((i: any) => ({ code: i.machineCode, name: i.name, status: i.statusLabel, plant: i.plantName })), aggregates: r.aggregates },
                 render: { domain: 'asset', count: r.count, items: r.items, aggregates: r.aggregates, appliedFilters: r.appliedFilters },
+            };
+        }
+        case 'locate_asset': {
+            const r = await locateAsset(args || {});
+            return {
+                ai: r.asset
+                    ? {
+                          ma: r.asset.machineCode,
+                          ten: r.asset.name,
+                          serial: r.asset.serial,
+                          tinhTrang: r.asset.statusLabel,
+                          coSoQuanLy: r.asset.managedPlant,
+                          khuVuc: r.asset.area,
+                          viTriQuetCuoi: r.asset.lastSeenPlant,
+                          lechViTri: r.asset.mislocated,
+                          lenhDieuChuyenDangMo: r.asset.activeTransfers.map((t: any) => `${t.from}→${t.to} (${t.statusLabel})`),
+                          soBanGhiKhop: r.found,
+                      }
+                    : { khongTimThay: args?.query },
+                render: { domain: 'asset', count: r.found, items: [], aggregates: { locate: r } },
+            };
+        }
+        case 'transfer_orders': {
+            const t = await transferOrders(args || {});
+            return {
+                ai: {
+                    ky: t.periodLabel,
+                    tongSoLenh: t.count,
+                    cacLenh: t.orders.slice(0, 8).map((o: any) => ({
+                        tu: o.from,
+                        den: o.to,
+                        trangThai: o.statusLabel,
+                        ngay: o.transferDate,
+                        soMay: o.assetCount,
+                        may: o.machines.slice(0, 6).map((m: any) => m.machineCode),
+                    })),
+                },
+                render: { domain: 'asset', count: t.count, items: [], aggregates: { transferOrders: t } },
             };
         }
         case 'top_broken_assets': {
@@ -259,7 +300,17 @@ const extractOrderCode = (q: string): string | undefined => {
 const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     const n = normalize(q);
     const code = extractOrderCode(q);
-    if (code || n.includes('don hang') || n.includes('don mua') || n.includes('don dat')) {
+    // Lệnh điều chuyển (ưu tiên trước đơn mua).
+    if (n.includes('dieu chuyen') || n.includes('lenh chuyen')) {
+        const period = n.includes('hom nay') ? 'today' : n.includes('tuan') ? 'week' : n.includes('thang') ? 'month' : undefined;
+        const status = n.includes('cho duyet') ? 'pending' : n.includes('hoan tat') ? 'completed' : undefined;
+        return { tool: 'transfer_orders', args: { period, status } };
+    }
+    // Tra cứu 1 máy theo mã/serial khi hỏi vị trí.
+    if (code && (n.includes('o dau') || n.includes('vi tri') || n.includes('dang o') || n.includes('tim may') || n.includes('may nay'))) {
+        return { tool: 'locate_asset', args: { query: code } };
+    }
+    if ((code && (n.includes('don hang') || n.includes('don mua') || n.includes('don dat'))) || n.includes('don hang') || n.includes('don mua') || n.includes('don dat')) {
         return { tool: 'purchase_orders', args: { search: code, period: n.includes('thang') || n.includes('tuan') ? detectPeriod(q) : undefined } };
     }
     if (n.includes('nen mua') || n.includes('de xuat mua') || n.includes('len ke hoach mua') || n.includes('ke hoach mua') || n.includes('can mua gi') || n.includes('can bo sung')) {
@@ -358,6 +409,25 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
     if (a.topBroken?.length) {
         return `Top máy hỏng nhiều nhất: ` + a.topBroken.slice(0, 3).map((t: any, i: number) => `${i + 1}. ${t.machineCode || t.name} (${t.count} lần)`).join('; ') + '.';
     }
+    if (a.locate) {
+        const x = a.locate.asset;
+        if (!x) return 'Không tìm thấy máy nào khớp mã/serial/tên đó.';
+        let s = `${x.machineCode} (${x.name})${x.serial ? ` · SN ${x.serial}` : ''} — ${x.statusLabel}, thuộc ${x.managedPlant}${x.area ? `, khu ${x.area}` : ''}.`;
+        if (x.lastSeenPlant) s += ` Quét QR lần cuối ở ${x.lastSeenPlant}${x.mislocated ? ' (⚠ lệch vị trí)' : ''}.`;
+        s += x.activeTransfers.length
+            ? ` Đang có ${x.activeTransfers.length} lệnh điều chuyển: ${x.activeTransfers.map((t: any) => `${t.from}→${t.to} (${t.statusLabel})`).join(', ')}.`
+            : ' Không có lệnh điều chuyển đang mở.';
+        return s;
+    }
+    if (a.transferOrders) {
+        const t = a.transferOrders;
+        if (!t.count) return `Không có lệnh điều chuyển nào ${t.periodLabel}.`;
+        const top = t.orders[0];
+        let s = `Có ${t.count} lệnh điều chuyển ${t.periodLabel}.`;
+        if (top)
+            s += ` Gần nhất: ${top.from}→${top.to} (${top.statusLabel}), ${top.assetCount} máy${top.machines[0] ? ` gồm ${top.machines.slice(0, 5).map((m: any) => m.machineCode).join(', ')}` : ''}.`;
+        return s;
+    }
     if (render.domain === 'material') return render.count ? `Tìm thấy ${render.count} vật tư phù hợp.` : 'Không có vật tư nào khớp.';
     if (render.domain === 'asset') return render.count ? `Tìm thấy ${render.count} máy phù hợp.` : 'Không có máy nào khớp.';
     return null;
@@ -378,7 +448,9 @@ const SYSTEM_PROMPT = [
     '- Khi du du lieu thi tra {"final":...} ngay, dung goi tool thua.',
     '',
     'TOOL MAY MOC:',
-    '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke may. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
+    '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke NHIEU may theo bo loc. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
+    '- locate_asset(args:{query}): tra cuu 1 MAY CU THE theo MA may / SERIAL / TEN -> vi tri (co so quan ly + khu vuc + noi quet QR cuoi + co lech vi tri khong) + tinh trang + LENH DIEU CHUYEN lien quan. Dung khi hoi "may X dang o dau", "may serial ... co lenh dieu chuyen nao khong".',
+    '- transfer_orders(args:{period?:today|week|month, status?:pending|approved|completed|rejected|cancelled, plantName?, limit?}): tra cuu LENH DIEU CHUYEN (kem danh sach may trong lenh). Dung khi hoi "lenh dieu chuyen hom nay/gan day", "lenh gan nhat gom may nao", "lenh nao dang cho duyet". Khong truyen period = gan day (2 tuan).',
     '- top_broken_assets(args:{plantName?,limit?}): may hong nhieu nhat.',
     '',
     'TOOL VAT TU & KHO:',
@@ -402,6 +474,8 @@ const SYSTEM_PROMPT = [
 
 const VALID_TOOLS = new Set<ToolName>([
     'search_assets',
+    'locate_asset',
+    'transfer_orders',
     'top_broken_assets',
     'low_stock_materials',
     'top_used_materials',
@@ -460,7 +534,7 @@ export const askAgentAssistant = async (req: Request, res: Response) => {
             convo.push({
                 role: 'user',
                 content:
-                    'Tool do khong ton tai. Chi duoc dung: search_assets, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
+                    'Tool do khong ton tai. Chi duoc dung: search_assets, locate_asset, transfer_orders, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
             });
             continue;
         }
