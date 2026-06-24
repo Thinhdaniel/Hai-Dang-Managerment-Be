@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths, subWeeks } from 'date-fns';
 import DistributionRecord from '@/models/DistributionRecord';
 import PurchaseOrder from '@/models/PurchaseOrder';
@@ -422,7 +423,8 @@ export const distributionAnalysis = async (args: { plantName?: string; period?: 
         periodFilter = { $gte: r.start, $lte: r.end };
         periodLabel = r.label;
     }
-    if (plantId) match.toPlantId = plantId;
+    // aggregate KHÔNG auto-cast như find -> phải ép ObjectId, nếu không so ObjectId với string sẽ không khớp.
+    if (plantId) match.toPlantId = new Types.ObjectId(plantId);
 
     const rows = await DistributionRecord.aggregate([
         { $match: match },
