@@ -179,7 +179,7 @@ export const summarizeChatConversation = async (req: Request, res: Response) => 
         const aiResult = await aiProviderService.generateJson<ChatSummaryData>({
             feature: 'chat-summary',
             temperature: 0.1,
-            maxTokens: 1200,
+            maxTokens: 1500,
             messages: [
                 {
                     role: 'system',

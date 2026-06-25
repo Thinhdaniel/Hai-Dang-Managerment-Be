@@ -53,7 +53,9 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string> = {
     // Các tác vụ khác
     'material-match': 'kr/claude-haiku-4.5', // khớp tên vật tư (JSON, cần ổn định)
     'supply-request-draft': 'gc/gemini-2.5-flash',
-    'chat-summary': 'gc/gemini-2.5-flash',
+    // Tóm tắt chat trả JSON: dùng Claude Haiku cho JSON ỔN ĐỊNH (như material-match).
+    // gc/gemini-2.5-flash thỉnh thoảng trả JSON bẩn/cắt cụt -> parse lỗi -> rơi fallback oan.
+    'chat-summary': 'kr/claude-haiku-4.5',
     help: 'kr/claude-sonnet-4.5',
     digest: 'gc/gemini-2.5-pro', // bản tin giám đốc: chất lượng cao, chạy ít
     variance: 'kr/claude-haiku-4.5',
