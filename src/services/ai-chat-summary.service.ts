@@ -172,7 +172,10 @@ export const summarizeChatConversation = async (req: Request, res: Response) => 
             .lean()
     ).reverse();
 
-    try {
+    // Gọi AI + parse JSON. Thử lại 1 lần cho lỗi chập chờn (Render cold start, 9router hiccup,
+    // model lỡ trả JSON bẩn) trước khi rơi về tóm tắt dự phòng — đây là nguyên nhân hay gặp khiến
+    // người dùng thấy banner "AI chưa khả dụng" dù model thực ra vẫn chạy.
+    const attemptSummary = async () => {
         const aiResult = await aiProviderService.generateJson<ChatSummaryData>({
             feature: 'chat-summary',
             temperature: 0.1,
@@ -186,7 +189,11 @@ export const summarizeChatConversation = async (req: Request, res: Response) => 
                 { role: 'user', content: buildPrompt({ conversation, messages, userId }) },
             ],
         });
-        const summary = chatSummarySchema.parse(aiResult.data);
+        return { aiResult, summary: chatSummarySchema.parse(aiResult.data) };
+    };
+
+    try {
+        const { aiResult, summary } = await attemptSummary().catch(() => attemptSummary());
 
         return res.status(StatusCodes.OK).json(
             customResponse({
