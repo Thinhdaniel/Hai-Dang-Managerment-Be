@@ -20,6 +20,13 @@ import {
     supplierComparison,
 } from '@/services/ai-material-insight.service';
 import { locateAsset, transferOrders } from '@/services/ai-asset-tools.service';
+import {
+    analyzeMaterialRequests,
+    listMaterialRequests,
+    requestBacklog,
+    requestLifecycle,
+    requestRiskAnalysis,
+} from '@/services/ai-request-insight.service';
 import customResponse from '@/utils/response';
 
 const normalize = (v?: string) =>
@@ -105,6 +112,13 @@ type ToolName =
     | 'material_price_history'
     | 'supplier_comparison'
     | 'distribution_analysis'
+    | 'supply_requests'
+    | 'supply_request_analysis'
+    | 'purchase_requests'
+    | 'purchase_request_analysis'
+    | 'request_lifecycle'
+    | 'request_backlog'
+    | 'request_risk_analysis'
     | 'purchase_suggestion'
     | 'cost_variance'
     | 'cost_overview'
@@ -276,6 +290,149 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
                 render: { domain: 'cost', count: d.topMaterials.length, items: [], aggregates: { distributionAnalysis: d } },
             };
         }
+        case 'supply_requests': {
+            const r = await listMaterialRequests({ ...(args || {}), kind: 'supply' });
+            return {
+                ai: {
+                    loai: r.title,
+                    ky: r.periodLabel,
+                    tongSoPhieu: r.total,
+                    tongGiaTri: r.summary.totalValue,
+                    theoTrangThai: r.summary.byStatus,
+                    theoCoSo: r.summary.byPlant,
+                    topVatTu: r.summary.topMaterials.slice(0, 6),
+                    phieu: r.rows.slice(0, 12).map((x: any) => ({
+                        ma: x.requestCode,
+                        trangThai: x.statusLabel,
+                        coSoGui: x.fromPlantName || x.plantName,
+                        nguoiDeXuat: x.requestedBy,
+                        soDong: x.itemCount,
+                        daCapPhat: x.distribution?.distributionCodes,
+                        conThieu: x.distribution?.outstandingQty,
+                        ngayTao: x.createdAt,
+                    })),
+                },
+                render: { domain: 'material', count: r.total, items: [], aggregates: { materialRequests: r } },
+            };
+        }
+        case 'supply_request_analysis': {
+            const r = await analyzeMaterialRequests({ ...(args || {}), kind: 'supply' });
+            return {
+                ai: {
+                    loai: r.title,
+                    ky: r.periodLabel,
+                    tongSoPhieu: r.total,
+                    theoTrangThai: r.byStatus,
+                    theoCoSo: r.byPlant,
+                    nguoiDeXuatNhieu: r.byRequester.slice(0, 5),
+                    topVatTu: r.topMaterials.slice(0, 8),
+                    choDuyetLau: r.oldestPending.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.fromPlantName, ngayCho: x.ageDays, nguoi: x.requestedBy })),
+                    daDuyetChuaCap: r.approvedWithoutNextStep.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.fromPlantName, ngayCho: x.ageDays })),
+                    thieuVatTu: r.shortages.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.fromPlantName, conThieu: x.distribution?.outstandingQty })),
+                },
+                render: { domain: 'material', count: r.total, items: [], aggregates: { requestAnalysis: r } },
+            };
+        }
+        case 'purchase_requests': {
+            const r = await listMaterialRequests({ ...(args || {}), kind: 'purchase_all' });
+            return {
+                ai: {
+                    loai: r.title,
+                    ky: r.periodLabel,
+                    tongSoPhieu: r.total,
+                    tongGiaTri: r.summary.totalValue,
+                    theoTrangThai: r.summary.byStatus,
+                    theoCoSo: r.summary.byPlant,
+                    topVatTu: r.summary.topMaterials.slice(0, 6),
+                    phieu: r.rows.slice(0, 12).map((x: any) => ({
+                        ma: x.requestCode,
+                        loaiPhieu: x.requestTypeLabel,
+                        trangThai: x.statusLabel,
+                        coSo: x.plantName,
+                        nguoiDeXuat: x.requestedBy,
+                        tongTien: x.totalWithVat,
+                        donMua: x.orders?.orderCodes,
+                        daDat: x.orders?.orderedQty,
+                        daNhan: x.orders?.receivedQty,
+                        conThieu: x.orders?.missingQty,
+                        ngayTao: x.createdAt,
+                    })),
+                },
+                render: { domain: 'material', count: r.total, items: [], aggregates: { materialRequests: r } },
+            };
+        }
+        case 'purchase_request_analysis': {
+            const r = await analyzeMaterialRequests({ ...(args || {}), kind: 'purchase_all' });
+            return {
+                ai: {
+                    loai: r.title,
+                    ky: r.periodLabel,
+                    tongSoPhieu: r.total,
+                    tongGiaTri: r.totalValue,
+                    theoTrangThai: r.byStatus,
+                    theoCoSo: r.byPlant,
+                    nguoiDeXuatNhieu: r.byRequester.slice(0, 5),
+                    topVatTu: r.topMaterials.slice(0, 8),
+                    choDuyetLau: r.oldestPending.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.plantName, ngayCho: x.ageDays, nguoi: x.requestedBy })),
+                    daDuyetChuaLenDon: r.approvedWithoutNextStep.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.plantName, ngayCho: x.ageDays })),
+                    chuaNhanDu: r.shortages.slice(0, 5).map((x: any) => ({ ma: x.requestCode, don: x.orders?.orderCodes, conThieu: x.orders?.missingQty })),
+                },
+                render: { domain: 'material', count: r.total, items: [], aggregates: { requestAnalysis: r } },
+            };
+        }
+        case 'request_lifecycle': {
+            const r = await requestLifecycle(args || {});
+            return {
+                ai: r.request
+                    ? {
+                          ma: r.request.requestCode,
+                          loai: r.request.requestTypeLabel,
+                          trangThai: r.request.statusLabel,
+                          coSo: r.request.fromPlantName || r.request.plantName,
+                          nguoiDeXuat: r.request.requestedBy,
+                          dongThoiGian: r.timeline,
+                          vatTu: r.request.items?.slice(0, 8).map((it: any) => ({ ten: it.materialName, slDeXuat: it.quantityRequested, slDuyet: it.quantityApproved, slDat: it.quantityOrdered })),
+                          donMua: r.request.orders?.orderCodes,
+                          phieuCapPhat: r.request.distribution?.distributionCodes,
+                          conThieu: r.request.distribution?.outstandingQty || r.request.orders?.missingQty,
+                      }
+                    : { khongTimThay: args?.requestCode || args?.search, ghiChu: r.message },
+                render: { domain: 'material', count: r.found, items: [], aggregates: { requestLifecycle: r } },
+            };
+        }
+        case 'request_backlog': {
+            const r = await requestBacklog(args || {});
+            return {
+                ai: {
+                    ky: r.periodLabel,
+                    theTongHop: r.cards,
+                    deXuatCap: {
+                        tong: r.supply.total,
+                        choXuLy: r.supply.oldestPending.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.fromPlantName, ngayCho: x.ageDays })),
+                        conThieu: r.supply.shortages.slice(0, 5).map((x: any) => ({ ma: x.requestCode, conThieu: x.distribution?.outstandingQty })),
+                    },
+                    deXuatMua: {
+                        tong: r.purchase.total,
+                        choXuLy: r.purchase.oldestPending.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.plantName, ngayCho: x.ageDays })),
+                        chuaLenDon: r.purchase.approvedWithoutNextStep.slice(0, 5).map((x: any) => ({ ma: x.requestCode, coSo: x.plantName })),
+                        chuaNhanDu: r.purchase.shortages.slice(0, 5).map((x: any) => ({ ma: x.requestCode, conThieu: x.orders?.missingQty })),
+                    },
+                },
+                render: { domain: 'material', count: r.cards.reduce((s: number, c: any) => s + Number(c.count || 0), 0), items: [], aggregates: { requestBacklog: r } },
+            };
+        }
+        case 'request_risk_analysis': {
+            const r = await requestRiskAnalysis(args || {});
+            return {
+                ai: {
+                    ky: r.periodLabel,
+                    soRuiRo: r.riskCount,
+                    ruiRo: r.risks,
+                    theTongHop: r.backlogCards,
+                },
+                render: { domain: 'material', count: r.riskCount, items: [], aggregates: { requestRiskAnalysis: r } },
+            };
+        }
         case 'purchase_suggestion': {
             const p = await purchaseSuggestion(args || {});
             return {
@@ -346,10 +503,126 @@ const extractOrderCode = (q: string): string | undefined => {
     return m ? m[0] : undefined;
 };
 
+const extractRequestCode = (q: string): string | undefined => {
+    const m = q.match(/\b(?:YC|DX|KT)[-_]?\d{6,}[-_\dA-Za-z]*\b/i);
+    return m ? m[0] : undefined;
+};
+
+const hasSupplyRequestSignal = (n: string) =>
+    n.includes('phieu de xuat cap') ||
+    n.includes('de xuat cap vat tu') ||
+    n.includes('yeu cau cap') ||
+    n.includes('yc-') ||
+    n.includes('yc_');
+
+const hasPurchaseRequestSignal = (n: string) =>
+    n.includes('phieu de xuat mua') ||
+    n.includes('de xuat mua vat tu') ||
+    n.includes('giay de nghi mua') ||
+    n.includes('dx-') ||
+    n.includes('dx_') ||
+    n.includes('kt-') ||
+    n.includes('kt_');
+
+const requestRoute = (q: string): { tool: ToolName; args: any } | null => {
+    const n = normalize(q);
+    const code = extractRequestCode(q);
+    const period = n.includes('tuan') ? 'week' : n.includes('thang') ? 'month' : undefined;
+    const status =
+        n.includes('ban nhap') || n.includes('nhap')
+            ? 'draft'
+            : n.includes('cho duyet') || n.includes('cho xu ly') || n.includes('chua xu ly')
+              ? 'pending'
+              : n.includes('da duyet')
+                ? 'approved'
+                : n.includes('tu choi')
+                  ? 'rejected'
+                  : n.includes('da cap') || n.includes('hoan thanh')
+                    ? 'distributed'
+                    : undefined;
+
+    if (code || n.includes('vong doi') || n.includes('chi tiet phieu') || n.includes('cu the tu tao')) {
+        if (code || hasSupplyRequestSignal(n) || hasPurchaseRequestSignal(n)) {
+            return { tool: 'request_lifecycle', args: { requestCode: code, search: code || q } };
+        }
+    }
+
+    const hasSupply = hasSupplyRequestSignal(n);
+    const hasPurchase = hasPurchaseRequestSignal(n);
+    const asksBoth =
+        (hasSupply && hasPurchase) ||
+        (n.includes('de xuat cap') && n.includes('de xuat mua')) ||
+        (n.includes('thieu') && n.includes('mua tuong ung')) ||
+        n.includes('lien ket phieu') ||
+        n.includes('quy trinh hien tai') ||
+        n.includes('rui ro van hanh') ||
+        n.includes('hanh dong uu tien') ||
+        n.includes('hop van hanh') ||
+        n.includes('backlog') ||
+        n.includes('diem nghen');
+
+    if (asksBoth) {
+        if (n.includes('rui ro') || n.includes('hanh dong') || n.includes('hop') || n.includes('bat thuong') || n.includes('uu tien')) {
+            return { tool: 'request_risk_analysis', args: { period: period || 'month' } };
+        }
+        return { tool: 'request_backlog', args: { period: period || 'all' } };
+    }
+
+    if (hasSupply) {
+        const search = n.includes('lien quan') || n.includes('tim') ? q : undefined;
+        if (
+            n.includes('phan tich') ||
+            n.includes('danh gia') ||
+            n.includes('top') ||
+            n.includes('bao nhieu') ||
+            n.includes('tong') ||
+            n.includes('co so nao') ||
+            n.includes('nguoi de xuat') ||
+            n.includes('vat tu nao') ||
+            n.includes('cho duyet lau') ||
+            n.includes('thieu') ||
+            n.includes('bat thuong') ||
+            n.includes('tang') ||
+            n.includes('giam')
+        ) {
+            return { tool: 'supply_request_analysis', args: { period: period || 'month', status, search } };
+        }
+        return { tool: 'supply_requests', args: { period: period || 'month', status, search, limit: 12 } };
+    }
+
+    if (hasPurchase) {
+        const search = n.includes('lien quan') || n.includes('tim') ? q : undefined;
+        if (
+            n.includes('phan tich') ||
+            n.includes('danh gia') ||
+            n.includes('top') ||
+            n.includes('bao nhieu') ||
+            n.includes('tong') ||
+            n.includes('co so nao') ||
+            n.includes('nguoi de xuat') ||
+            n.includes('vat tu nao') ||
+            n.includes('chua len don') ||
+            n.includes('chua dat hang') ||
+            n.includes('chua nhan') ||
+            n.includes('trung vat tu') ||
+            n.includes('tang') ||
+            n.includes('giam') ||
+            n.includes('gia tri lon')
+        ) {
+            return { tool: 'purchase_request_analysis', args: { period: period || 'month', status, search } };
+        }
+        return { tool: 'purchase_requests', args: { period: period || 'month', status, search, limit: 12 } };
+    }
+
+    return null;
+};
+
 // Đoán tool đúng từ từ khóa (chỉ cho các mảng dữ liệu rõ ràng — KHÔNG đoán bừa câu hội thoại).
 const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     const n = normalize(q);
     const code = extractOrderCode(q);
+    const routedRequest = requestRoute(q);
+    if (routedRequest) return routedRequest;
     // Lệnh điều chuyển (ưu tiên trước đơn mua).
     if (n.includes('dieu chuyen') || n.includes('lenh chuyen')) {
         const period = n.includes('hom nay') ? 'today' : n.includes('tuan') ? 'week' : n.includes('thang') ? 'month' : undefined;
@@ -363,7 +636,7 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     if ((code && (n.includes('don hang') || n.includes('don mua') || n.includes('don dat'))) || n.includes('don hang') || n.includes('don mua') || n.includes('don dat')) {
         return { tool: 'purchase_orders', args: { search: code, period: n.includes('thang') || n.includes('tuan') ? detectPeriod(q) : undefined } };
     }
-    if (n.includes('nen mua') || n.includes('de xuat mua') || n.includes('len ke hoach mua') || n.includes('ke hoach mua') || n.includes('can mua gi') || n.includes('can bo sung')) {
+    if (n.includes('nen mua') || n.includes('len ke hoach mua') || n.includes('ke hoach mua') || n.includes('can mua gi') || n.includes('can bo sung')) {
         return { tool: 'purchase_suggestion', args: {} };
     }
     // So sánh MUA vs CẤP PHÁT.
@@ -409,6 +682,8 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
 // vào hội thoại để model buộc phải trả lời từ số liệu (không hỏi lại, không tự chọn lệch).
 const forceRoute = (q: string): { tool: ToolName; args: any } | null => {
     const n = normalize(q);
+    const routedRequest = requestRoute(q);
+    if (routedRequest) return routedRequest;
     // So sánh mua vs cấp phát.
     if (n.includes('so sanh') && n.includes('mua') && n.includes('cap phat')) {
         return { tool: 'compare_cost', args: { period: detectPeriod(q) } };
@@ -427,6 +702,75 @@ const forceRoute = (q: string): { tool: ToolName; args: any } | null => {
 const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null => {
     if (!render) return null;
     const a = render.aggregates || {};
+    if (a.materialRequests) {
+        const r = a.materialRequests;
+        const rows = r.rows || [];
+        const top = rows.slice(0, 5);
+        if (!rows.length) return `Không tìm thấy ${String(r.title || 'phiếu đề xuất').toLowerCase()} ${r.periodLabel || ''}.`;
+        const value = r.kind === 'purchase' ? `, tổng ${fmtVnd(r.summary?.totalValue || 0)}` : '';
+        return (
+            `${r.title} ${r.periodLabel}: có ${r.total} phiếu${value}. ` +
+            `Gần nhất: ${top
+                .map((x: any) => {
+                    const plant = x.fromPlantName || x.plantName || 'chưa rõ cơ sở';
+                    const tail = r.kind === 'purchase' && x.orders?.orderCodes?.length ? ` → PO ${x.orders.orderCodes.join(', ')}` : '';
+                    const shortage = r.kind === 'supply' && x.distribution?.outstandingQty ? `, còn thiếu ${x.distribution.outstandingQty}` : '';
+                    return `${x.requestCode} (${plant}, ${x.statusLabel}${shortage})${tail}`;
+                })
+                .join('; ')}.`
+        );
+    }
+    if (a.requestAnalysis) {
+        const r = a.requestAnalysis;
+        const status = (r.byStatus || []).slice(0, 4).map((x: any) => `${x.label}: ${x.count}`).join(', ');
+        const topMaterial = (r.topMaterials || [])[0];
+        const pending = (r.oldestPending || [])[0];
+        const noNext = (r.approvedWithoutNextStep || [])[0];
+        const shortage = (r.shortages || [])[0];
+        let s = `${r.title} ${r.periodLabel}: có ${r.total} phiếu${r.kind === 'purchase' ? `, tổng ${fmtVnd(r.totalValue || 0)}` : ''}.`;
+        if (status) s += ` Theo trạng thái: ${status}.`;
+        if (topMaterial) s += ` Vật tư xuất hiện nhiều nhất: ${topMaterial.materialName} (${topMaterial.requestCount} dòng, SL đề xuất ${topMaterial.quantityRequested} ${topMaterial.unit || ''}).`;
+        if (pending) s += ` Chờ xử lý lâu nhất: ${pending.requestCode} (${pending.ageDays} ngày, ${pending.fromPlantName || pending.plantName || 'chưa rõ cơ sở'}).`;
+        if (noNext) s += ` Cần xử lý tiếp: ${noNext.requestCode} đã duyệt nhưng chưa ${r.kind === 'supply' ? 'cấp phát' : 'lên đơn mua'}.`;
+        if (shortage) s += ` Có thiếu/chưa nhận đủ nổi bật: ${shortage.requestCode}.`;
+        return s;
+    }
+    if (a.requestLifecycle) {
+        const r = a.requestLifecycle;
+        const x = r.request;
+        if (!x) return r.message || 'Không tìm thấy phiếu đề xuất phù hợp.';
+        const timeline = (r.timeline || []).map((t: any) => `${t.label}${t.at ? ` (${new Date(t.at).toLocaleDateString('vi-VN')})` : ''}`).join(' → ');
+        const next =
+            x.requestType === 'supply_request'
+                ? x.distribution?.distributionCodes?.length
+                    ? `Phiếu cấp phát: ${x.distribution.distributionCodes.join(', ')}${x.distribution.outstandingQty ? `, còn thiếu ${x.distribution.outstandingQty}` : ''}.`
+                    : 'Chưa có phiếu cấp phát.'
+                : x.orders?.orderCodes?.length
+                  ? `Đơn mua liên quan: ${x.orders.orderCodes.join(', ')}; đã đặt ${x.orders.orderedQty}, đã nhận ${x.orders.receivedQty}, còn thiếu ${x.orders.missingQty}.`
+                  : 'Chưa lên đơn mua.';
+        return `${x.requestCode} (${x.requestTypeLabel}, ${x.statusLabel}) do ${x.requestedBy || 'chưa rõ người tạo'} tạo cho ${x.fromPlantName || x.plantName || 'chưa rõ cơ sở'}. Vòng đời: ${timeline}. ${next}`;
+    }
+    if (a.requestBacklog) {
+        const b = a.requestBacklog;
+        const cards = (b.cards || []).map((c: any) => `${c.label}: ${c.count}${c.quantity ? ` (${c.quantity} đơn vị)` : ''}`).join('; ');
+        const supply = b.supply?.oldestPending?.[0];
+        const purchase = b.purchase?.approvedWithoutNextStep?.[0];
+        let s = `Điểm nghẽn phiếu đề xuất ${b.periodLabel}: ${cards}.`;
+        if (supply) s += ` YC cần xử lý trước: ${supply.requestCode} (${supply.ageDays} ngày, ${supply.fromPlantName || supply.plantName || 'chưa rõ cơ sở'}).`;
+        if (purchase) s += ` DX cần xử lý trước: ${purchase.requestCode} đã duyệt/chờ nhưng chưa lên đơn.`;
+        return s;
+    }
+    if (a.requestRiskAnalysis) {
+        const r = a.requestRiskAnalysis;
+        if (!r.risks?.length) return `Chưa thấy rủi ro lớn từ phiếu đề xuất ${r.periodLabel}.`;
+        return (
+            `Có ${r.riskCount} rủi ro từ phiếu đề xuất ${r.periodLabel}. Ưu tiên: ` +
+            r.risks
+                .slice(0, 5)
+                .map((x: any, i: number) => `${i + 1}. [${x.severity}] ${x.title} — ${x.action}`)
+                .join('; ')
+        );
+    }
     if (a.usageByPlant) {
         const u = a.usageByPlant;
         const top = u.materials.slice(0, 3);
@@ -563,6 +907,17 @@ const SYSTEM_PROMPT = [
     '- distribution_analysis(args:{plantName?, period?:week|month, limit?}): CHI PHI CAP PHAT (tong gia tri) + top vat tu + THIEU HUT, CO THE LOC 1 CO SO qua plantName. ƯU TIEN dung tool nay khi hoi "chi phi cap phat cua co so X", "CS2 cap phat bao nhieu", "cap phat o <co so>". Truyen plantName = ten co so trong cau hoi.',
     '- search_materials(args:{search?,category?,limit?}): tim vat tu.',
     '',
+    'TOOL PHIEU DE XUAT / WORKFLOW VAT TU:',
+    '- supply_requests(args:{search?, requestCode?, status?:draft|pending|approved|rejected|distributed|partially_distributed, plantName?, materialName?, period?:week|month|all, limit?}): DANH SACH PHIEU DE XUAT CAP VAT TU (ma YC-...). Dung khi hoi "phieu de xuat cap", "yeu cau cap", danh sach, tim theo vat tu/co so/trang thai.',
+    '- supply_request_analysis(args:{status?, plantName?, materialName?, period?:week|month|all, staleDays?}): PHAN TICH PHIEU DE XUAT CAP: dem phieu, theo trang thai/co so/nguoi de xuat, top vat tu, phieu cho duyet lau, da duyet chua cap, con thieu vat tu.',
+    '- purchase_requests(args:{search?, requestCode?, status?:draft|pending|approved|rejected|ordered|received, plantName?, materialName?, period?:week|month|all, limit?}): DANH SACH PHIEU DE XUAT MUA VAT TU / GIAY DE NGHI MUA (ma DX-/KT-...). KHAC voi purchase_orders.',
+    '- purchase_request_analysis(args:{status?, plantName?, materialName?, period?:week|month|all, staleDays?}): PHAN TICH PHIEU DE XUAT MUA: dem phieu, theo trang thai/co so/nguoi de xuat, top vat tu, chua len don, chua nhan du, gia tri lon.',
+    '- request_lifecycle(args:{requestCode|search}): VONG DOI 1 PHIEU YC-/DX-/KT- tu tao -> duyet/tu choi -> cap phat hoac len PO -> nhan/bu thieu.',
+    '- request_backlog(args:{period?:week|month|all}): TONG HOP CAC DIEM NGHEN cua de xuat cap + de xuat mua: chua xu ly, da duyet chua cap/len don, con thieu/chua nhan du.',
+    '- request_risk_analysis(args:{period?:week|month|all}): CANH BAO/RUI RO/HANH DONG UU TIEN tu phieu de xuat cap + de xuat mua.',
+    '  ⚠ BAT BUOC: Neu cau hoi co "PHIEU DE XUAT CAP" hoac ma YC- -> dung supply_requests/supply_request_analysis/request_lifecycle, KHONG dung distribution_analysis lam cau tra loi chinh.',
+    '  ⚠ BAT BUOC: Neu cau hoi co "PHIEU DE XUAT MUA" hoac ma DX-/KT- -> dung purchase_requests/purchase_request_analysis/request_lifecycle, KHONG dung purchase_suggestion va KHONG dung purchase_orders tru khi hoi DON HANG/PO.',
+    '',
     'TOOL CHI PHI MUA & DON HANG:',
     '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): current la TONG TOAN HE THONG (TAT CA co so) + bien dong vs ky truoc, kem top co so bien dong. KHONG LOC duoc 1 co so. ⚠ TUYET DOI KHONG dung cho cau hoi ve 1 co so cu the (vd "CS2 bao nhieu") — luc do dung distribution_analysis (cap phat) / purchase_analysis (mua) voi plantName. "mua"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost.',
     '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): chi phi MUA chi tiet ky nay vs ky truoc, phan ra theo VAT TU hoac NHA CUNG CAP.',
@@ -593,6 +948,13 @@ const VALID_TOOLS = new Set<ToolName>([
     'material_price_history',
     'supplier_comparison',
     'distribution_analysis',
+    'supply_requests',
+    'supply_request_analysis',
+    'purchase_requests',
+    'purchase_request_analysis',
+    'request_lifecycle',
+    'request_backlog',
+    'request_risk_analysis',
     'purchase_suggestion',
     'cost_variance',
     'cost_overview',
@@ -618,6 +980,13 @@ const TOOL_LABEL: Record<ToolName, string> = {
     material_price_history: 'Lịch sử giá',
     supplier_comparison: 'So sánh nhà cung cấp',
     distribution_analysis: 'Chi phí cấp phát',
+    supply_requests: 'Phiếu đề xuất cấp',
+    supply_request_analysis: 'Phân tích đề xuất cấp',
+    purchase_requests: 'Phiếu đề xuất mua',
+    purchase_request_analysis: 'Phân tích đề xuất mua',
+    request_lifecycle: 'Vòng đời phiếu',
+    request_backlog: 'Điểm nghẽn phiếu',
+    request_risk_analysis: 'Rủi ro đề xuất',
     purchase_suggestion: 'Đề xuất mua sắm',
     cost_variance: 'Biến động chi phí',
     cost_overview: 'Tổng quan chi phí',
@@ -631,7 +1000,20 @@ type SourceMeta = { tool: string; label: string; module: string; scope?: string;
 const scopeOfRender = (render: ToolOutcome['render']): string | undefined => {
     const a: any = render?.aggregates || {};
     const src =
-        a.distributionAnalysis || a.usageByPlant || a.purchaseAnalysis || a.priceHistory || a.supplierComparison || a.costOverview || a.compareCost || a.transferOrders || a.variance;
+        a.materialRequests ||
+        a.requestAnalysis ||
+        a.requestLifecycle ||
+        a.requestBacklog ||
+        a.requestRiskAnalysis ||
+        a.distributionAnalysis ||
+        a.usageByPlant ||
+        a.purchaseAnalysis ||
+        a.priceHistory ||
+        a.supplierComparison ||
+        a.costOverview ||
+        a.compareCost ||
+        a.transferOrders ||
+        a.variance;
     if (!src) return undefined;
     const parts: string[] = [];
     if (src.plantName) parts.push(String(src.plantName));
@@ -685,6 +1067,20 @@ export const runAssistant = async (messages: AssistantMessage[], emit?: (step: A
                 recordSource(forced.tool, outcome.render);
             }
             toolCalls += 1;
+            if (
+                [
+                    'supply_requests',
+                    'supply_request_analysis',
+                    'purchase_requests',
+                    'purchase_request_analysis',
+                    'request_lifecycle',
+                    'request_backlog',
+                    'request_risk_analysis',
+                ].includes(forced.tool)
+            ) {
+                answer = buildDeterministicAnswer(lastRender) || '';
+                provider = 'heuristic';
+            }
             convo.push({
                 role: 'user',
                 content: `DU LIEU DA TRUY VAN SAN (${forced.tool}) — HAY DUNG NGAY de tra loi, TUYET DOI khong hoi lai: ${JSON.stringify(outcome.ai).slice(0, 3500)}`,
@@ -694,7 +1090,7 @@ export const runAssistant = async (messages: AssistantMessage[], emit?: (step: A
         }
     }
 
-    for (let i = 0; i < MAX_ITERATIONS; i += 1) {
+    for (let i = 0; !answer && i < MAX_ITERATIONS; i += 1) {
         let parsed: any;
         try {
             const ai = await aiProviderService.generateJson<any>({ feature, temperature: 0.1, maxTokens: 1200, messages: convo });
@@ -718,7 +1114,7 @@ export const runAssistant = async (messages: AssistantMessage[], emit?: (step: A
             convo.push({
                 role: 'user',
                 content:
-                    'Tool do khong ton tai. Chi duoc dung: search_assets, locate_asset, transfer_orders, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, cost_overview, compare_cost, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
+                    'Tool do khong ton tai. Chi duoc dung: search_assets, locate_asset, transfer_orders, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, supply_requests, supply_request_analysis, purchase_requests, purchase_request_analysis, request_lifecycle, request_backlog, request_risk_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, cost_overview, compare_cost, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
             });
             continue;
         }
