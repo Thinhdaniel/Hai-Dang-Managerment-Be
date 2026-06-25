@@ -35,7 +35,7 @@ export const aiAssetAssistantSchema = z.object({
 });
 
 export const aiTtsSchema = z.object({
-    text: z.string().trim().min(1).max(2000),
+    text: z.string().trim().min(1).max(4000),
     voice: z.string().trim().max(60).optional(),
     rate: z.string().trim().max(8).optional(),
     pitch: z.string().trim().max(8).optional(),

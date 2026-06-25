@@ -7,11 +7,27 @@ import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 const VI_VOICES = new Set(['vi-VN-HoaiMyNeural', 'vi-VN-NamMinhNeural']);
 const DEFAULT_VOICE = 'vi-VN-HoaiMyNeural';
 
-// Bỏ markdown/emoji để đọc tự nhiên.
+// Chuẩn hoá text cho TTS: bỏ markdown/emoji + BIẾN xuống dòng/gạch đầu dòng thành DẤU CÂU
+// để giọng neural NGHỈ NGẮT đúng nhịp (giống lời đọc review), và đọc đơn vị cho tự nhiên.
 const cleanForSpeech = (t: string) =>
     (t || '')
-        .replace(/[*_`#>~|]/g, ' ')
-        .replace(/\p{Extended_Pictographic}/gu, '')
+        .replace(/\r/g, '')
+        .replace(/\p{Extended_Pictographic}/gu, '') // bỏ emoji
+        .replace(/^\s*#{1,6}\s*/gm, '') // tiêu đề markdown
+        .replace(/^\s*[-*•·–]\s+/gm, '. ') // gạch đầu dòng -> nghỉ như câu mới
+        .replace(/\n{2,}/g, '. ') // đoạn mới -> nghỉ dài
+        .replace(/\n/g, ', ') // xuống dòng đơn -> nghỉ ngắn
+        .replace(/[*_`#>~|]/g, ' ') // ký tự markdown còn lại
+        // đọc đơn vị cho tự nhiên (đứng sau số)
+        .replace(/(\d)\s*đ(?!\p{L})/gu, '$1 đồng') // 896.020đ -> 896.020 đồng (đ không thuộc \w nên không dùng \b)
+        .replace(/(\d)\s*%/g, '$1 phần trăm')
+        .replace(/VN[ĐD](?!\p{L})/giu, 'đồng')
+        // gọn khoảng trắng nhưng GIỮ dấu câu để engine ngắt nhịp
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\s+([.,;:!?])/g, '$1') // không để khoảng trắng trước dấu câu
+        .replace(/([.;:!?])\s*,/g, '$1') // dấu mạnh + phẩy -> giữ dấu mạnh
+        .replace(/,\s*([.;:!?])/g, '$1') // phẩy + dấu mạnh -> giữ dấu mạnh
+        .replace(/([.,;:!?])(?:\s*\1)+/g, '$1') // gộp dấu câu lặp (". . ." -> ".")
         .replace(/\s+/g, ' ')
         .trim();
 
