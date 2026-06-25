@@ -64,6 +64,12 @@ const envVarsSchema = z.object({
     WEB_PUSH_PUBLIC_KEY: z.string().optional(),
     WEB_PUSH_PRIVATE_KEY: z.string().optional(),
     WEB_PUSH_SUBJECT: z.string().optional(),
+    // TELEGRAM NOTIFICATION FALLBACK
+    TELEGRAM_BOT_TOKEN: z.string().optional(),
+    TELEGRAM_BOT_USERNAME: z.string().optional(),
+    TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
+    // INTERNAL CRON WAKE-UP
+    INTERNAL_CRON_SECRET: z.string().optional(),
     // AI PROVIDER
     AI_ENABLED: z
         .string()
@@ -178,6 +184,16 @@ const config = {
         privateKey: envVars.WEB_PUSH_PRIVATE_KEY,
         subject: envVars.WEB_PUSH_SUBJECT || `mailto:${envVars.EMAIL_FROM || envVars.EMAIL_USER}`,
         enabled: Boolean(envVars.WEB_PUSH_PUBLIC_KEY && envVars.WEB_PUSH_PRIVATE_KEY),
+    },
+    telegram: {
+        botToken: envVars.TELEGRAM_BOT_TOKEN,
+        botUsername: envVars.TELEGRAM_BOT_USERNAME?.replace(/^@/, ''),
+        webhookSecret: envVars.TELEGRAM_WEBHOOK_SECRET,
+        enabled: Boolean(envVars.TELEGRAM_BOT_TOKEN && envVars.TELEGRAM_BOT_USERNAME),
+    },
+    internalCron: {
+        secret: envVars.INTERNAL_CRON_SECRET,
+        enabled: Boolean(envVars.INTERNAL_CRON_SECRET),
     },
     ai: {
         enabled: envVars.AI_ENABLED,

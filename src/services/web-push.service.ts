@@ -42,7 +42,7 @@ const configureWebPush = () => {
 
 const isConfigured = configureWebPush();
 
-const buildActionUrl = (notification: Pick<INotification, 'actionType' | 'actionId'> | any) => {
+export const buildActionUrl = (notification: Pick<INotification, 'actionType' | 'actionId'> | any) => {
     const actionType = String(notification.actionType ?? '').replaceAll('-', '_');
     const actionId = notification.actionId ? String(notification.actionId) : '';
 

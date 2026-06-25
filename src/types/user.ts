@@ -18,6 +18,12 @@ export interface IUserSchema extends Document {
     status: boolean;
     plantId?: Types.ObjectId;
     lastLoginAt?: Date;
+    telegramChatId?: string | null;
+    telegramUsername?: string | null;
+    telegramFirstName?: string | null;
+    telegramLinkedAt?: Date | null;
+    telegramDisabledAt?: Date | null;
+    telegramLastError?: string | null;
     isDeleted: boolean;
     deletedAt?: Date;
     createdAt: Date;

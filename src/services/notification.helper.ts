@@ -4,6 +4,7 @@ import Maintenance from '@/models/Maintenance';
 import Notification from '@/models/Notification';
 import { ROLE_GROUPS } from '@/constant/permissions';
 import { sendWebPushToUser } from '@/services/web-push.service';
+import { sendTelegramToUser } from '@/services/telegram.service';
 
 /**
  * Get actor display name by userId
@@ -61,6 +62,7 @@ export const notifyAdmins = async (event: string, data: any, options: NotifyOpti
             emitToUser(managerId, event, notificationPayload);
             if (event === 'notify:new') {
                 void sendWebPushToUser(managerId, notificationPayload);
+                void sendTelegramToUser(managerId, notificationPayload);
             }
             sent += 1;
         }
@@ -95,6 +97,7 @@ export const notifyUser = async (userId: string, event: string, data: any) => {
         emitToUser(userId, event, notificationPayload);
         if (event === 'notify:new') {
             void sendWebPushToUser(userId, notificationPayload);
+            void sendTelegramToUser(userId, notificationPayload);
         }
     } catch (error) {
         console.error('[Notification] Error notifying user:', error);
@@ -106,6 +109,8 @@ export const notifyUser = async (userId: string, event: string, data: any) => {
  * Should be called periodically (e.g., via cron job or after maintenance status check)
  */
 export const checkAndNotifyOverdueMaintenance = async () => {
+    let checked = 0;
+    let notified = 0;
     try {
         const now = new Date();
 
@@ -116,6 +121,7 @@ export const checkAndNotifyOverdueMaintenance = async () => {
             endDate: { $lt: now },
         }).populate('assetId');
 
+        checked = overdueMaintenances.length;
         for (const maintenance of overdueMaintenances) {
             const assetName = (maintenance.assetId as any)?.name || 'Thiết bị';
 
@@ -129,8 +135,11 @@ export const checkAndNotifyOverdueMaintenance = async () => {
 
             // Update status to overdue
             await Maintenance.findByIdAndUpdate(maintenance._id, { status: 'overdue' });
+            notified += 1;
         }
     } catch (error) {
         console.error('[Notification] Error checking overdue maintenance:', error);
     }
+
+    return { checked, notified };
 };

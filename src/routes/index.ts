@@ -31,6 +31,8 @@ import systemSettingRoutes from './system-setting.route';
 import dataQualityRoutes from './data-quality.route';
 import assetDisposalRoutes from './asset-disposal.route';
 import digestRoutes from './digest.route';
+import telegramRoutes from './telegram.route';
+import internalRoutes from './internal.route';
 
 const router = Router();
 
@@ -65,5 +67,7 @@ router.use('/system-settings', systemSettingRoutes);
 router.use('/data-quality', dataQualityRoutes);
 router.use('/asset-disposals', assetDisposalRoutes);
 router.use('/digests', digestRoutes);
+router.use('/telegram', telegramRoutes);
+router.use('/internal', internalRoutes);
 
 export default router;

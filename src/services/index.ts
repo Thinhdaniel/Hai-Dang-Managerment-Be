@@ -10,6 +10,7 @@ export * as borrowingService from './borrowing.service';
 export * as dashboardService from './dashboard.service';
 export * as notificationService from './notification.service';
 export * as webPushService from './web-push.service';
+export * as telegramService from './telegram.service';
 export * as qrLabelService from './qr-label.service';
 export * as qrScanLogService from './qr-scan-log.service';
 export * as machineCodeService from './machine-code.service';

@@ -75,6 +75,34 @@ const UserSchema = new mongoose.Schema(
         lastLoginAt: {
             type: Date,
         },
+        telegramChatId: {
+            type: String,
+            trim: true,
+            default: null,
+        },
+        telegramUsername: {
+            type: String,
+            trim: true,
+            default: null,
+        },
+        telegramFirstName: {
+            type: String,
+            trim: true,
+            default: null,
+        },
+        telegramLinkedAt: {
+            type: Date,
+            default: null,
+        },
+        telegramDisabledAt: {
+            type: Date,
+            default: null,
+        },
+        telegramLastError: {
+            type: String,
+            trim: true,
+            default: null,
+        },
         isDeleted: {
             type: Boolean,
             default: false,
@@ -90,6 +118,7 @@ const UserSchema = new mongoose.Schema(
 );
 
 UserSchema.index({ plantId: 1 });
+UserSchema.index({ telegramChatId: 1 }, { sparse: true });
 
 UserSchema.pre('save', async function () {
     if (this.isModified('password')) {
