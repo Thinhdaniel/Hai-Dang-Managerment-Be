@@ -4,6 +4,7 @@ import PushSubscription from '@/models/PushSubscription';
 import Notification from '@/models/Notification';
 import type { INotification } from '@/models/Notification';
 import { emitToUser } from '@/lib/socket';
+import { sendTelegramToUser } from '@/services/telegram.service';
 import customResponse from '@/utils/response';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
@@ -439,12 +440,14 @@ export const sendTestNotification = async (req: Request, res: Response, _next: N
     const payload = notification.toObject();
     emitToUser(String(req.userId), 'notify:new', payload);
     const delivery = await sendWebPushToUser(String(req.userId), payload);
+    const telegramDelivery = await sendTelegramToUser(String(req.userId), payload);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: {
                 notification: payload,
                 delivery,
+                telegramDelivery,
             },
             message: 'Da gui thong bao thu nghiem',
             status: StatusCodes.OK,

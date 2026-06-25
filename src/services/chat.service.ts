@@ -11,6 +11,7 @@ import Transfer from '@/models/Transfer';
 import User from '@/models/User';
 import { getUserPlantId, isManagerRole, toId } from '@/services/material-workflow.helpers';
 import { notifyUser } from '@/services/notification.helper';
+import { sendTelegramToUser } from '@/services/telegram.service';
 import { sendWebPushToUser } from '@/services/web-push.service';
 import customResponse from '@/utils/response';
 import { v2 as cloudinary, type UploadApiResponse } from 'cloudinary';
@@ -364,7 +365,7 @@ const emitConversationSnapshot = async (conversation: IChatConversation, message
                 });
 
                 if (participantId !== toId(message.senderId) && state?.muted !== true) {
-                    void sendWebPushToUser(participantId, {
+                    const notificationPayload = {
                         _id: message._id,
                         title: 'Tin nhắn nội bộ',
                         message: `${getUserDisplayName(message.senderId)}: ${preview.slice(0, 120)}`,
@@ -373,7 +374,10 @@ const emitConversationSnapshot = async (conversation: IChatConversation, message
                         actionId: String(populatedConversation._id),
                         isRead: false,
                         createdAt: message.createdAt,
-                    });
+                    };
+
+                    void sendWebPushToUser(participantId, notificationPayload);
+                    void sendTelegramToUser(participantId, notificationPayload);
                 }
             }
         })
