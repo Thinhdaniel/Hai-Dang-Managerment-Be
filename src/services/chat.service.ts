@@ -1013,20 +1013,35 @@ export const getConversations = async (req: Request, res: Response, _next: NextF
         throw new UnAuthorizedError('Phien dang nhap khong hop le');
     }
 
+    // Lưu trữ theo thời gian: hội thoại im hơn N ngày tự ẩn khỏi danh sách chính (không xoá data).
+    // Có tin mới -> lastMessageAt cập nhật -> tự quay lại danh sách hoạt động.
+    const ARCHIVE_AFTER_DAYS = 90;
+    const showArchived = String(req.query.archived) === 'true';
+    const archiveCutoff = new Date(Date.now() - ARCHIVE_AFTER_DAYS * 24 * 60 * 60 * 1000);
+    const baseFilter = { isDeleted: { $ne: true }, participantIds: toObjectId(userId) };
+    // Lưu trữ: đã từng có tin nhưng cũ hơn mốc. Hoạt động: còn mới, HOẶC chưa có tin nào (mới tạo).
+    const activityFilter = showArchived
+        ? { lastMessageAt: { $ne: null, $lt: archiveCutoff } }
+        : { $or: [{ lastMessageAt: { $gte: archiveCutoff } }, { lastMessageAt: null }] };
+
     const conversations = await populateConversation(
-        ChatConversation.find({
-            isDeleted: { $ne: true },
-            participantIds: toObjectId(userId),
-        })
+        ChatConversation.find({ ...baseFilter, ...activityFilter })
             .sort({ lastMessageAt: -1, updatedAt: -1 })
             .limit(Math.min(Number(req.query.limit || 60), 100))
     );
+
+    const [unreadCount, archivedCount] = await Promise.all([
+        getTotalUnreadForUser(userId),
+        ChatConversation.countDocuments({ ...baseFilter, lastMessageAt: { $ne: null, $lt: archiveCutoff } }),
+    ]);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: {
                 conversations: conversations.map((conversation: any) => serializeConversation(conversation, userId)),
-                unreadCount: await getTotalUnreadForUser(userId),
+                unreadCount,
+                archivedCount,
+                archived: showArchived,
             },
             message: 'Lay danh sach hoi thoai thanh cong',
             status: StatusCodes.OK,
