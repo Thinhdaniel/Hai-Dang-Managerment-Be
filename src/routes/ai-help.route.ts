@@ -17,6 +17,8 @@ import { askAgentAssistant, streamAgentAssistant } from '@/services/ai-agent.ser
 import { synthesizeSpeech } from '@/services/ai-tts.service';
 import { matchMaterialsByAi } from '@/services/ai-material-match.service';
 import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
+import { scanPurchaseInvoice } from '@/services/ai-ocr.service';
+import { imageUpload } from '@/middlewares/multerMiddleware';
 
 const router = Router();
 
@@ -30,5 +32,6 @@ router.post('/assistant/stream', validator(aiAssetAssistantSchema), asyncHandler
 router.post('/tts', validator(aiTtsSchema), asyncHandler(synthesizeSpeech));
 router.post('/material-match', validator(aiMaterialMatchSchema), asyncHandler(matchMaterialsByAi));
 router.post('/chat-summary', validator(aiChatSummarySchema), asyncHandler(summarizeChatConversation));
+router.post('/ocr/purchase-invoice', imageUpload.single('image'), asyncHandler(scanPurchaseInvoice));
 
 export default router;

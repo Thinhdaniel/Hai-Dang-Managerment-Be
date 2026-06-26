@@ -4,9 +4,16 @@ import { STRONG_FALLBACK_MODEL } from '@/constant/aiModels';
 
 export type AiProviderName = 'ollama' | '9router' | 'openrouter' | 'fallback' | 'disabled';
 
+// Nội dung tin nhắn: text thuần (đa số tác vụ) hoặc đa phương thức (text + ảnh) cho vision/OCR.
+// Dạng mảng theo chuẩn OpenAI-compatible: [{type:'text',text}, {type:'image_url',image_url:{url}}].
+// Chỉ nhánh 9router/openrouter hỗ trợ ảnh; Ollama bỏ qua (OCR luôn đi qua 9router).
+export type AiContentPart =
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; image_url: { url: string } };
+
 export type AiChatMessage = {
     role: 'system' | 'user' | 'assistant';
-    content: string;
+    content: string | AiContentPart[];
 };
 
 export type AiGenerateTextOptions = {

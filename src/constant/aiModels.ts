@@ -16,6 +16,7 @@ export const AI_FEATURES = {
     ASSET_ANSWER: 'asset-answer', // Trợ lý máy: diễn giải kết quả (luôn dùng model rẻ)
     MATERIAL_MATCH: 'material-match', // Khớp tên vật tư Excel với danh mục (JSON, cần chính xác)
     CHAT_SUMMARY: 'chat-summary', // Tóm tắt hội thoại nội bộ
+    OCR_INVOICE: 'ocr-invoice', // OCR ảnh hóa đơn mua vật tư -> trích dòng (vision, JSON)
     HELP: 'help', // Trợ lý hướng dẫn sử dụng
     DIGEST: 'digest', // Bản tin AI định kỳ cho giám đốc (chất lượng cao, chạy ít lần)
     VARIANCE: 'variance', // Giải thích biến động chỉ số (câu ngắn, theo nhu cầu)
@@ -56,6 +57,8 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string> = {
     // Tóm tắt chat trả JSON: dùng Claude Haiku cho JSON ỔN ĐỊNH (như material-match).
     // gc/gemini-2.5-flash thỉnh thoảng trả JSON bẩn/cắt cụt -> parse lỗi -> rơi fallback oan.
     'chat-summary': 'kr/claude-haiku-4.5',
+    // OCR hóa đơn giấy: cần model VISION (đọc ảnh). gemini-2.5-flash đọc ảnh + tiếng Việt tốt, rẻ.
+    'ocr-invoice': 'gc/gemini-2.5-flash',
     help: 'kr/claude-sonnet-4.5',
     digest: 'gc/gemini-2.5-pro', // bản tin giám đốc: chất lượng cao, chạy ít
     variance: 'kr/claude-haiku-4.5',
