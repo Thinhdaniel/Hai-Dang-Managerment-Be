@@ -337,10 +337,10 @@ const num = (v: unknown) => Math.round(Number(v || 0));
 
 const aggregatesToChart = (agg: any): AgenticChart | null => {
     if (!agg || typeof agg !== 'object') return null;
-    const mk = (type: ChartType, title: string, categories: string[], name: string, data: number[], unit: string): AgenticChart => ({
+    const mk = (type: ChartType, title: string, categories: any[], name: string, data: number[], unit: string): AgenticChart => ({
         type,
         title,
-        categories,
+        categories: categories.map((c) => (c == null || c === '' ? 'Khác' : String(c))), // chống nhãn "null"
         series: [{ name, data }],
         unit,
     });
@@ -380,8 +380,17 @@ const aggregatesToChart = (agg: any): AgenticChart | null => {
         );
     }
     if (agg.purchaseAnalysis?.rows?.length) {
-        const r = agg.purchaseAnalysis.rows.slice(0, 12);
-        return mk('bar', 'Phân tích mua vật tư', r.map((x: any) => x.name || x.materialName), 'Kỳ này', r.map((x: any) => num(x.current)), 'đ');
+        const pa = agg.purchaseAnalysis;
+        const r = pa.rows.slice(0, 12);
+        const title = pa.groupBy === 'supplier' ? 'Chi phí mua theo nhà cung cấp' : 'Chi phí mua theo vật tư';
+        return mk(
+            'bar',
+            title,
+            r.map((x: any) => x.label || x.name || x.materialName || x.supplierName || 'Khác'),
+            'Kỳ này',
+            r.map((x: any) => num(x.current)),
+            'đ'
+        );
     }
     if (agg.supplierComparison?.suppliers?.length) {
         const s = agg.supplierComparison.suppliers.slice(0, 12);
