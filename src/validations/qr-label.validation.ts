@@ -13,7 +13,7 @@ const optionalObjectId = (label: string) => zObjectId(label).optional();
 
 const assetPayloadSchema = z.object({
     name: zRequiredString('Ten thiet bi'),
-    machineCode: zRequiredString('Ma may'),
+    machineCode: optionalString, // để trống -> BE tự sinh mã thông minh
     serial: optionalString,
     type: zRequiredString('Loai may'),
     model: zRequiredString('Model may'),

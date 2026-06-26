@@ -7,8 +7,10 @@ import { QR_LABEL_BATCH_STATUS, QR_LABEL_STATUS, QR_LABEL_TYPE } from '@/constan
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import { emitToAll } from '@/lib/socket';
 import Asset from '@/models/Asset';
+import Brand from '@/models/Brand';
 import QrLabel from '@/models/QrLabel';
 import QrLabelBatch from '@/models/QrLabelBatch';
+import { ensureTypeCode, generateMachineCode } from '@/services/machine-code.service';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { serializeAsset, serializePlant, serializePublicAsset } from '@/utils/serializers';
@@ -611,6 +613,22 @@ export const activateMachineLabel = async (req: Request, res: Response, next: Ne
     };
 
     assertValidAssetOwnershipStatus(assetPayload.status, assetPayload.ownershipType);
+
+    // Mã máy để trống -> tự sinh mã thông minh (giống tạo máy thường) để bớt thao tác hiện trường.
+    let machineCode = typeof assetPayload.machineCode === 'string' ? assetPayload.machineCode.trim() : '';
+    if (!machineCode) {
+        const brand = await Brand.findOne({ _id: assetPayload.brandId, isDeleted: { $ne: true } })
+            .select('name')
+            .lean();
+        const generated = await generateMachineCode({
+            type: assetPayload.type,
+            brandName: (brand as any)?.name,
+            ownershipType: assetPayload.ownershipType,
+        });
+        machineCode = generated.machineCode;
+        await ensureTypeCode(assetPayload.type, generated.typeCode, false);
+    }
+    assetPayload.machineCode = machineCode;
 
     const session = await mongoose.startSession();
     let createdAssetId = '';
