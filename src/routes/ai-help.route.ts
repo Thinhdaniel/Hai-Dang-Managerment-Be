@@ -18,6 +18,7 @@ import { synthesizeSpeech } from '@/services/ai-tts.service';
 import { matchMaterialsByAi } from '@/services/ai-material-match.service';
 import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
 import { scanPurchaseInvoice } from '@/services/ai-ocr.service';
+import { reviewPurchaseRequest } from '@/services/ai-approval-review.service';
 import { imageUpload } from '@/middlewares/multerMiddleware';
 
 const router = Router();
@@ -33,5 +34,6 @@ router.post('/tts', validator(aiTtsSchema), asyncHandler(synthesizeSpeech));
 router.post('/material-match', validator(aiMaterialMatchSchema), asyncHandler(matchMaterialsByAi));
 router.post('/chat-summary', validator(aiChatSummarySchema), asyncHandler(summarizeChatConversation));
 router.post('/ocr/purchase-invoice', imageUpload.single('image'), asyncHandler(scanPurchaseInvoice));
+router.post('/purchase-request/:id/review', asyncHandler(reviewPurchaseRequest));
 
 export default router;
