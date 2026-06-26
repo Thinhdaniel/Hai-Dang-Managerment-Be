@@ -7,6 +7,7 @@ import PurchaseRequest from '@/models/PurchaseRequest';
 import Plant from '@/models/Plant';
 import { aiProviderService } from '@/services/ai/ai-provider.service';
 import { buildFacilityCostReport } from '@/services/report.service';
+import { runAssistant } from '@/services/ai-agent.service';
 import customResponse from '@/utils/response';
 
 // AI Analytics Studio: câu hỏi ngôn ngữ tự nhiên -> chart-spec (chọn TRONG danh mục cho phép,
@@ -249,14 +250,16 @@ const sanitizeSpec = (raw: any): Spec => {
     return { metric, dimension, period, chartType, title };
 };
 
-const aiSpecFromQuestion = async (question: string): Promise<Spec> => {
+// Map câu hỏi sang catalog. Trả null nếu KHÔNG khớp metric nào (để fallback agentic).
+const aiMapSpec = async (question: string): Promise<Spec | null> => {
     const prompt = [
-        'Ban map cau hoi cua nguoi dung sang chart-spec cho he thong quan ly may/vat tu.',
+        'Ban map cau hoi nguoi dung sang chart-spec cho he thong quan ly may/vat tu.',
         'CHI chon metric & dimension TRONG danh muc duoi. Khong bia metric/dimension moi.',
+        'Neu cau hoi KHONG khop chinh xac metric nao trong danh muc, tra {"metric":"none"}.',
         'Danh muc metric (kem cac chieu hop le):',
         catalogForPrompt(),
-        'period = so thang gan nhat (mac dinh 6) cho metric co thoi gian; chartType = bar|line|pie.',
-        'Chi tra JSON: {"metric":"...","dimension":"...","period":6,"chartType":"bar","title":"tieu de tieng Viet ngan"}',
+        'period = so thang gan nhat (mac dinh 6); chartType = bar|line|pie.',
+        'Chi tra JSON: {"metric":"...","dimension":"...","period":6,"chartType":"bar","title":"tieu de ngan"} hoac {"metric":"none"}',
         `Cau hoi: ${question}`,
     ].join('\n');
     const aiResult = await aiProviderService.generateJson<any>({
@@ -268,7 +271,83 @@ const aiSpecFromQuestion = async (question: string): Promise<Spec> => {
             { role: 'user', content: prompt },
         ],
     });
-    return sanitizeSpec(aiResult.data);
+    const raw = aiResult.data;
+    if (!raw?.metric || raw.metric === 'none' || !(METRICS as any)[raw.metric]) return null;
+    return sanitizeSpec(raw);
+};
+
+// ----- Bảng đối chiếu số (để giám đốc kiểm chứng) -----
+const chartToTable = (chart: ChartData) => ({
+    columns: ['Hạng mục', chart.series[0]?.name || 'Giá trị'],
+    rows: chart.categories.map((c, i) => [c, chart.series[0]?.data[i] ?? 0]),
+});
+
+// ----- Converter: aggregates (số THẬT từ tool) -> chart. Số lấy nguyên văn, không bịa. -----
+type AgenticChart = { type: ChartType; title: string; categories: string[]; series: { name: string; data: number[] }[]; unit: string };
+const num = (v: unknown) => Math.round(Number(v || 0));
+
+const aggregatesToChart = (agg: any): AgenticChart | null => {
+    if (!agg || typeof agg !== 'object') return null;
+    const mk = (type: ChartType, title: string, categories: string[], name: string, data: number[], unit: string): AgenticChart => ({
+        type,
+        title,
+        categories,
+        series: [{ name, data }],
+        unit,
+    });
+
+    if (agg.distributionAnalysis?.materials?.length) {
+        const ms = agg.distributionAnalysis.materials.slice(0, 12);
+        return mk('bar', 'Chi phí cấp phát theo vật tư', ms.map((m: any) => m.materialName), 'Giá trị', ms.map((m: any) => num(m.totalValue)), 'đ');
+    }
+    if (agg.variance?.drivers?.length) {
+        const d = agg.variance.drivers.slice(0, 12);
+        return mk(
+            'bar',
+            agg.variance.metricLabel || 'Yếu tố biến động',
+            d.map((x: any) => x.label),
+            'Chênh lệch',
+            d.map((x: any) => num(x.delta ?? Number(x.current || 0) - Number(x.previous || 0))),
+            agg.variance.isCost ? 'đ' : ''
+        );
+    }
+    if (agg.purchaseAnalysis?.rows?.length) {
+        const r = agg.purchaseAnalysis.rows.slice(0, 12);
+        return mk('bar', 'Phân tích mua vật tư', r.map((x: any) => x.name || x.materialName), 'Kỳ này', r.map((x: any) => num(x.current)), 'đ');
+    }
+    if (agg.supplierComparison?.suppliers?.length) {
+        const s = agg.supplierComparison.suppliers.slice(0, 12);
+        return mk('bar', `Giá nhà cung cấp${agg.supplierComparison.materialName ? `: ${agg.supplierComparison.materialName}` : ''}`, s.map((x: any) => x.supplierName), 'Giá', s.map((x: any) => num(x.value)), 'đ');
+    }
+    if (agg.priceHistory?.points?.length) {
+        const p = agg.priceHistory.points;
+        return mk(
+            'line',
+            `Lịch sử giá${agg.priceHistory.materialName ? `: ${agg.priceHistory.materialName}` : ''}`,
+            p.map((x: any, i: number) => (x.date ? new Date(x.date).toLocaleDateString('vi-VN', { month: '2-digit', year: '2-digit' }) : String(i + 1))),
+            'Đơn giá',
+            p.map((x: any) => num(x.unitPrice)),
+            'đ'
+        );
+    }
+    if (agg.requestAnalysis?.byPlant?.length) {
+        const b = agg.requestAnalysis.byPlant.slice(0, 12);
+        const isMoney = b[0]?.value != null;
+        return mk('bar', 'Đề xuất theo cơ sở', b.map((x: any) => x.label), isMoney ? 'Giá trị' : 'Số phiếu', b.map((x: any) => num(x.value ?? x.count)), isMoney ? 'đ' : 'phiếu');
+    }
+    if (agg.requestAnalysis?.byStatus?.length) {
+        const b = agg.requestAnalysis.byStatus.slice(0, 10);
+        return mk('pie', 'Đề xuất theo trạng thái', b.map((x: any) => x.label), 'Số phiếu', b.map((x: any) => num(x.count)), 'phiếu');
+    }
+    if (agg.usageByPlant?.materials?.length) {
+        const ms = agg.usageByPlant.materials.slice(0, 12);
+        return mk('bar', 'Vật tư cấp nhiều nhất', ms.map((m: any) => m.materialName), 'Số lượng', ms.map((m: any) => num(m.totalQty)), '');
+    }
+    if (agg.topBroken?.length) {
+        const t = agg.topBroken.slice(0, 12);
+        return mk('bar', 'Máy hỏng nhiều nhất', t.map((x: any) => x.machineCode || x.name), 'Số lần', t.map((x: any) => num(x.count)), 'lần');
+    }
+    return null;
 };
 
 const fmtNum = (v: number, unit: string) => (unit === 'đ' ? `${Math.round(v).toLocaleString('vi-VN')}đ` : `${v.toLocaleString('vi-VN')} ${unit}`);
@@ -285,42 +364,62 @@ const buildNarrative = (spec: Spec, chart: ChartData): string => {
     return `Tổng ${fmtNum(total, chart.unit)} qua ${chart.categories.length} ${DIM_LABEL[spec.dimension]}. Cao nhất: ${top} (${fmtNum(topVal, chart.unit)}).`;
 };
 
+const ok = (res: Response, data: any) =>
+    res.status(StatusCodes.OK).json(customResponse({ data, message: 'Đã phân tích', status: StatusCodes.OK, success: true }));
+
+const catalogResult = async (spec: Spec, plantId: string | undefined, aiUsed: boolean) => {
+    const chart = await buildChart(spec.metric, spec.dimension, spec.period, plantId);
+    const meta = METRICS[spec.metric];
+    return {
+        source: 'catalog' as const,
+        trusted: true,
+        spec: { ...spec, metricLabel: meta.label, dimensionLabel: DIM_LABEL[spec.dimension] },
+        chart: { type: spec.chartType, title: spec.title, ...chart },
+        table: chartToTable(chart),
+        narrative: buildNarrative(spec, chart),
+        aiUsed,
+    };
+};
+
 export const runAnalyticsQuery = async (req: Request, res: Response) => {
     const question = String(req.body.question || '').trim();
     const providedSpec = req.body.spec;
     const plantId = req.body.plantId ? String(req.body.plantId) : undefined;
 
-    let spec: Spec;
-    let aiUsed = false;
-    if (providedSpec) {
-        spec = sanitizeSpec(providedSpec); // chart đã ghim -> không cần AI, dựng lại nhanh
-    } else if (question) {
+    // 1) Chart đã ghim -> dựng lại trực tiếp theo spec (catalog, số chuẩn).
+    if (providedSpec) return ok(res, await catalogResult(sanitizeSpec(providedSpec), plantId, false));
+
+    if (question) {
+        // 2) Ưu tiên CATALOG (số chuẩn, đúng công thức báo cáo).
+        let mapped: Spec | null = null;
         try {
-            spec = await aiSpecFromQuestion(question);
-            aiUsed = true;
+            mapped = await aiMapSpec(question);
         } catch {
-            spec = sanitizeSpec({}); // AI lỗi -> mặc định an toàn (số máy theo cơ sở)
+            mapped = null;
         }
-    } else {
-        spec = sanitizeSpec({});
+        if (mapped) return ok(res, await catalogResult(mapped, plantId, true));
+
+        // 3) Catalog không phủ -> FALLBACK AGENTIC (tham khảo): số lấy từ tool, kèm bảng đối chiếu.
+        try {
+            const r = await runAssistant([{ role: 'user', content: question }]);
+            const ac = aggregatesToChart(r.aggregates);
+            const chart = ac ? { type: ac.type, title: ac.title, categories: ac.categories, series: ac.series, unit: ac.unit } : null;
+            const table = ac ? chartToTable({ categories: ac.categories, series: ac.series, unit: ac.unit }) : undefined;
+            return ok(res, {
+                source: 'agentic',
+                trusted: false,
+                chart,
+                table,
+                narrative: r.answer || 'Đã phân tích.',
+                aiUsed: true,
+            });
+        } catch {
+            return ok(res, { source: 'agentic', trusted: false, chart: null, narrative: 'Chưa phân tích được câu hỏi này, thử diễn đạt khác.', aiUsed: false });
+        }
     }
 
-    const chart = await buildChart(spec.metric, spec.dimension, spec.period, plantId);
-    const meta = METRICS[spec.metric];
-
-    return res.status(StatusCodes.OK).json(
-        customResponse({
-            data: {
-                spec: { ...spec, metricLabel: meta.label, dimensionLabel: DIM_LABEL[spec.dimension] },
-                chart: { type: spec.chartType, title: spec.title, ...chart },
-                narrative: buildNarrative(spec, chart),
-                aiUsed,
-            },
-            message: 'Đã phân tích',
-            status: StatusCodes.OK,
-            success: true,
-        })
-    );
+    // 4) Rỗng -> mặc định an toàn.
+    return ok(res, await catalogResult(sanitizeSpec({}), plantId, false));
 };
 
 // Danh mục để FE gợi ý câu hỏi mẫu / nhãn.
