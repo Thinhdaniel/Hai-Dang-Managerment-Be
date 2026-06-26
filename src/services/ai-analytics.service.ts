@@ -250,6 +250,55 @@ const sanitizeSpec = (raw: any): Spec => {
     return { metric, dimension, period, chartType, title };
 };
 
+// Định tuyến từ khóa XÁC ĐỊNH (chạy trước AI): câu phân tích/so sánh rõ ràng -> catalog ngay,
+// nhanh + luôn đúng + không phụ thuộc AI. Chỉ bắt khi có "tín hiệu phân tích" để không cướp
+// các câu liệt kê ("máy nào đang bảo trì") vốn nên đi agentic.
+const normQ = (s: string) =>
+    s
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/đ/g, 'd');
+
+const keywordSpec = (question: string): Spec | null => {
+    const q = normQ(question);
+    const has = (...ws: string[]) => ws.some((w) => q.includes(w));
+    const analytical = has(
+        'theo',
+        'so sanh',
+        'giua',
+        'phan bo',
+        'bao nhieu',
+        'tong',
+        'xu huong',
+        'cac co so',
+        'moi co so',
+        'tung co so',
+        'bieu do'
+    );
+    if (!analytical) return null;
+
+    const isMoney = has('chi phi', 'gia tri', 'tien', 'von', 'tong tien');
+    let metric: MetricKey | null = null;
+    if (has('cap phat')) metric = 'distribution_cost';
+    else if (has('sua ngoai')) metric = 'external_repair_cost';
+    else if (has('tong chi phi', 'chi phi van hanh')) metric = 'total_cost';
+    else if (has('bao tri')) metric = 'maintenance_count';
+    else if (has('de xuat', 'mua sam', 'mua vat tu', 'don mua')) metric = isMoney ? 'purchase_value' : 'request_count';
+    else if (has('so may', 'so luong may', 'may theo', 'phan bo may', 'co bao nhieu may')) metric = 'asset_count';
+    if (!metric) return null;
+
+    const meta = METRICS[metric];
+    let dim: Dimension = meta.dims[0];
+    if (has('thang', 'xu huong', 'theo ky') && meta.dims.includes('month')) dim = 'month';
+    else if (has('trang thai') && meta.dims.includes('status')) dim = 'status';
+    else if (has('loai may', 'theo loai') && meta.dims.includes('type')) dim = 'type';
+    else if (has('noi bo', 'sua ngoai') && meta.dims.includes('repairMode')) dim = 'repairMode';
+    else if (has('co so', 'giua', 'so sanh') && meta.dims.includes('plant')) dim = 'plant';
+
+    return sanitizeSpec({ metric, dimension: dim, period: 6, title: `${meta.label} theo ${DIM_LABEL[dim]}` });
+};
+
 // Map câu hỏi sang catalog. Trả null nếu KHÔNG khớp metric nào (để fallback agentic).
 const aiMapSpec = async (question: string): Promise<Spec | null> => {
     const prompt = [
@@ -390,7 +439,11 @@ export const runAnalyticsQuery = async (req: Request, res: Response) => {
     if (providedSpec) return ok(res, await catalogResult(sanitizeSpec(providedSpec), plantId, false));
 
     if (question) {
-        // 2) Ưu tiên CATALOG (số chuẩn, đúng công thức báo cáo).
+        // 2a) Định tuyến từ khóa xác định -> catalog ngay (nhanh, không cần AI).
+        const kw = keywordSpec(question);
+        if (kw) return ok(res, await catalogResult(kw, plantId, false));
+
+        // 2b) AI map sang CATALOG (số chuẩn, đúng công thức báo cáo).
         let mapped: Spec | null = null;
         try {
             mapped = await aiMapSpec(question);
