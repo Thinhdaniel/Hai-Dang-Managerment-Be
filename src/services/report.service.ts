@@ -145,7 +145,7 @@ const buildMaintenancePlantScope = (plantId?: string, assetIds?: mongoose.Types.
     };
 };
 
-const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
+export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
     const distributionMatch: Record<string, any> = {
         isDeleted: { $ne: true },
         status: { $in: DISTRIBUTION_STATUSES },

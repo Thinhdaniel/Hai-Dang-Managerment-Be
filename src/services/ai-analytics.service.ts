@@ -6,13 +6,21 @@ import Maintenance from '@/models/Maintenance';
 import PurchaseRequest from '@/models/PurchaseRequest';
 import Plant from '@/models/Plant';
 import { aiProviderService } from '@/services/ai/ai-provider.service';
+import { buildFacilityCostReport } from '@/services/report.service';
 import customResponse from '@/utils/response';
 
 // AI Analytics Studio: câu hỏi ngôn ngữ tự nhiên -> chart-spec (chọn TRONG danh mục cho phép,
 // chống ảo giác) -> BE chạy aggregation thật -> trả series cho FE vẽ. Không để AI sinh truy vấn thô.
 
 type Dimension = 'plant' | 'status' | 'type' | 'month' | 'repairMode';
-type MetricKey = 'asset_count' | 'maintenance_count' | 'request_count' | 'purchase_value';
+type MetricKey =
+    | 'asset_count'
+    | 'maintenance_count'
+    | 'request_count'
+    | 'purchase_value'
+    | 'distribution_cost'
+    | 'external_repair_cost'
+    | 'total_cost';
 type ChartType = 'bar' | 'line' | 'pie';
 
 const METRICS: Record<MetricKey, { label: string; dims: Dimension[]; unit: string; defaultChart: ChartType; timed: boolean }> = {
@@ -20,6 +28,9 @@ const METRICS: Record<MetricKey, { label: string; dims: Dimension[]; unit: strin
     maintenance_count: { label: 'Số phiếu bảo trì', dims: ['month', 'type', 'repairMode', 'status'], unit: 'phiếu', defaultChart: 'line', timed: true },
     request_count: { label: 'Số phiếu đề xuất mua', dims: ['plant', 'month', 'status'], unit: 'phiếu', defaultChart: 'bar', timed: true },
     purchase_value: { label: 'Giá trị đề xuất mua', dims: ['plant', 'month', 'status'], unit: 'đ', defaultChart: 'bar', timed: true },
+    distribution_cost: { label: 'Chi phí cấp phát vật tư', dims: ['plant', 'month'], unit: 'đ', defaultChart: 'bar', timed: true },
+    external_repair_cost: { label: 'Chi phí sửa ngoài', dims: ['plant', 'month'], unit: 'đ', defaultChart: 'bar', timed: true },
+    total_cost: { label: 'Tổng chi phí vận hành', dims: ['plant', 'month'], unit: 'đ', defaultChart: 'bar', timed: true },
 };
 
 const DIM_LABEL: Record<Dimension, string> = {
@@ -94,6 +105,39 @@ const buildChart = async (metric: MetricKey, dimension: Dimension, period: numbe
     const meta = METRICS[metric];
     const unit = meta.unit;
     const plantOid = plantId ? new Types.ObjectId(plantId) : undefined;
+
+    // ----- CHI PHÍ (cấp phát / sửa ngoài / tổng) — tái dùng ĐÚNG công thức report.service -----
+    if (metric === 'distribution_cost' || metric === 'external_repair_cost' || metric === 'total_cost') {
+        const report = await buildFacilityCostReport({
+            groupBy: 'month',
+            startDate: monthStart(period - 1),
+            endDate: new Date(),
+            plantId,
+        });
+        const pick =
+            metric === 'distribution_cost'
+                ? 'materialDistributionCost'
+                : metric === 'external_repair_cost'
+                  ? 'externalRepairCost'
+                  : 'totalCost';
+        if (dimension === 'month') {
+            const rows = [...report.costByPeriod].sort((a, b) => a.period.localeCompare(b.period));
+            return {
+                categories: rows.map((r) => r.period),
+                series: [{ name: meta.label, data: rows.map((r) => Math.round((r as any)[pick] || 0)) }],
+                unit,
+            };
+        }
+        const rows = report.costByPlant
+            .map((r) => ({ name: r.plantName, value: Math.round((r as any)[pick] || 0) }))
+            .filter((r) => r.value > 0)
+            .sort((a, b) => b.value - a.value);
+        return {
+            categories: rows.map((r) => r.name),
+            series: [{ name: meta.label, data: rows.map((r) => r.value) }],
+            unit,
+        };
+    }
 
     // ----- ASSET_COUNT (không lọc theo thời gian; máy là hiện trạng) -----
     if (metric === 'asset_count') {
@@ -291,12 +335,13 @@ export const getAnalyticsCatalog = async (_req: Request, res: Response) => {
                     dimensions: m.dims.map((d) => ({ key: d, label: DIM_LABEL[d] })),
                 })),
                 samples: [
+                    'Chi phí cấp phát vật tư theo cơ sở',
+                    'So sánh tổng chi phí vận hành giữa các cơ sở',
+                    'Chi phí sửa ngoài 6 tháng gần nhất',
                     'Số máy theo cơ sở',
                     'Phân bố máy theo trạng thái',
-                    'Số phiếu bảo trì 6 tháng gần nhất',
-                    'Bảo trì nội bộ so với sửa ngoài',
                     'Giá trị đề xuất mua theo cơ sở',
-                    'Đề xuất mua theo trạng thái',
+                    'Số phiếu bảo trì 6 tháng gần nhất',
                 ],
             },
             message: 'Danh mục phân tích',
