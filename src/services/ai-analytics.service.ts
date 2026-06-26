@@ -345,6 +345,25 @@ const aggregatesToChart = (agg: any): AgenticChart | null => {
         unit,
     });
 
+    // Cơ cấu chi phí (mua / cấp phát / sửa ngoài) -> pie.
+    if (agg.costOverview?.purchase) {
+        const c = agg.costOverview;
+        const v = (b: any) => num(b?.current ?? 0);
+        return mk(
+            'pie',
+            `Cơ cấu chi phí ${c.periodLabel || ''}`.trim(),
+            ['Mua vật tư', 'Cấp phát', 'Sửa ngoài'],
+            'Chi phí',
+            [v(c.purchase), v(c.distribution), v(c.repair)],
+            'đ'
+        );
+    }
+    // Mua vs Cấp phát -> bar 2 cột.
+    if (agg.compareCost?.purchase) {
+        const c = agg.compareCost;
+        const v = (b: any) => num(b?.current ?? 0);
+        return mk('bar', `Mua vs Cấp phát ${c.periodLabel || ''}`.trim(), ['Mua vật tư', 'Cấp phát'], 'Chi phí', [v(c.purchase), v(c.distribution)], 'đ');
+    }
     if (agg.distributionAnalysis?.materials?.length) {
         const ms = agg.distributionAnalysis.materials.slice(0, 12);
         return mk('bar', 'Chi phí cấp phát theo vật tư', ms.map((m: any) => m.materialName), 'Giá trị', ms.map((m: any) => num(m.totalValue)), 'đ');
