@@ -52,7 +52,7 @@ const buildPrompt = () =>
         'TUYET DOI khong bia: truong nao khong doc duoc thi de null.',
         'So tien/so luong tra ve SO thuan, KHONG dau phan cach nghin (vd "1.200.000" -> 1200000, "12,5" -> 12.5). Don gia theo VND.',
         'PHAN BIET 2 cot so luong neu co: "So luong can" -> quantityRequested; "So luong" (cot gan don gia, khop thanh tien) -> quantity.',
-        'vatRate la phan tram thue (vd 8, 10), khong phai tien thue. Neu o trong/gach "-" thi de null.',
+        'vatRate la phan tram thue (vd 8, 10), KHONG phai tien thue. Neu cot VAT trong hoac gach "-" (hang khong chiu thue) thi vatRate = 0. Chi de null khi anh mo khong doc duoc cot nay.',
         'Lay theo TUNG DONG: plantName=cot "Co so", proposedBy=cot "Nguoi de xuat", supplierName=cot "Nha cung cap/Nha cung", purpose=cot "Noi dung", note=cot "Ghi chu".',
         'Ngay (orderDate=Ngay len don, receivedDate=Ngay nhan): tra ve ISO YYYY-MM-DD (vd 1/6/2026 -> 2026-06-01). Khong doc duoc thi null.',
         'materialName giu nguyen ten hang nhu tren phieu. Bo qua dong tong cong/thanh tien tong/chu ky.',
