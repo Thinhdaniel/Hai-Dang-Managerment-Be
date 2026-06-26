@@ -50,6 +50,51 @@ const compactLookupText = (value?: unknown) => normalizeMaterialLookupText(value
 
 const clampConfidence = (value?: number) => Math.max(0, Math.min(100, Math.round(Number(value ?? 0))));
 
+// Token quá phổ biến trong ngành may -> không phân biệt được vật tư, bỏ qua khi tính trùng từ.
+const STOPWORDS = new Set([
+    'may',
+    'cai',
+    'chiec',
+    'bo',
+    'loai',
+    'dung',
+    'cho',
+    'va',
+    'voi',
+    'kim',
+    'co',
+    'cong',
+    'nghiep',
+    'mm',
+    'cm',
+]);
+
+// Lấy token "có nghĩa": bỏ stopword + số ngắn (1,2,18) nhưng GIỮ mã số dài (46003, 502001021).
+const meaningfulTokens = (value?: unknown): string[] =>
+    normalizeMaterialLookupText(value)
+        .split(' ')
+        .filter((t) => {
+            if (!t || STOPWORDS.has(t)) return false;
+            if (/^\d+$/.test(t)) return t.length >= 3;
+            return t.length >= 2;
+        });
+
+// IDF: từ hiếm (nguyet, vat, curoa, 46003...) -> trọng số cao; từ phổ biến -> thấp.
+// Nhờ vậy khớp theo từ ĐẶC TRƯNG thay vì đếm token đều nhau (vd "vit" trùng "vit/vit" bị thổi điểm).
+const buildIdf = (materials: any[]) => {
+    const total = Math.max(1, materials.length);
+    const df = new Map<string, number>();
+    materials.forEach((m) => {
+        const seen = new Set(
+            meaningfulTokens([m.code, m.name, m.unit, m.category, m.description].filter(Boolean).join(' '))
+        );
+        seen.forEach((t) => df.set(t, (df.get(t) ?? 0) + 1));
+    });
+    return (token: string) => Math.log((total + 1) / ((df.get(token) ?? 0) + 1)) + 1;
+};
+
+type IdfFn = (token: string) => number;
+
 const materialId = (value: unknown) => {
     if (!value) return '';
     if (typeof value === 'string') return value;
@@ -62,7 +107,7 @@ const materialId = (value: unknown) => {
     return String(value);
 };
 
-const scoreCandidate = (material: any, item: MaterialMatchRequestItem) => {
+const scoreCandidate = (material: any, item: MaterialMatchRequestItem, idf: IdfFn) => {
     const query = normalizeMaterialLookupText(item.materialName);
     const queryCompact = compactLookupText(item.materialName);
     const unit = normalizeMaterialLookupText(item.unit);
@@ -71,7 +116,6 @@ const scoreCandidate = (material: any, item: MaterialMatchRequestItem) => {
     const name = normalizeMaterialLookupText(material.name);
     const nameCompact = compactLookupText(material.name);
     const materialUnit = normalizeMaterialLookupText(material.unit);
-    const category = normalizeMaterialLookupText(material.category);
     const text = normalizeMaterialLookupText(
         [material.code, material.name, material.unit, material.category, material.description].filter(Boolean).join(' ')
     );
@@ -86,15 +130,26 @@ const scoreCandidate = (material: any, item: MaterialMatchRequestItem) => {
     else if (name.startsWith(query)) score += 78;
     else if (name.includes(query) || query.includes(name)) score += 64;
 
-    const tokens = query.split(' ').filter((token) => token.length > 1);
-    if (tokens.length) {
-        const matchedTokens = tokens.filter((token) => text.includes(token)).length;
-        score += Math.round((matchedTokens / tokens.length) * 42);
-        if (tokens.every((token) => text.includes(token))) score += 16;
+    // Trùng từ có TRỌNG SỐ IDF: ưu tiên từ đặc trưng, không thổi điểm vì vài từ phổ biến.
+    const queryTokens = meaningfulTokens(item.materialName);
+    if (queryTokens.length) {
+        let totalWeight = 0;
+        let matchedWeight = 0;
+        let matchedCount = 0;
+        for (const token of queryTokens) {
+            const w = idf(token);
+            totalWeight += w;
+            if (text.includes(token)) {
+                matchedWeight += w;
+                matchedCount += 1;
+            }
+        }
+        const ratio = totalWeight ? matchedWeight / totalWeight : 0;
+        score += Math.round(ratio * 52);
+        if (matchedCount === queryTokens.length) score += 14; // khớp đủ token đặc trưng
     }
 
-    if (unit && materialUnit === unit) score += 12;
-    if (category && tokens.some((token) => category.includes(token))) score += 4;
+    if (unit && materialUnit === unit) score += 10;
 
     return Math.min(100, score);
 };
@@ -108,15 +163,15 @@ const toCandidate = (material: any, score: number): MaterialCandidate => ({
     score,
 });
 
-const getCandidates = (materials: any[], item: MaterialMatchRequestItem) => {
+const getCandidates = (materials: any[], item: MaterialMatchRequestItem, idf: IdfFn) => {
     const scored = materials
-        .map((material) => ({ material, score: scoreCandidate(material, item) }))
+        .map((material) => ({ material, score: scoreCandidate(material, item, idf) }))
         .filter((entry) => entry.score >= 30)
         .sort(
             (a, b) =>
                 b.score - a.score || String(a.material.name ?? '').localeCompare(String(b.material.name ?? ''), 'vi')
         )
-        .slice(0, 5);
+        .slice(0, 6);
 
     return scored.map((entry) => toCandidate(entry.material, entry.score));
 };
@@ -236,12 +291,15 @@ export const matchMaterialsByAi = async (req: Request, res: Response) => {
         .select('_id code name unit category description trackInventory isActive')
         .lean();
 
+    // IDF tính 1 lần trên toàn danh mục để chấm điểm theo độ hiếm của từ.
+    const idf = buildIdf(materials);
+
     const rowsWithCandidates = items.map((item) => ({
         ...item,
         materialName: item.materialName.trim(),
         unit: item.unit?.trim(),
         note: item.note?.trim(),
-        candidates: getCandidates(materials, item),
+        candidates: getCandidates(materials, item, idf),
     }));
 
     const rowsNeedingAi = rowsWithCandidates.filter((item) => item.materialName && item.candidates.length > 0);
