@@ -19,6 +19,7 @@ import { matchMaterialsByAi } from '@/services/ai-material-match.service';
 import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
 import { scanPurchaseInvoice } from '@/services/ai-ocr.service';
 import { reviewPurchaseRequest } from '@/services/ai-approval-review.service';
+import { runAnalyticsQuery, getAnalyticsCatalog } from '@/services/ai-analytics.service';
 import { getQrFieldInsight } from '@/services/ai-qr-field.service';
 import { imageUpload } from '@/middlewares/multerMiddleware';
 
@@ -37,5 +38,7 @@ router.post('/chat-summary', validator(aiChatSummarySchema), asyncHandler(summar
 router.get('/qr-field/:assetId', asyncHandler(getQrFieldInsight));
 router.post('/ocr/purchase-invoice', imageUpload.single('image'), asyncHandler(scanPurchaseInvoice));
 router.post('/purchase-request/:id/review', asyncHandler(reviewPurchaseRequest));
+router.get('/analytics/catalog', asyncHandler(getAnalyticsCatalog));
+router.post('/analytics/query', asyncHandler(runAnalyticsQuery));
 
 export default router;

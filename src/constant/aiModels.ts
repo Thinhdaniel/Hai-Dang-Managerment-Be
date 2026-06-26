@@ -18,6 +18,7 @@ export const AI_FEATURES = {
     CHAT_SUMMARY: 'chat-summary', // Tóm tắt hội thoại nội bộ
     OCR_INVOICE: 'ocr-invoice', // OCR ảnh hóa đơn mua vật tư -> trích dòng (vision, JSON)
     APPROVAL_REVIEW: 'approval-review', // Rà soát phiếu mua trước khi duyệt (tóm tắt cảnh báo)
+    ANALYTICS: 'analytics', // NL -> chart-spec cho AI Analytics Studio (JSON, cần ổn định)
     HELP: 'help', // Trợ lý hướng dẫn sử dụng
     DIGEST: 'digest', // Bản tin AI định kỳ cho giám đốc (chất lượng cao, chạy ít lần)
     VARIANCE: 'variance', // Giải thích biến động chỉ số (câu ngắn, theo nhu cầu)
@@ -62,6 +63,8 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string> = {
     'ocr-invoice': 'gc/gemini-2.5-flash',
     // Rà soát duyệt: tóm tắt ngắn các cảnh báo (đã tính sẵn ở BE) -> model rẻ ổn định.
     'approval-review': 'kr/claude-haiku-4.5',
+    // Analytics: map câu hỏi -> chart-spec JSON từ danh mục cho sẵn -> Claude Haiku cho JSON ổn định.
+    analytics: 'kr/claude-haiku-4.5',
     help: 'kr/claude-sonnet-4.5',
     digest: 'gc/gemini-2.5-pro', // bản tin giám đốc: chất lượng cao, chạy ít
     variance: 'kr/claude-haiku-4.5',
