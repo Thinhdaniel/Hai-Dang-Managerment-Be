@@ -181,7 +181,7 @@ export const reviewPurchaseRequest = async (req: Request, res: Response) => {
                 {
                     role: 'system',
                     content:
-                        'Ban la tro ly duyet mua vat tu cua cong ty may. Tom tat NGAN GON (2-4 cau) cac diem can luu y cho giam doc truoc khi duyet, dua TREN cac canh bao da cho. Neu khong co canh bao, noi phieu khong phat hien bat thuong va co the duyet. Tieng Viet, khong markdown, khong bia them.',
+                        'Ban la tro ly duyet mua vat tu cua cong ty may. Tom tat NGAN GON (2-4 cau) cac diem can luu y cho giam doc truoc khi duyet, dua TREN cac canh bao da cho. Neu khong co canh bao, noi phieu khong phat hien bat thuong va co the duyet. Tieng Viet, khong markdown, khong bia them. Bat dau NGAY bang noi dung, KHONG ghi tieu de/vai tro/loi chao o dau.',
                 },
                 {
                     role: 'user',
@@ -192,7 +192,11 @@ export const reviewPurchaseRequest = async (req: Request, res: Response) => {
                 },
             ],
         });
-        summary = ai.content.trim();
+        // Lọc dòng đầu nếu model lỡ echo vai trò ("Bạn là trợ lý…") rồi mới vào nội dung.
+        summary = ai.content
+            .trim()
+            .replace(/^\s*(b[aạ]n\s+l[aà]|t[oô]i\s+l[aà])\b[^\n]*\n+/i, '')
+            .trim();
     } catch {
         summary =
             overall === 'ok'
