@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { BadRequestError } from '@/errors/customError';
 import { AI_FEATURES } from '@/constant/aiModels';
-import { aiProviderService } from '@/services/ai/ai-provider.service';
+import { aiProviderService, extractJsonObject } from '@/services/ai/ai-provider.service';
 import customResponse from '@/utils/response';
 
 // OCR ảnh hóa đơn/phiếu mua vật tư -> trích dòng có cấu trúc để điền sẵn đơn mua.
@@ -239,6 +239,54 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
     }
 
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+
+    // [DEBUG TẠM] ?__debug=1 -> trả raw output model + lỗi parse để soi vì sao 0 dòng (sẽ gỡ sau).
+    if (req.query.__debug === '1') {
+        const dbg: any[] = [];
+        for (const model of [OCR_VISION_MODEL_OVERRIDE, OCR_FALLBACK_VISION_MODEL]) {
+            try {
+                const raw = await aiProviderService.generateText({
+                    feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
+                    model,
+                    temperature: 0.04,
+                    maxTokens: 3200,
+                    timeoutMs: 75000,
+                    jsonMode: true,
+                    messages: [
+                        { role: 'system', content: 'Chi tra JSON.' },
+                        {
+                            role: 'user',
+                            content: [
+                                { type: 'text', text: buildSupplyPrompt() },
+                                { type: 'image_url', image_url: { url: dataUrl } },
+                            ],
+                        },
+                    ],
+                });
+                let itemsParsed = -1;
+                let parseError: string | null = null;
+                try {
+                    const parsed = JSON.parse(extractJsonObject(raw.content));
+                    itemsParsed = normalizeSupplyItems(parsed).length;
+                } catch (e) {
+                    parseError = e instanceof Error ? e.message : String(e);
+                }
+                dbg.push({
+                    model: raw.model,
+                    contentLen: raw.content.length,
+                    head: raw.content.slice(0, 500),
+                    tail: raw.content.slice(-400),
+                    itemsParsed,
+                    parseError,
+                });
+            } catch (e) {
+                dbg.push({ model, callError: e instanceof Error ? e.message : String(e) });
+            }
+        }
+        return res.status(StatusCodes.OK).json(
+            customResponse({ data: { debug: dbg }, message: 'debug', status: StatusCodes.OK, success: true })
+        );
+    }
 
     const attempt = async (model?: string) => {
         const aiResult = await aiProviderService.generateJson<any>({
