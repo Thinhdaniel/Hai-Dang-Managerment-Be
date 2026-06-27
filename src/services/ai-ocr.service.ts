@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { BadRequestError } from '@/errors/customError';
 import { AI_FEATURES } from '@/constant/aiModels';
-import { aiProviderService, extractJsonObject } from '@/services/ai/ai-provider.service';
+import { aiProviderService } from '@/services/ai/ai-provider.service';
 import customResponse from '@/utils/response';
 
 // OCR ảnh hóa đơn/phiếu mua vật tư -> trích dòng có cấu trúc để điền sẵn đơn mua.
@@ -17,25 +17,36 @@ import customResponse from '@/utils/response';
 // trả số dạng chuỗi/thiếu trường, strict parse sẽ throw -> rơi fallback oan. Ở đây đọc KHOAN
 // DUNG (ép kiểu mềm, bỏ trường lỗi) + thử lại nhiều lần (model chính x2 + model vision dự phòng) cho ổn định.
 
-const OCR_VISION_MODEL_OVERRIDE = process.env.AI_OCR_MODEL || process.env.AI_VISION_MODEL;
+// Model vision ỔN ĐỊNH cho OCR. BẮT BUỘC dùng model KHÔNG-"thinking" (gemini-2.5-flash):
+// model thinking (vd gemini-2.5-pro) đốt token budget vào suy luận nội bộ -> chỉ còn vài chục
+// token cho JSON -> output bị CẮT CỤT với phiếu nhiều dòng -> parse lỗi -> rơi fallback rỗng.
+const OCR_RELIABLE_VISION_MODEL = 'gc/gemini-2.5-flash';
 
-// Model vision DỰ PHÒNG cho lần thử cuối: gemini-2.5-flash đôi khi chập chờn/bị rate-limit ->
-// trả rỗng cả 2 lần liên tiếp. Lần cuối đổi sang model vision khác (mạnh hơn) để né hẳn.
-const OCR_FALLBACK_VISION_MODEL = process.env.AI_OCR_FALLBACK_MODEL || 'gc/gemini-2.5-pro';
+// CHỈ honor AI_OCR_MODEL riêng cho OCR (KHÔNG kế thừa AI_VISION_MODEL chung — env đó có thể là
+// model thinking khiến OCR cắt cụt). Không set thì mặc định model ổn định ở trên.
+const OCR_PRIMARY_VISION_MODEL = process.env.AI_OCR_MODEL || OCR_RELIABLE_VISION_MODEL;
+
+// Model cho lần thử cuối (cấu hình qua env). Mặc định vẫn flash (non-thinking) cho an toàn.
+const OCR_FALLBACK_VISION_MODEL = process.env.AI_OCR_FALLBACK_MODEL || OCR_RELIABLE_VISION_MODEL;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Chạy 1 lượt OCR (attempt) nhiều lần cho ỔN ĐỊNH:
- *   - 2 lần đầu dùng model chính (đỡ tốn quota), nghỉ ngắn giữa các lần để tránh rate-limit dồn.
- *   - lần cuối đổi sang model vision dự phòng để né khi model chính trả rỗng/lỗi.
+ *   - lần 1: model chính (theo env hoặc flash).
+ *   - lần 2: LUÔN là model ổn định non-thinking (flash) làm lưới an toàn, nghỉ ngắn để né rate-limit dồn.
+ *   - lần 3: model dự phòng theo env.
  * `attempt` nhận model (có thể undefined -> để aiProvider tự resolve theo feature).
  */
 const runOcrWithRetry = async <T>(
     attempt: (model?: string) => Promise<T>,
     primaryModel?: string
 ): Promise<T> => {
-    const plan: (string | undefined)[] = [primaryModel, primaryModel, OCR_FALLBACK_VISION_MODEL];
+    const plan: (string | undefined)[] = [
+        primaryModel ?? OCR_RELIABLE_VISION_MODEL,
+        OCR_RELIABLE_VISION_MODEL,
+        OCR_FALLBACK_VISION_MODEL,
+    ];
     let lastError: unknown;
     for (let i = 0; i < plan.length; i++) {
         try {
@@ -113,7 +124,7 @@ const buildSupplyPrompt = () =>
         'Neu co cot "Co so" hoac cot cuoi lap lai ten co so theo tung dong thi dua ten do vao header.plantName neu tat ca dong cung mot co so; neu khac nhau thi giu null.',
         'Neu co thong tin chung thi lay header.requestDate theo ISO YYYY-MM-DD, header.requesterName, header.plantName, header.note/purpose.',
         'materialName giu nguyen ten vat tu nhu tren phieu. Bo qua dong tong cong, tieu de, chu ky, nguoi duyet.',
-        'Neu dong co ca quy cach/mau sac thi dua vao note, khong gop vao so luong.',
+        'note CHI ghi quy cach/mau sac/kich thuoc neu co; NGAN GON. TUYET DOI khong nhoi ten nguoi de xuat/nguoi nhan/ngay/don gia/thanh tien vao note (cac cot do bo qua).',
         'Output schema (chi JSON):',
         '{"header":{"requestDate":null,"requesterName":null,"plantName":null,"purpose":null,"note":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"purpose":null,"note":null}]}',
     ].join('\n');
@@ -165,7 +176,7 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
             feature: 'ocr-invoice',
             model,
             temperature: 0.05,
-            maxTokens: 4000,
+            maxTokens: 6000,
             timeoutMs: 75000,
             messages: [
                 {
@@ -194,7 +205,7 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
 
     try {
         // Thử lại nhiều lần (model chính x2 + model dự phòng): gemini đôi khi trả JSON bẩn/cắt cụt/rỗng.
-        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_VISION_MODEL_OVERRIDE);
+        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_PRIMARY_VISION_MODEL);
 
         return res.status(StatusCodes.OK).json(
             customResponse({
@@ -240,60 +251,12 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
 
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
-    // [DEBUG TẠM] ?__debug=1 -> trả raw output model + lỗi parse để soi vì sao 0 dòng (sẽ gỡ sau).
-    if (req.query.__debug === '1') {
-        const dbg: any[] = [];
-        for (const model of [OCR_VISION_MODEL_OVERRIDE, OCR_FALLBACK_VISION_MODEL]) {
-            try {
-                const raw = await aiProviderService.generateText({
-                    feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
-                    model,
-                    temperature: 0.04,
-                    maxTokens: 3200,
-                    timeoutMs: 75000,
-                    jsonMode: true,
-                    messages: [
-                        { role: 'system', content: 'Chi tra JSON.' },
-                        {
-                            role: 'user',
-                            content: [
-                                { type: 'text', text: buildSupplyPrompt() },
-                                { type: 'image_url', image_url: { url: dataUrl } },
-                            ],
-                        },
-                    ],
-                });
-                let itemsParsed = -1;
-                let parseError: string | null = null;
-                try {
-                    const parsed = JSON.parse(extractJsonObject(raw.content));
-                    itemsParsed = normalizeSupplyItems(parsed).length;
-                } catch (e) {
-                    parseError = e instanceof Error ? e.message : String(e);
-                }
-                dbg.push({
-                    model: raw.model,
-                    contentLen: raw.content.length,
-                    head: raw.content.slice(0, 500),
-                    tail: raw.content.slice(-400),
-                    itemsParsed,
-                    parseError,
-                });
-            } catch (e) {
-                dbg.push({ model, callError: e instanceof Error ? e.message : String(e) });
-            }
-        }
-        return res.status(StatusCodes.OK).json(
-            customResponse({ data: { debug: dbg }, message: 'debug', status: StatusCodes.OK, success: true })
-        );
-    }
-
     const attempt = async (model?: string) => {
         const aiResult = await aiProviderService.generateJson<any>({
             feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
             model,
             temperature: 0.04,
-            maxTokens: 3200,
+            maxTokens: 6000,
             timeoutMs: 75000,
             messages: [
                 {
@@ -324,7 +287,7 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
 
     try {
         // Thử lại nhiều lần (model chính x2 + model dự phòng) cho ổn định khi gemini trả rỗng/chập chờn.
-        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_VISION_MODEL_OVERRIDE);
+        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_PRIMARY_VISION_MODEL);
 
         return res.status(StatusCodes.OK).json(
             customResponse({
