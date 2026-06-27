@@ -44,12 +44,13 @@ const DIM_LABEL: Record<Dimension, string> = {
 
 const ASSET_STATUS_LABEL: Record<string, string> = {
     active: 'Hoạt động',
-    inventory: 'Tồn kho',
-    broken: 'Lỗi/hỏng',
     maintenance: 'Bảo trì',
+    broken: 'Lỗi/hỏng',
     borrowing: 'Đang mượn',
+    storage: 'Tồn kho',
     pending_disposal: 'Chờ thanh lý',
     disposed: 'Đã thanh lý',
+    returned_to_partner: 'Đã trả đối tác',
 };
 const MAINT_TYPE_LABEL: Record<string, string> = { periodic: 'Định kỳ', emergency: 'Sự cố', inspection: 'Kiểm tra' };
 const REPAIR_MODE_LABEL: Record<string, string> = { internal: 'Sửa nội bộ', external: 'Sửa ngoài' };
