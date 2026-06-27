@@ -17,7 +17,7 @@ import { askAgentAssistant, streamAgentAssistant } from '@/services/ai-agent.ser
 import { synthesizeSpeech } from '@/services/ai-tts.service';
 import { matchMaterialsByAi } from '@/services/ai-material-match.service';
 import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
-import { scanPurchaseInvoice } from '@/services/ai-ocr.service';
+import { scanPurchaseInvoice, scanSupplyRequest } from '@/services/ai-ocr.service';
 import { reviewPurchaseRequest } from '@/services/ai-approval-review.service';
 import { runAnalyticsQuery, getAnalyticsCatalog } from '@/services/ai-analytics.service';
 import { getQrFieldInsight } from '@/services/ai-qr-field.service';
@@ -37,6 +37,7 @@ router.post('/material-match', validator(aiMaterialMatchSchema), asyncHandler(ma
 router.post('/chat-summary', validator(aiChatSummarySchema), asyncHandler(summarizeChatConversation));
 router.get('/qr-field/:assetId', asyncHandler(getQrFieldInsight));
 router.post('/ocr/purchase-invoice', imageUpload.single('image'), asyncHandler(scanPurchaseInvoice));
+router.post('/ocr/supply-request', imageUpload.single('image'), asyncHandler(scanSupplyRequest));
 router.post('/purchase-request/:id/review', asyncHandler(reviewPurchaseRequest));
 router.get('/analytics/catalog', asyncHandler(getAnalyticsCatalog));
 router.post('/analytics/query', asyncHandler(runAnalyticsQuery));

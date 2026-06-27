@@ -31,6 +31,31 @@ type IndexedMaterial = {
     searchText: string;
 };
 
+type MaterialIntentCandidate = {
+    code?: unknown;
+    name?: unknown;
+    unit?: unknown;
+    category?: unknown;
+    description?: unknown;
+    searchText?: unknown;
+};
+
+const MATERIAL_KIND_GROUPS = [
+    { key: 'belt', labels: ['curoa', 'day curoa', 'day dai', 'belt'] },
+    { key: 'looper', labels: ['moc', 'mo tren', 'mo duoi', 'looper'] },
+    { key: 'needle', labels: ['kim', 'needle'] },
+    { key: 'oil', labels: ['dau', 'nhot', 'oil'] },
+    { key: 'thread', labels: ['chi may', 'cuon chi', 'thread'] },
+    { key: 'knife', labels: ['dao', 'knife'] },
+    { key: 'presser_foot', labels: ['chan vit', 'presser foot'] },
+    { key: 'bobbin', labels: ['suot', 'thoi', 'bobbin'] },
+    { key: 'zipper', labels: ['khoa keo', 'khoa', 'zip', 'zipper'] },
+    { key: 'button', labels: ['cuc', 'nut', 'button'] },
+    { key: 'motor', labels: ['motor', 'dong co'] },
+    { key: 'sensor', labels: ['cam bien', 'sensor'] },
+    { key: 'bearing', labels: ['bac dan', 'vong bi', 'bearing'] },
+];
+
 export const normalizeMaterialLookupText = (value?: unknown) =>
     String(value ?? '')
         .normalize('NFD')
@@ -43,6 +68,66 @@ export const normalizeMaterialLookupText = (value?: unknown) =>
         .replace(/\s+/g, ' ');
 
 const compactLookupText = (value?: unknown) => normalizeMaterialLookupText(value).replace(/\s+/g, '');
+
+const findLabelIndex = (text: string, label: string) => {
+    const normalizedLabel = normalizeMaterialLookupText(label);
+    if (!normalizedLabel) return -1;
+    const match = new RegExp(`(^| )${normalizedLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( |$)`).exec(text);
+    return match?.index ?? -1;
+};
+
+const detectMaterialIntentKinds = (value?: unknown) => {
+    const text = normalizeMaterialLookupText(value);
+    const kinds = new Set<string>();
+
+    MATERIAL_KIND_GROUPS.forEach((group) => {
+        if (group.labels.some((label) => findLabelIndex(text, label) >= 0)) {
+            kinds.add(group.key);
+        }
+    });
+
+    return kinds;
+};
+
+const getPrimaryMaterialIntentKind = (value?: unknown) => {
+    const text = normalizeMaterialLookupText(value);
+    let best: { key: string; index: number; length: number } | undefined;
+
+    MATERIAL_KIND_GROUPS.forEach((group) => {
+        group.labels.forEach((label) => {
+            const normalizedLabel = normalizeMaterialLookupText(label);
+            const index = findLabelIndex(text, label);
+            if (index < 0) return;
+            if (!best || index < best.index || (index === best.index && normalizedLabel.length > best.length)) {
+                best = { key: group.key, index, length: normalizedLabel.length };
+            }
+        });
+    });
+
+    return best?.key;
+};
+
+export const getMaterialKindConflict = (query: unknown, candidate: MaterialIntentCandidate) => {
+    const queryKind = getPrimaryMaterialIntentKind(query);
+    if (!queryKind) return undefined;
+
+    const candidateText = [
+        candidate.searchText,
+        candidate.code,
+        candidate.name,
+        candidate.unit,
+        candidate.category,
+        candidate.description,
+    ]
+        .filter(Boolean)
+        .join(' ');
+    const candidateKinds = detectMaterialIntentKinds(candidateText);
+    if (!candidateKinds.size) return undefined;
+
+    return candidateKinds.has(queryKind)
+        ? undefined
+        : { queryKinds: [queryKind], candidateKinds: [...candidateKinds] };
+};
 
 const toMaterialId = (value: unknown) => {
     if (!value) return undefined;
@@ -124,6 +209,11 @@ const scoreMaterial = (item: IndexedMaterial, query: string, unit?: string) => {
     }
 
     if (unitNorm && item.unitNorm === unitNorm) score += 10;
+
+    if (getMaterialKindConflict(query, item)) {
+        score = Math.min(score, 62);
+    }
+
     return Math.min(score, 100);
 };
 

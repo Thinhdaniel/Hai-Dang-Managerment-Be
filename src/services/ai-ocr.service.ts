@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { BadRequestError } from '@/errors/customError';
+import { AI_FEATURES } from '@/constant/aiModels';
 import { aiProviderService } from '@/services/ai/ai-provider.service';
 import customResponse from '@/utils/response';
 
@@ -16,6 +17,8 @@ import customResponse from '@/utils/response';
 // trả số dạng chuỗi/thiếu trường, strict parse sẽ throw -> rơi fallback oan. Ở đây đọc KHOAN
 // DUNG (ép kiểu mềm, bỏ trường lỗi) + thử lại 1 lần cho ổn định.
 
+const OCR_VISION_MODEL_OVERRIDE = process.env.AI_OCR_MODEL || process.env.AI_VISION_MODEL;
+
 type OcrItem = {
     materialName: string;
     unit?: string;
@@ -30,6 +33,14 @@ type OcrItem = {
     note?: string;
     orderDate?: string;
     receivedDate?: string;
+};
+
+type SupplyOcrItem = {
+    materialName: string;
+    unit?: string;
+    quantityRequested?: number;
+    purpose?: string;
+    note?: string;
 };
 
 const cleanNumber = (value: unknown): number | undefined => {
@@ -60,6 +71,24 @@ const buildPrompt = () =>
         '{"header":{"supplierName":null,"invoiceNo":null,"invoiceDate":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"quantity":null,"unitPrice":null,"vatRate":null,"plantName":null,"proposedBy":null,"supplierName":null,"purpose":null,"note":null,"orderDate":null,"receivedDate":null}]}',
     ].join('\n');
 
+const buildSupplyPrompt = () =>
+    [
+        'Ban la tro ly OCR phieu de xuat cap vat tu cua cong ty may (tieng Viet).',
+        'Doc anh dinh kem (phieu giay/anh chup bang Excel/danh sach vat tu can xin cap hoac da cap) va trich CHINH XAC thong tin de tao PHIEU DE XUAT CAP VAT TU.',
+        'Chi tra ve JSON hop le, khong markdown, khong giai thich ngoai JSON.',
+        'TUYET DOI khong bia: truong nao khong doc duoc thi de null.',
+        'So luong tra ve SO thuan, KHONG dau phan cach nghin. Vi du "1.200" -> 1200, "12,5" -> 12.5.',
+        'Uu tien doc cac cot: Ten vat tu/Ten vat tu hang hoa/Hang hoa/Noi dung, DVT/Don vi/Don vi tinh, So luong can/So luong/SL xin/SL de xuat, Ghi chu/Quy cach/Muc dich.',
+        'Neu bang co ca "So luong can" va "So luong cap/So luong da cap" thi quantityRequested BAT BUOC lay tu "So luong can"; khong lay so luong cap neu cot can doc duoc.',
+        'Neu anh la bang Excel crop ngang, hay doc theo tung hang du lieu ben duoi header. Vi du cot "Ten vat tu hang hoa" la materialName, cot "Don vi tinh" la unit, cot "So luong can" la quantityRequested.',
+        'Neu co cot "Co so" hoac cot cuoi lap lai ten co so theo tung dong thi dua ten do vao header.plantName neu tat ca dong cung mot co so; neu khac nhau thi giu null.',
+        'Neu co thong tin chung thi lay header.requestDate theo ISO YYYY-MM-DD, header.requesterName, header.plantName, header.note/purpose.',
+        'materialName giu nguyen ten vat tu nhu tren phieu. Bo qua dong tong cong, tieu de, chu ky, nguoi duyet.',
+        'Neu dong co ca quy cach/mau sac thi dua vao note, khong gop vao so luong.',
+        'Output schema (chi JSON):',
+        '{"header":{"requestDate":null,"requesterName":null,"plantName":null,"purpose":null,"note":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"purpose":null,"note":null}]}',
+    ].join('\n');
+
 const normalizeItems = (raw: any): OcrItem[] => {
     const rawItems = Array.isArray(raw?.items) ? raw.items : [];
     return rawItems
@@ -81,6 +110,19 @@ const normalizeItems = (raw: any): OcrItem[] => {
         .filter((item: OcrItem) => item.materialName);
 };
 
+const normalizeSupplyItems = (raw: any): SupplyOcrItem[] => {
+    const rawItems = Array.isArray(raw?.items) ? raw.items : [];
+    return rawItems
+        .map((item: any) => ({
+            materialName: cleanText(item?.materialName) || '',
+            unit: cleanText(item?.unit),
+            quantityRequested: cleanNumber(item?.quantityRequested) ?? cleanNumber(item?.quantity),
+            purpose: cleanText(item?.purpose),
+            note: cleanText(item?.note),
+        }))
+        .filter((item: SupplyOcrItem) => item.materialName);
+};
+
 export const scanPurchaseInvoice = async (req: Request, res: Response) => {
     const file = req.file;
     if (!file || !file.buffer?.length) {
@@ -92,6 +134,7 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
     const attempt = async () => {
         const aiResult = await aiProviderService.generateJson<any>({
             feature: 'ocr-invoice',
+            model: OCR_VISION_MODEL_OVERRIDE,
             temperature: 0.05,
             maxTokens: 4000,
             timeoutMs: 75000,
@@ -141,7 +184,8 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
                 success: true,
             })
         );
-    } catch {
+    } catch (error) {
+        console.warn('[ai-ocr] purchase invoice OCR fallback:', error instanceof Error ? error.message : error);
         return res.status(StatusCodes.OK).json(
             customResponse({
                 data: {
@@ -152,6 +196,87 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
                     usedFallback: true,
                 },
                 message: 'Chưa đọc được hóa đơn. Hãy chụp rõ nét, đủ sáng và thẳng góc rồi thử lại.',
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    }
+};
+
+export const scanSupplyRequest = async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file || !file.buffer?.length) {
+        throw new BadRequestError('Chưa có ảnh phiếu đề xuất cấp để quét');
+    }
+
+    const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+
+    const attempt = async () => {
+        const aiResult = await aiProviderService.generateJson<any>({
+            feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
+            model: OCR_VISION_MODEL_OVERRIDE,
+            temperature: 0.04,
+            maxTokens: 3200,
+            timeoutMs: 75000,
+            messages: [
+                {
+                    role: 'system',
+                    content:
+                        'Ban trich xuat du lieu co cau truc tu anh phieu de xuat cap vat tu thanh JSON. Uu tien chinh xac, khong bia so lieu. Chi tra JSON.',
+                },
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: buildSupplyPrompt() },
+                        { type: 'image_url', image_url: { url: dataUrl } },
+                    ],
+                },
+            ],
+        });
+        const items = normalizeSupplyItems(aiResult.data);
+        if (!items.length) throw new Error('OCR returned no supply items');
+        const header = {
+            requestDate: cleanText(aiResult.data?.header?.requestDate),
+            requesterName: cleanText(aiResult.data?.header?.requesterName),
+            plantName: cleanText(aiResult.data?.header?.plantName),
+            purpose: cleanText(aiResult.data?.header?.purpose),
+            note: cleanText(aiResult.data?.header?.note),
+        };
+        return { aiResult, items, header };
+    };
+
+    try {
+        const { aiResult, items, header } = await attempt().catch(() => attempt());
+
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: {
+                    header,
+                    items,
+                    count: items.length,
+                    available: true,
+                    usedFallback: false,
+                    provider: aiResult.provider,
+                    model: aiResult.model,
+                    latencyMs: aiResult.latencyMs,
+                },
+                message: `Đã quét được ${items.length} dòng vật tư cần cấp`,
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    } catch (error) {
+        console.warn('[ai-ocr] supply request OCR fallback:', error instanceof Error ? error.message : error);
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: {
+                    header: {},
+                    items: [],
+                    count: 0,
+                    available: false,
+                    usedFallback: true,
+                },
+                message: 'Chưa đọc được phiếu đề xuất cấp. Hãy chụp rõ nét, đủ sáng và thẳng góc rồi thử lại.',
                 status: StatusCodes.OK,
                 success: true,
             })

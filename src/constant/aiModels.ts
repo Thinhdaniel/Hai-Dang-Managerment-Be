@@ -17,6 +17,7 @@ export const AI_FEATURES = {
     MATERIAL_MATCH: 'material-match', // Khớp tên vật tư Excel với danh mục (JSON, cần chính xác)
     CHAT_SUMMARY: 'chat-summary', // Tóm tắt hội thoại nội bộ
     OCR_INVOICE: 'ocr-invoice', // OCR ảnh hóa đơn mua vật tư -> trích dòng (vision, JSON)
+    OCR_SUPPLY_REQUEST: 'ocr-supply-request', // OCR ảnh phiếu đề xuất cấp vật tư -> trích dòng (vision, JSON)
     APPROVAL_REVIEW: 'approval-review', // Rà soát phiếu mua trước khi duyệt (tóm tắt cảnh báo)
     ANALYTICS: 'analytics', // NL -> chart-spec cho AI Analytics Studio (JSON, cần ổn định)
     HELP: 'help', // Trợ lý hướng dẫn sử dụng
@@ -61,6 +62,7 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string> = {
     'chat-summary': 'kr/claude-haiku-4.5',
     // OCR hóa đơn giấy: cần model VISION (đọc ảnh). gemini-2.5-flash đọc ảnh + tiếng Việt tốt, rẻ.
     'ocr-invoice': 'gc/gemini-2.5-flash',
+    'ocr-supply-request': 'gc/gemini-2.5-flash',
     // Rà soát duyệt: tóm tắt ngắn các cảnh báo (đã tính sẵn ở BE) -> model rẻ ổn định.
     'approval-review': 'kr/claude-haiku-4.5',
     // Analytics: map câu hỏi -> chart-spec JSON từ danh mục cho sẵn -> Claude Haiku cho JSON ổn định.

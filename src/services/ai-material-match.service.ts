@@ -3,7 +3,7 @@ import { StatusCodes } from 'http-status-codes';
 import { z } from 'zod';
 import Material from '@/models/Material';
 import customResponse from '@/utils/response';
-import { normalizeMaterialLookupText } from '@/services/material-match.helpers';
+import { getMaterialKindConflict, normalizeMaterialLookupText } from '@/services/material-match.helpers';
 import { aiProviderService } from '@/services/ai/ai-provider.service';
 
 type MaterialMatchRequestItem = {
@@ -176,6 +176,25 @@ const getCandidates = (materials: any[], item: MaterialMatchRequestItem, idf: Id
     return scored.map((entry) => toCandidate(entry.material, entry.score));
 };
 
+const applyMaterialIntentGuard = (
+    item: MaterialMatchRequestItem,
+    match: SanitizedMaterialMatch
+): SanitizedMaterialMatch => {
+    if (!match.candidate || match.status === 'unmatched') return match;
+
+    const conflict = getMaterialKindConflict(item.materialName, match.candidate);
+    if (!conflict) return match;
+
+    const warning = 'Tên vật tư đọc được không cùng nhóm vật tư chính với ứng viên danh mục, cần xác nhận thủ công.';
+    return {
+        ...match,
+        status: 'ambiguous',
+        confidence: Math.min(match.confidence, 68),
+        reason: 'Ứng viên chỉ giống ngữ cảnh máy nhưng khác nhóm vật tư chính.',
+        warnings: [...new Set([...match.warnings, warning])],
+    };
+};
+
 const fallbackMatch = (item: MaterialMatchRequestItem, candidates: MaterialCandidate[]): SanitizedMaterialMatch => {
     const best = candidates[0];
     if (!best) {
@@ -193,7 +212,7 @@ const fallbackMatch = (item: MaterialMatchRequestItem, candidates: MaterialCandi
     const strong = best.score >= 96 && best.score - secondScore >= 12;
     const status = strong ? 'matched' : best.score >= 72 ? 'suggested' : 'ambiguous';
 
-    return {
+    return applyMaterialIntentGuard(item, {
         key: item.key,
         status,
         materialId: best.id,
@@ -204,7 +223,7 @@ const fallbackMatch = (item: MaterialMatchRequestItem, candidates: MaterialCandi
         warnings: status === 'matched' ? [] : ['Không tự áp dụng vì độ chắc chắn chưa đủ cao.'],
         candidate: best,
         candidates,
-    };
+    });
 };
 
 const buildAiPrompt = (items: Array<MaterialMatchRequestItem & { candidates: MaterialCandidate[] }>) =>
@@ -213,6 +232,7 @@ const buildAiPrompt = (items: Array<MaterialMatchRequestItem & { candidates: Mat
         'Chi tra ve JSON hop le, khong markdown, khong giai thich ngoai JSON.',
         'Tuyet doi khong tao materialId moi. matchedMaterialId chi duoc la id co trong candidates cua dong do.',
         'Neu khong du chac chan thi status = "suggested" hoac "ambiguous", khong ep matched.',
+        'Khong duoc matched neu nhom vat tu chinh khac nhau du chi cung may/bo phan. Vi du: day curoa khong phai mo/moc, dau khong phai kim, kim khong phai day.',
         'Quy tac status:',
         '- matched: confidence >= 92, ten/ma/don vi khop ro.',
         '- suggested: confidence 70-91, kha gan nhung can xac nhan.',
@@ -272,7 +292,7 @@ const sanitizeAiMatches = (
                   ? 'unmatched'
                   : raw.status;
 
-        return {
+        return applyMaterialIntentGuard(item, {
             key: item.key,
             status,
             materialId: candidate?.id,
@@ -281,7 +301,7 @@ const sanitizeAiMatches = (
             warnings: raw.warnings ?? [],
             candidate,
             candidates: item.candidates,
-        } satisfies SanitizedMaterialMatch;
+        } satisfies SanitizedMaterialMatch);
     });
 };
 
