@@ -278,25 +278,84 @@ const keywordSpec = (question: string): Spec | null => {
     );
     if (!analytical) return null;
 
+    // Câu "máy/thiết bị/vật tư NÀO ... (nhất)" = xếp hạng theo TỪNG thực thể cụ thể — catalog không có
+    // chiều này (chỉ group theo cơ sở/trạng thái/loại). Nhường cho trợ lý agentic (nó liệt kê đúng).
+    if (/\bnao\b/.test(q) && has('may', 'thiet bi', 'vat tu', 'nguoi')) return null;
+
     const isMoney = has('chi phi', 'gia tri', 'tien', 'von', 'tong tien');
+    // Ý định hỏi TRẠNG THÁI máy hiện thời ("đang bảo trì/đang hỏng/tồn kho..."): là số máy theo trạng thái,
+    // KHÔNG phải số phiếu bảo trì theo thời gian.
+    const assetStatusIntent = has(
+        'dang bao tri',
+        'dang sua',
+        'dang hoat dong',
+        'dang muon',
+        'dang cho',
+        'ton kho',
+        'cho thanh ly',
+        'da thanh ly',
+        'bi hong',
+        'dang hong',
+        'hong hoc'
+    );
+
     let metric: MetricKey | null = null;
-    if (has('cap phat')) metric = 'distribution_cost';
+    if (assetStatusIntent && has('may', 'thiet bi')) metric = 'asset_count';
+    else if (has('cap phat')) metric = 'distribution_cost';
     else if (has('sua ngoai')) metric = 'external_repair_cost';
     else if (has('tong chi phi', 'chi phi van hanh')) metric = 'total_cost';
     else if (has('bao tri')) metric = 'maintenance_count';
     else if (has('de xuat', 'mua sam', 'mua vat tu', 'don mua')) metric = isMoney ? 'purchase_value' : 'request_count';
-    else if (has('so may', 'so luong may', 'may theo', 'phan bo may', 'co bao nhieu may')) metric = 'asset_count';
+    else if (has('so may', 'so luong may', 'may theo', 'phan bo may', 'co bao nhieu may', 'bao nhieu may'))
+        metric = 'asset_count';
     if (!metric) return null;
 
     const meta = METRICS[metric];
-    let dim: Dimension = meta.dims[0];
-    if (has('thang', 'xu huong', 'theo ky') && meta.dims.includes('month')) dim = 'month';
-    else if (has('trang thai') && meta.dims.includes('status')) dim = 'status';
-    else if (has('loai may', 'theo loai') && meta.dims.includes('type')) dim = 'type';
-    else if (has('noi bo', 'sua ngoai') && meta.dims.includes('repairMode')) dim = 'repairMode';
-    else if (has('co so', 'giua', 'so sanh') && meta.dims.includes('plant')) dim = 'plant';
+    const dims = meta.dims;
+    // CHỌN CHIỀU theo ý định RÕ RÀNG, ưu tiên đúng. Lưu ý: "6 tháng/X tháng" là KHUNG THỜI GIAN (period),
+    // KHÔNG phải yêu cầu nhóm theo tháng -> chỉ chọn month khi có "xu hướng/theo tháng/hàng tháng...".
+    const wantsMonth = has('xu huong', 'theo thang', 'hang thang', 'theo ky', 'qua cac thang', 'moi thang', 'theo tung thang', 'theo thoi gian', 'dien bien');
+    const wantsStatus = has('trang thai') || assetStatusIntent;
+    const wantsType = has('loai may', 'theo loai', 'chung loai');
+    const wantsRepair = has('noi bo', 'sua ngoai');
+    const wantsPlant = has('co so', 'moi co so', 'tung co so', 'cac co so', 'so sanh', 'giua');
+    let dim: Dimension = dims[0];
+    if (wantsMonth && dims.includes('month')) dim = 'month';
+    else if (wantsStatus && dims.includes('status')) dim = 'status';
+    else if (wantsType && dims.includes('type')) dim = 'type';
+    else if (wantsRepair && dims.includes('repairMode')) dim = 'repairMode';
+    else if (wantsPlant && dims.includes('plant')) dim = 'plant';
 
     return sanitizeSpec({ metric, dimension: dim, period: 6, title: `${meta.label} theo ${DIM_LABEL[dim]}` });
+};
+
+// Lọc biểu đồ (chiều cơ sở) về ĐÚNG các cơ sở được NÊU TÊN trong câu hỏi. Nếu cơ sở được nêu nhưng
+// không có số liệu (không xuất hiện trong aggregation) thì zero-fill để vẫn hiện đúng cơ sở đó (=0)
+// thay vì hiển thị nhầm sang cơ sở khác. Trả null nếu câu không nêu cơ sở cụ thể nào.
+const namedPlantsInQuestion = (question: string, names: string[]): string[] => {
+    const nq = normQ(question);
+    return names.filter((name) => {
+        const core = normQ(name)
+            .replace(/^cong ty[^a-z0-9]*/, '')
+            .replace(/^c\s*o\s*s\s*o\s*/, '')
+            .replace(/^cs\s*/, '')
+            .trim();
+        if (!core) return false;
+        if (/^\d+$/.test(core)) return new RegExp(`(co so|cs)\\s*${core}(?!\\d)`).test(nq); // "cơ sở 1", "cs1"
+        return nq.includes(core); // "đại phạm", "kiên trung", "phú sơn"...
+    });
+};
+
+const filterChartToNamedPlants = (chart: ChartData, matchedNames: string[]): ChartData => {
+    const valueByName = new Map(chart.categories.map((c, i) => [c, chart.series[0]?.data[i] ?? 0]));
+    return {
+        ...chart,
+        categories: matchedNames,
+        series: chart.series.map((s, si) => ({
+            name: s.name,
+            data: matchedNames.map((n) => (si === 0 ? (valueByName.get(n) ?? 0) : 0)),
+        })),
+    };
 };
 
 // Map câu hỏi sang catalog. Trả null nếu KHÔNG khớp metric nào (để fallback agentic).
@@ -305,6 +364,10 @@ const aiMapSpec = async (question: string): Promise<Spec | null> => {
         'Ban map cau hoi nguoi dung sang chart-spec cho he thong quan ly may/vat tu.',
         'CHI chon metric & dimension TRONG danh muc duoi. Khong bia metric/dimension moi.',
         'Neu cau hoi KHONG khop chinh xac metric nao trong danh muc, tra {"metric":"none"}.',
+        'QUAN TRONG:',
+        '- Cau hoi xep hang theo TUNG may/thiet bi/vat tu cu the ("may nao hong nhieu nhat", "vat tu nao cap nhieu nhat", "top may ...") -> tra {"metric":"none"} (catalog khong co chieu nay).',
+        '- Cau hoi so luong may theo trang thai hien thoi ("co bao nhieu may dang bao tri/dang hong/ton kho") -> metric "asset_count", dimension "status".',
+        '- "tong chi phi/chi phi van hanh ... theo co so" -> dimension "plant" (KHONG phai month du co cum "X thang").',
         'Danh muc metric (kem cac chieu hop le):',
         catalogForPrompt(),
         'period = so thang gan nhat (mac dinh 6); chartType = bar|line|pie.',
@@ -444,8 +507,14 @@ const buildNarrative = (spec: Spec, chart: ChartData): string => {
 const ok = (res: Response, data: any) =>
     res.status(StatusCodes.OK).json(customResponse({ data, message: 'Đã phân tích', status: StatusCodes.OK, success: true }));
 
-const catalogResult = async (spec: Spec, plantId: string | undefined, aiUsed: boolean) => {
-    const chart = await buildChart(spec.metric, spec.dimension, spec.period, plantId);
+const catalogResult = async (spec: Spec, plantId: string | undefined, aiUsed: boolean, question?: string) => {
+    let chart = await buildChart(spec.metric, spec.dimension, spec.period, plantId);
+    // Nếu câu hỏi nêu tên cơ sở cụ thể (vd "so sánh ... giữa Đại Phạm và Kiên Trung") -> chỉ giữ
+    // đúng các cơ sở đó để khỏi hiển thị nhầm sang cơ sở khác.
+    if (spec.dimension === 'plant' && question) {
+        const matched = namedPlantsInQuestion(question, [...(await plantNameMap()).values()]);
+        if (matched.length) chart = filterChartToNamedPlants(chart, matched);
+    }
     const meta = METRICS[spec.metric];
     return {
         source: 'catalog' as const,
@@ -469,7 +538,7 @@ export const runAnalyticsQuery = async (req: Request, res: Response) => {
     if (question) {
         // 2a) Định tuyến từ khóa xác định -> catalog ngay (nhanh, không cần AI).
         const kw = keywordSpec(question);
-        if (kw) return ok(res, await catalogResult(kw, plantId, false));
+        if (kw) return ok(res, await catalogResult(kw, plantId, false, question));
 
         // 2b) AI map sang CATALOG (số chuẩn, đúng công thức báo cáo).
         let mapped: Spec | null = null;
@@ -478,7 +547,7 @@ export const runAnalyticsQuery = async (req: Request, res: Response) => {
         } catch {
             mapped = null;
         }
-        if (mapped) return ok(res, await catalogResult(mapped, plantId, true));
+        if (mapped) return ok(res, await catalogResult(mapped, plantId, true, question));
 
         // 3) Catalog không phủ -> FALLBACK AGENTIC (tham khảo): số lấy từ tool, kèm bảng đối chiếu.
         try {
