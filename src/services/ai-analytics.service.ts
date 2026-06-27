@@ -86,6 +86,16 @@ const lastNMonthKeys = (n: number) => {
     return keys;
 };
 
+// Khoảng [đầu tháng, đầu tháng kế] cho 1 tháng cụ thể (YYYY-MM) — để lọc dữ liệu đúng 1 tháng.
+const monthKeyToRange = (monthKey: string) => {
+    const [y, m] = monthKey.split('-').map(Number);
+    return { start: new Date(y, m - 1, 1, 0, 0, 0, 0), end: new Date(y, m, 1, 0, 0, 0, 0) };
+};
+const monthKeyLabel = (monthKey: string) => {
+    const [y, m] = monthKey.split('-');
+    return `tháng ${Number(m)}/${y}`;
+};
+
 const plantNameMap = async () => {
     const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name code').lean();
     return new Map(plants.map((p: any) => [String(p._id), String(p.name || p.code || 'Chưa rõ')]));
@@ -103,17 +113,26 @@ const monthGroupId = (field: string) => ({ $dateToString: { format: '%Y-%m', dat
 
 type ChartData = { categories: string[]; series: { name: string; data: number[] }[]; unit: string };
 
-const buildChart = async (metric: MetricKey, dimension: Dimension, period: number, plantId?: string): Promise<ChartData> => {
+const buildChart = async (
+    metric: MetricKey,
+    dimension: Dimension,
+    period: number,
+    plantId?: string,
+    monthKey?: string
+): Promise<ChartData> => {
     const meta = METRICS[metric];
     const unit = meta.unit;
     const plantOid = plantId ? new Types.ObjectId(plantId) : undefined;
+    // Khung thời gian cho các metric "timed": 1 tháng cụ thể (monthKey) hoặc N tháng gần nhất.
+    const window = monthKey ? monthKeyToRange(monthKey) : { start: monthStart(period - 1), end: null as Date | null };
+    const timedMatch = () => ({ $gte: window.start, ...(window.end ? { $lt: window.end } : {}) });
 
     // ----- CHI PHÍ (cấp phát / sửa ngoài / tổng) — tái dùng ĐÚNG công thức report.service -----
     if (metric === 'distribution_cost' || metric === 'external_repair_cost' || metric === 'total_cost') {
         const report = await buildFacilityCostReport({
             groupBy: 'month',
-            startDate: monthStart(period - 1),
-            endDate: new Date(),
+            startDate: window.start,
+            endDate: window.end ?? new Date(),
             plantId,
         });
         const pick =
@@ -168,7 +187,7 @@ const buildChart = async (metric: MetricKey, dimension: Dimension, period: numbe
     // ----- MAINTENANCE_COUNT -----
     if (metric === 'maintenance_count') {
         const match: Record<string, any> = { isDeleted: { $ne: true } };
-        if (meta.timed) match.startDate = { $gte: monthStart(period - 1) };
+        if (meta.timed) match.startDate = timedMatch();
         if (dimension === 'month') {
             const rows = await groupAgg(Maintenance, match, monthGroupId('startDate'), { $sum: 1 });
             const byKey = new Map(rows.map((r) => [r.key, r.value]));
@@ -194,8 +213,7 @@ const buildChart = async (metric: MetricKey, dimension: Dimension, period: numbe
     const isValue = metric === 'purchase_value';
     const valueExpr = isValue ? { $sum: { $ifNull: ['$totalWithVat', 0] } } : { $sum: 1 };
     const match: Record<string, any> = { isDeleted: { $ne: true }, requestType: 'purchase' };
-    if (meta.timed && dimension === 'month') match.createdAt = { $gte: monthStart(period - 1) };
-    else if (meta.timed) match.createdAt = { $gte: monthStart(period - 1) };
+    if (meta.timed) match.createdAt = timedMatch();
     if (plantOid) match.plantId = plantOid;
 
     if (dimension === 'plant') {
@@ -231,7 +249,7 @@ const catalogForPrompt = () =>
         .map(([key, m]) => `- ${key} (${m.label}); chiều: ${m.dims.join(', ')}`)
         .join('\n');
 
-type Spec = { metric: MetricKey; dimension: Dimension; period: number; chartType: ChartType; title: string };
+type Spec = { metric: MetricKey; dimension: Dimension; period: number; chartType: ChartType; title: string; monthKey?: string };
 
 const sanitizeSpec = (raw: any): Spec => {
     const metric: MetricKey = (METRICS as any)[raw?.metric] ? raw.metric : 'asset_count';
@@ -248,7 +266,8 @@ const sanitizeSpec = (raw: any): Spec => {
             ? 'pie'
             : 'bar';
     const title = String(raw?.title || `${meta.label} theo ${DIM_LABEL[dimension]}`).slice(0, 120);
-    return { metric, dimension, period, chartType, title };
+    const monthKey = typeof raw?.monthKey === 'string' && /^\d{4}-\d{2}$/.test(raw.monthKey) ? raw.monthKey : undefined;
+    return { metric, dimension, period, chartType, title, monthKey };
 };
 
 // Định tuyến từ khóa XÁC ĐỊNH (chạy trước AI): câu phân tích/so sánh rõ ràng -> catalog ngay,
@@ -260,6 +279,29 @@ const normQ = (s: string) =>
         .normalize('NFD')
         .replace(/[̀-ͯ]/g, '')
         .replace(/đ/g, 'd');
+
+// Nhận diện THÁNG CỤ THỂ trong câu -> YYYY-MM. Phân biệt với KHUNG THỜI GIAN ("6 tháng qua"):
+// chỉ bắt "tháng <N>" (số ĐỨNG SAU "tháng"), "tháng này", "tháng trước". KHÔNG bắt "6 tháng".
+const parseMonthKey = (question: string): string | undefined => {
+    const q = normQ(question);
+    const now = new Date();
+    const ym = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (/thang nay/.test(q)) return ym(now);
+    if (/thang truoc|thang vua roi|thang ngoai/.test(q)) {
+        const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return ym(d);
+    }
+    // "tháng 6", "tháng 6/2026", "thang 06" — số đứng SAU "tháng" (loại trừ "6 tháng").
+    const m = q.match(/thang\s*(0?[1-9]|1[0-2])(?!\d)/);
+    if (m) {
+        const mm = Number(m[1]);
+        const yearMatch = q.match(/thang\s*(?:0?[1-9]|1[0-2])\s*\/?\s*(20\d{2})/);
+        let yy = yearMatch ? Number(yearMatch[1]) : now.getFullYear();
+        if (!yearMatch && mm > now.getMonth() + 1) yy -= 1; // tháng > tháng hiện tại -> năm ngoái
+        return `${yy}-${String(mm).padStart(2, '0')}`;
+    }
+    return undefined;
+};
 
 const keywordSpec = (question: string): Spec | null => {
     const q = normQ(question);
@@ -509,7 +551,7 @@ const ok = (res: Response, data: any) =>
     res.status(StatusCodes.OK).json(customResponse({ data, message: 'Đã phân tích', status: StatusCodes.OK, success: true }));
 
 const catalogResult = async (spec: Spec, plantId: string | undefined, aiUsed: boolean, question?: string) => {
-    let chart = await buildChart(spec.metric, spec.dimension, spec.period, plantId);
+    let chart = await buildChart(spec.metric, spec.dimension, spec.period, plantId, spec.monthKey);
     // Nếu câu hỏi nêu tên cơ sở cụ thể (vd "so sánh ... giữa Đại Phạm và Kiên Trung") -> chỉ giữ
     // đúng các cơ sở đó để khỏi hiển thị nhầm sang cơ sở khác.
     if (spec.dimension === 'plant' && question) {
@@ -517,13 +559,16 @@ const catalogResult = async (spec: Spec, plantId: string | undefined, aiUsed: bo
         if (matched.length) chart = filterChartToNamedPlants(chart, matched);
     }
     const meta = METRICS[spec.metric];
+    // Tiêu đề/diễn giải kèm nhãn tháng cụ thể khi có (vd "... (tháng 6/2026)").
+    const monthSuffix = spec.monthKey ? ` (${monthKeyLabel(spec.monthKey)})` : '';
+    const title = spec.title + monthSuffix;
     return {
         source: 'catalog' as const,
         trusted: true,
-        spec: { ...spec, metricLabel: meta.label, dimensionLabel: DIM_LABEL[spec.dimension] },
-        chart: { type: spec.chartType, title: spec.title, ...chart },
+        spec: { ...spec, title, metricLabel: meta.label, dimensionLabel: DIM_LABEL[spec.dimension] },
+        chart: { type: spec.chartType, title, ...chart },
         table: chartToTable(chart),
-        narrative: buildNarrative(spec, chart),
+        narrative: buildNarrative(spec, chart) + (monthSuffix ? ` Chỉ tính ${monthKeyLabel(spec.monthKey!)}.` : ''),
         aiUsed,
     };
 };
@@ -537,9 +582,12 @@ export const runAnalyticsQuery = async (req: Request, res: Response) => {
     if (providedSpec) return ok(res, await catalogResult(sanitizeSpec(providedSpec), plantId, false));
 
     if (question) {
+        // Tháng cụ thể nêu trong câu ("tháng 6", "tháng này"...) -> lọc đúng tháng đó.
+        const monthKey = parseMonthKey(question);
+
         // 2a) Định tuyến từ khóa xác định -> catalog ngay (nhanh, không cần AI).
         const kw = keywordSpec(question);
-        if (kw) return ok(res, await catalogResult(kw, plantId, false, question));
+        if (kw) return ok(res, await catalogResult({ ...kw, monthKey }, plantId, false, question));
 
         // 2b) AI map sang CATALOG (số chuẩn, đúng công thức báo cáo).
         let mapped: Spec | null = null;
@@ -548,7 +596,7 @@ export const runAnalyticsQuery = async (req: Request, res: Response) => {
         } catch {
             mapped = null;
         }
-        if (mapped) return ok(res, await catalogResult(mapped, plantId, true, question));
+        if (mapped) return ok(res, await catalogResult({ ...mapped, monthKey: mapped.monthKey ?? monthKey }, plantId, true, question));
 
         // 3) Catalog không phủ -> FALLBACK AGENTIC (tham khảo): số lấy từ tool, kèm bảng đối chiếu.
         try {
