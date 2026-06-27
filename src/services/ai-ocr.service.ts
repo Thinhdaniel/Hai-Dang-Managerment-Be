@@ -15,9 +15,38 @@ import customResponse from '@/utils/response';
 //
 // QUAN TRỌNG: KHÔNG dùng zod strict — output dài (nhiều cột x nhiều dòng) hay khiến model
 // trả số dạng chuỗi/thiếu trường, strict parse sẽ throw -> rơi fallback oan. Ở đây đọc KHOAN
-// DUNG (ép kiểu mềm, bỏ trường lỗi) + thử lại 1 lần cho ổn định.
+// DUNG (ép kiểu mềm, bỏ trường lỗi) + thử lại nhiều lần (model chính x2 + model vision dự phòng) cho ổn định.
 
 const OCR_VISION_MODEL_OVERRIDE = process.env.AI_OCR_MODEL || process.env.AI_VISION_MODEL;
+
+// Model vision DỰ PHÒNG cho lần thử cuối: gemini-2.5-flash đôi khi chập chờn/bị rate-limit ->
+// trả rỗng cả 2 lần liên tiếp. Lần cuối đổi sang model vision khác (mạnh hơn) để né hẳn.
+const OCR_FALLBACK_VISION_MODEL = process.env.AI_OCR_FALLBACK_MODEL || 'gc/gemini-2.5-pro';
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Chạy 1 lượt OCR (attempt) nhiều lần cho ỔN ĐỊNH:
+ *   - 2 lần đầu dùng model chính (đỡ tốn quota), nghỉ ngắn giữa các lần để tránh rate-limit dồn.
+ *   - lần cuối đổi sang model vision dự phòng để né khi model chính trả rỗng/lỗi.
+ * `attempt` nhận model (có thể undefined -> để aiProvider tự resolve theo feature).
+ */
+const runOcrWithRetry = async <T>(
+    attempt: (model?: string) => Promise<T>,
+    primaryModel?: string
+): Promise<T> => {
+    const plan: (string | undefined)[] = [primaryModel, primaryModel, OCR_FALLBACK_VISION_MODEL];
+    let lastError: unknown;
+    for (let i = 0; i < plan.length; i++) {
+        try {
+            return await attempt(plan[i]);
+        } catch (error) {
+            lastError = error;
+            if (i < plan.length - 1) await sleep(400 * (i + 1)); // backoff nhẹ: 400ms, 800ms
+        }
+    }
+    throw lastError;
+};
 
 type OcrItem = {
     materialName: string;
@@ -131,10 +160,10 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
 
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
-    const attempt = async () => {
+    const attempt = async (model?: string) => {
         const aiResult = await aiProviderService.generateJson<any>({
             feature: 'ocr-invoice',
-            model: OCR_VISION_MODEL_OVERRIDE,
+            model,
             temperature: 0.05,
             maxTokens: 4000,
             timeoutMs: 75000,
@@ -164,8 +193,8 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
     };
 
     try {
-        // Thử lại 1 lần: gemini đôi khi trả JSON bẩn/cắt cụt với output dài.
-        const { aiResult, items, header } = await attempt().catch(() => attempt());
+        // Thử lại nhiều lần (model chính x2 + model dự phòng): gemini đôi khi trả JSON bẩn/cắt cụt/rỗng.
+        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_VISION_MODEL_OVERRIDE);
 
         return res.status(StatusCodes.OK).json(
             customResponse({
@@ -211,10 +240,10 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
 
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
-    const attempt = async () => {
+    const attempt = async (model?: string) => {
         const aiResult = await aiProviderService.generateJson<any>({
             feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
-            model: OCR_VISION_MODEL_OVERRIDE,
+            model,
             temperature: 0.04,
             maxTokens: 3200,
             timeoutMs: 75000,
@@ -246,7 +275,8 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
     };
 
     try {
-        const { aiResult, items, header } = await attempt().catch(() => attempt());
+        // Thử lại nhiều lần (model chính x2 + model dự phòng) cho ổn định khi gemini trả rỗng/chập chờn.
+        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_VISION_MODEL_OVERRIDE);
 
         return res.status(StatusCodes.OK).json(
             customResponse({
