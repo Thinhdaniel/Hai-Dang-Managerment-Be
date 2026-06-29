@@ -5,6 +5,7 @@ import customResponse from '@/utils/response';
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
+import { getPurchaseCostEntriesByPlant } from '@/services/material.service';
 
 type ReportGroupBy = 'day' | 'month' | 'quarter';
 
@@ -19,9 +20,11 @@ type FacilityCostPlantRow = {
     plantId?: string;
     plantName: string;
     materialDistributionCost: number;
+    materialSelfPurchaseCost: number;
     externalRepairCost: number;
     totalCost: number;
     distributionCount: number;
+    selfPurchaseOrderCount: number;
     externalRepairCount: number;
     externalRepairAssetCount: number;
     repairSharePercent: number;
@@ -30,6 +33,22 @@ type FacilityCostPlantRow = {
 const EXTERNAL_REPAIR_MODE = 'external';
 const COMPLETED_STATUS = 'completed';
 const DISTRIBUTION_STATUSES = ['distributed', 'confirmed'];
+
+const splitEnvIds = (value?: string) =>
+    String(value || '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
+
+/**
+ * Các cơ sở được phép TỰ MUA vật tư nhưng KHÔNG phải cơ sở chính (CS1) — ví dụ Phú Sơn.
+ * Với nhóm này, chi phí vật tư = cấp phát nhận từ CS1 + phần tự mua. Cơ sở chính (MAIN_PLANT_ID)
+ * tuy được mua nhưng tiền mua là mua hộ/nhập kho rồi cấp phát xuống nên KHÔNG cộng tự mua (tránh trùng).
+ */
+const getSelfPurchasePlantIds = () => {
+    const mainPlantIds = new Set(splitEnvIds(process.env.MAIN_PLANT_ID));
+    return new Set(splitEnvIds(process.env.PROCUREMENT_PLANT_IDS).filter((id) => !mainPlantIds.has(id)));
+};
 
 const parseDateStart = (value: unknown) => {
     if (!value) return undefined;
@@ -108,9 +127,11 @@ const getOrCreatePlantRow = (
         plantId,
         plantName,
         materialDistributionCost: 0,
+        materialSelfPurchaseCost: 0,
         externalRepairCost: 0,
         totalCost: 0,
         distributionCount: 0,
+        selfPurchaseOrderCount: 0,
         externalRepairCount: 0,
         externalRepairAssetCount: 0,
         repairSharePercent: 0,
@@ -199,7 +220,13 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
     const assetIdsByPlant = new Map<string, Set<string>>();
     const periodRows = new Map<
         string,
-        { period: string; materialDistributionCost: number; externalRepairCost: number; totalCost: number }
+        {
+            period: string;
+            materialDistributionCost: number;
+            materialSelfPurchaseCost: number;
+            externalRepairCost: number;
+            totalCost: number;
+        }
     >();
 
     distributions.forEach((record: any) => {
@@ -217,6 +244,7 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         const periodRow = periodRows.get(period) ?? {
             period,
             materialDistributionCost: 0,
+            materialSelfPurchaseCost: 0,
             externalRepairCost: 0,
             totalCost: 0,
         };
@@ -254,6 +282,7 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         const periodRow = periodRows.get(period) ?? {
             period,
             materialDistributionCost: 0,
+            materialSelfPurchaseCost: 0,
             externalRepairCost: 0,
             totalCost: 0,
         };
@@ -261,9 +290,54 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         periodRows.set(period, periodRow);
     });
 
+    // Vật tư TỰ MUA của các cơ sở được phép tự đặt (vd Phú Sơn) — không nằm trong luồng cấp phát
+    // từ CS1 nên trước đây bị thiếu khỏi chi phí vận hành. Chỉ cộng cho nhóm self-purchase và
+    // (nếu lọc theo 1 cơ sở) đúng cơ sở đó.
+    const selfPurchasePlantIds = getSelfPurchasePlantIds();
+    if (selfPurchasePlantIds.size) {
+        const purchaseEntries = await getPurchaseCostEntriesByPlant({
+            startDate: filters.startDate,
+            endDate: filters.endDate,
+        });
+        purchaseEntries.forEach((entry) => {
+            if (!selfPurchasePlantIds.has(entry.plantId)) return;
+            if (filters.plantId && entry.plantId !== filters.plantId) return;
+
+            const plantRow = getOrCreatePlantRow(plantRows, entry.plantId, entry.plantName);
+            plantRow.materialSelfPurchaseCost = roundMoney(plantRow.materialSelfPurchaseCost + entry.cost);
+
+            const period = getPeriodLabel(entry.effectiveDate, filters.groupBy);
+            const periodRow = periodRows.get(period) ?? {
+                period,
+                materialDistributionCost: 0,
+                materialSelfPurchaseCost: 0,
+                externalRepairCost: 0,
+                totalCost: 0,
+            };
+            periodRow.materialSelfPurchaseCost = roundMoney(periodRow.materialSelfPurchaseCost + entry.cost);
+            periodRows.set(period, periodRow);
+        });
+
+        // Đếm số đơn tự mua theo cơ sở (distinct orderId) để hiển thị ở tooltip/bảng
+        const orderIdsByPlant = new Map<string, Set<string>>();
+        purchaseEntries.forEach((entry) => {
+            if (!selfPurchasePlantIds.has(entry.plantId)) return;
+            if (filters.plantId && entry.plantId !== filters.plantId) return;
+            const set = orderIdsByPlant.get(entry.plantId) ?? new Set<string>();
+            set.add(entry.orderId);
+            orderIdsByPlant.set(entry.plantId, set);
+        });
+        orderIdsByPlant.forEach((orderIds, plantId) => {
+            const plantRow = plantRows.get(plantId);
+            if (plantRow) plantRow.selfPurchaseOrderCount = orderIds.size;
+        });
+    }
+
     const costByPlant = Array.from(plantRows.entries())
         .map(([key, row]) => {
-            const totalCost = roundMoney(row.materialDistributionCost + row.externalRepairCost);
+            const totalCost = roundMoney(
+                row.materialDistributionCost + row.materialSelfPurchaseCost + row.externalRepairCost
+            );
             const repairSharePercent = totalCost ? roundMoney((row.externalRepairCost / totalCost) * 100) : 0;
             return {
                 ...row,
@@ -277,7 +351,7 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
     const costByPeriod = Array.from(periodRows.values())
         .map((row) => ({
             ...row,
-            totalCost: roundMoney(row.materialDistributionCost + row.externalRepairCost),
+            totalCost: roundMoney(row.materialDistributionCost + row.materialSelfPurchaseCost + row.externalRepairCost),
         }))
         .sort((a, b) => a.period.localeCompare(b.period));
 
@@ -318,6 +392,7 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         .sort((a, b) => b.totalCost - a.totalCost)
         .slice(0, 10);
     const materialDistributionCost = costByPlant.reduce((sum, row) => sum + row.materialDistributionCost, 0);
+    const materialSelfPurchaseCost = costByPlant.reduce((sum, row) => sum + row.materialSelfPurchaseCost, 0);
     const externalRepairCost = costByPlant.reduce((sum, row) => sum + row.externalRepairCost, 0);
     const externalRepairAssetCount = new Set(
         completedRepairs.map((item: any) => (item.assetId?._id ? String(item.assetId._id) : undefined)).filter(Boolean)
@@ -326,8 +401,10 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
     return {
         summary: {
             materialDistributionCost: roundMoney(materialDistributionCost),
+            materialSelfPurchaseCost: roundMoney(materialSelfPurchaseCost),
+            materialTotalCost: roundMoney(materialDistributionCost + materialSelfPurchaseCost),
             externalRepairCost: roundMoney(externalRepairCost),
-            totalFacilityCost: roundMoney(materialDistributionCost + externalRepairCost),
+            totalFacilityCost: roundMoney(materialDistributionCost + materialSelfPurchaseCost + externalRepairCost),
             distributionRecordCount: distributions.filter((record: any) =>
                 isDateInRange(getDistributionDate(record), filters)
             ).length,
@@ -380,7 +457,9 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
     const wsOverview = wb.addWorksheet('Tong quan chi phi');
     wsOverview.columns = [{ width: 36 }, { width: 24 }];
     wsOverview.addRow(['Chi tieu', 'Gia tri']);
-    wsOverview.addRow(['Chi phi vat tu da cap phat', report.summary.materialDistributionCost]);
+    wsOverview.addRow(['Chi phi vat tu CS1 cap phat', report.summary.materialDistributionCost]);
+    wsOverview.addRow(['Chi phi vat tu co so tu mua', report.summary.materialSelfPurchaseCost]);
+    wsOverview.addRow(['Tong chi phi vat tu', report.summary.materialTotalCost]);
     wsOverview.addRow(['Chi phi sua ngoai', report.summary.externalRepairCost]);
     wsOverview.addRow(['Tong chi phi van hanh', report.summary.totalFacilityCost]);
     wsOverview.addRow(['So phieu cap phat vat tu', report.summary.distributionRecordCount]);
@@ -394,9 +473,15 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
     wsPlant.columns = [
         { header: 'Co so', key: 'plantName', width: 28 },
         {
-            header: 'Chi phi vat tu da cap phat',
+            header: 'Vat tu CS1 cap phat',
             key: 'materialDistributionCost',
-            width: 26,
+            width: 22,
+            style: { numFmt: '#,##0' },
+        },
+        {
+            header: 'Vat tu co so tu mua',
+            key: 'materialSelfPurchaseCost',
+            width: 22,
             style: { numFmt: '#,##0' },
         },
         { header: 'Chi phi sua ngoai', key: 'externalRepairCost', width: 20, style: { numFmt: '#,##0' } },
@@ -413,9 +498,15 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
     wsPeriod.columns = [
         { header: 'Ky', key: 'period', width: 16 },
         {
-            header: 'Chi phi vat tu da cap phat',
+            header: 'Vat tu CS1 cap phat',
             key: 'materialDistributionCost',
-            width: 26,
+            width: 22,
+            style: { numFmt: '#,##0' },
+        },
+        {
+            header: 'Vat tu co so tu mua',
+            key: 'materialSelfPurchaseCost',
+            width: 22,
             style: { numFmt: '#,##0' },
         },
         { header: 'Chi phi sua ngoai', key: 'externalRepairCost', width: 20, style: { numFmt: '#,##0' } },

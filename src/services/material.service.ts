@@ -1595,6 +1595,47 @@ const getPurchaseItemPlantName = (order: any, item: any, plantNameById: Map<stri
     );
 };
 
+/**
+ * Danh sách chi phí MUA vật tư phẳng theo từng dòng đơn hàng, gom theo cơ sở PHÁT SINH NHU CẦU
+ * (giống logic chart "Tổng chi phí vật tư theo cơ sở": dùng totalWithVat + getReportOrderItemPlantId
+ * + ngày hiệu lực đơn hàng). Báo cáo chi phí vận hành dùng hàm này để cộng phần "vật tư tự mua"
+ * cho các cơ sở được phép tự đặt (vd Phú Sơn) — vốn không nằm trong luồng cấp phát từ CS1.
+ */
+export const getPurchaseCostEntriesByPlant = async (opts: {
+    startDate?: Date;
+    endDate?: Date;
+}): Promise<Array<{ plantId: string; plantName: string; cost: number; effectiveDate: Date; orderId: string }>> => {
+    const filters: MaterialReportFilters = {
+        startDate: opts.startDate,
+        endDate: opts.endDate,
+        groupBy: 'month',
+    };
+
+    const [purchaseOrders, plants] = await Promise.all([
+        getPurchaseOrdersForReport(filters),
+        Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
+    ]);
+    const plantNameById = new Map(plants.map((plant: any) => [String(plant._id), plant.name || 'Chưa xác định']));
+
+    const entries: Array<{ plantId: string; plantName: string; cost: number; effectiveDate: Date; orderId: string }> = [];
+    purchaseOrders.forEach((order: any) => {
+        const orderId = String(order._id);
+        const effectiveDate = getOrderEffectiveDate(order);
+        getReportOrderItems(order, filters).forEach((item: any) => {
+            const plantId = getReportOrderItemPlantId(order, item);
+            if (!plantId) return;
+            entries.push({
+                plantId,
+                plantName: getPurchaseItemPlantName(order, item, plantNameById),
+                cost: Number(item.totalWithVat ?? item.totalPrice ?? 0),
+                effectiveDate,
+                orderId,
+            });
+        });
+    });
+    return entries;
+};
+
 export const getMaterialCostFlowByPlantReport = async (req: Request, res: Response, next: NextFunction) => {
     const filters = buildReportFilters(req.query);
     const materialIds = await getMaterialIdsForReport(filters);
