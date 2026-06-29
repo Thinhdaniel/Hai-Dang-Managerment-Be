@@ -31,6 +31,11 @@ router.get(
     authorize(...ROLE_GROUPS.MANAGEMENT),
     materialController.getDistributionCostReport
 );
+router.get(
+    '/reports/cost-flow-by-plant',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    materialController.getMaterialCostFlowByPlantReport
+);
 router.get('/reports/export-excel', authorize(...ROLE_GROUPS.MANAGEMENT), materialController.exportMaterialReportExcel);
 router.get('/low-stock', materialController.getLowStockMaterials);
 router.get('/export-excel', authorize(...ROLE_GROUPS.MANAGEMENT), materialController.exportMaterialCatalogExcel);

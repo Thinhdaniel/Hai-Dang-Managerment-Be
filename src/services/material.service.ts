@@ -2,6 +2,7 @@ import { USER_ROLE } from '@/constant/allowedRoles';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import InventoryStock from '@/models/InventoryStock';
 import Material from '@/models/Material';
+import Plant from '@/models/Plant';
 import PurchaseOrder from '@/models/PurchaseOrder';
 import PurchaseRequest from '@/models/PurchaseRequest';
 import { materialRepository } from '@/repositories/material.repository';
@@ -1517,6 +1518,171 @@ export const getDistributionCostReport = async (req: Request, res: Response, nex
                 })),
             },
             message: 'Lay bao cao chi phi cap phat thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+type MaterialCostFlowPlantRow = {
+    plantId?: string;
+    plantName: string;
+    purchaseCost: number;
+    distributionCost: number;
+    totalCost: number;
+    purchaseOrderCount: number;
+    distributionCount: number;
+    purchaseItemCount: number;
+    distributionItemCount: number;
+    canPurchase: boolean;
+    purchaseOrderIds: string[];
+    distributionIds: string[];
+};
+
+const parseProcurementPlantIds = () =>
+    new Set(
+        [process.env.PROCUREMENT_PLANT_IDS, process.env.MAIN_PLANT_ID]
+            .filter(Boolean)
+            .flatMap((value) => String(value).split(','))
+            .map((value) => value.trim())
+            .filter(Boolean)
+    );
+
+const getCostFlowPlantKey = (plantId?: string, plantName?: string) => plantId || `name:${plantName || 'unknown'}`;
+
+const getCostFlowPlantRow = (
+    rows: Map<string, MaterialCostFlowPlantRow & { purchaseOrderIdSet: Set<string>; distributionIdSet: Set<string> }>,
+    procurementPlantIds: Set<string>,
+    plantId?: string,
+    plantName = 'Chưa xác định'
+) => {
+    const key = getCostFlowPlantKey(plantId, plantName);
+    const existing = rows.get(key);
+    if (existing) {
+        if (existing.plantName === 'Chưa xác định' && plantName !== 'Chưa xác định') existing.plantName = plantName;
+        return existing;
+    }
+
+    const row: MaterialCostFlowPlantRow & { purchaseOrderIdSet: Set<string>; distributionIdSet: Set<string> } = {
+        plantId,
+        plantName,
+        purchaseCost: 0,
+        distributionCost: 0,
+        totalCost: 0,
+        purchaseOrderCount: 0,
+        distributionCount: 0,
+        purchaseItemCount: 0,
+        distributionItemCount: 0,
+        canPurchase: Boolean(plantId && procurementPlantIds.has(plantId)),
+        purchaseOrderIds: [],
+        distributionIds: [],
+        purchaseOrderIdSet: new Set<string>(),
+        distributionIdSet: new Set<string>(),
+    };
+    rows.set(key, row);
+    return row;
+};
+
+const getPurchaseItemPlantName = (order: any, item: any, plantNameById: Map<string, string>) => {
+    const plantId = getReportOrderItemPlantId(order, item);
+    const sourceItem = getSourcePurchaseRequestItem(order, item);
+
+    return (
+        item.plantName ||
+        sourceItem?.plantName ||
+        (plantId ? plantNameById.get(plantId) : undefined) ||
+        'Chưa xác định'
+    );
+};
+
+export const getMaterialCostFlowByPlantReport = async (req: Request, res: Response, next: NextFunction) => {
+    const filters = buildReportFilters(req.query);
+    const materialIds = await getMaterialIdsForReport(filters);
+    const DistributionRecord = (await import('@/models/DistributionRecord')).default;
+
+    const [purchaseOrders, plants] = await Promise.all([
+        getPurchaseOrdersForReport(filters, materialIds),
+        Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
+    ]);
+
+    const plantNameById = new Map(plants.map((plant: any) => [String(plant._id), plant.name || 'Chưa xác định']));
+    const procurementPlantIds = parseProcurementPlantIds();
+    const rows = new Map<
+        string,
+        MaterialCostFlowPlantRow & { purchaseOrderIdSet: Set<string>; distributionIdSet: Set<string> }
+    >();
+
+    purchaseOrders.forEach((order: any) => {
+        const orderId = String(order._id);
+        getReportOrderItems(order, filters, materialIds).forEach((item: any) => {
+            const plantId = getReportOrderItemPlantId(order, item);
+            const plantName = getPurchaseItemPlantName(order, item, plantNameById);
+            const row = getCostFlowPlantRow(rows, procurementPlantIds, plantId, plantName);
+            row.purchaseCost = Number(
+                (row.purchaseCost + Number(item.totalWithVat ?? item.totalPrice ?? 0)).toFixed(2)
+            );
+            row.purchaseItemCount += 1;
+            row.purchaseOrderIdSet.add(orderId);
+        });
+    });
+
+    const distributionMatch: Record<string, any> = {
+        isDeleted: { $ne: true },
+        status: { $in: ['distributed', 'confirmed'] },
+    };
+    if (filters.plantId) distributionMatch.toPlantId = new mongoose.Types.ObjectId(filters.plantId);
+    if (filters.startDate || filters.endDate) {
+        distributionMatch.createdAt = {};
+        if (filters.startDate) distributionMatch.createdAt.$gte = filters.startDate;
+        if (filters.endDate) distributionMatch.createdAt.$lte = filters.endDate;
+    }
+    if (materialIds) {
+        distributionMatch['items.materialId'] = {
+            $in: Array.from(materialIds).map((id) => new mongoose.Types.ObjectId(id)),
+        };
+    }
+
+    const distributions = await DistributionRecord.find(distributionMatch).populate('toPlantId').lean();
+    distributions.forEach((record: any) => {
+        const plantId = record.toPlantId?._id ? String(record.toPlantId._id) : undefined;
+        const plantName = record.toPlantId?.name || (plantId ? plantNameById.get(plantId) : undefined) || 'Chưa xác định';
+        const row = getCostFlowPlantRow(rows, procurementPlantIds, plantId, plantName);
+        const items = (record.items ?? []).filter((item: any) => {
+            if (!materialIds) return true;
+            const materialId = toId(item.materialId);
+            return Boolean(materialId && materialIds.has(materialId));
+        });
+        const recordCost = items.reduce(
+            (sum: number, item: any) => sum + Number(item.totalWithVat ?? item.totalPrice ?? 0),
+            0
+        );
+        row.distributionCost = Number((row.distributionCost + recordCost).toFixed(2));
+        row.distributionItemCount += items.length;
+        row.distributionIdSet.add(String(record._id));
+    });
+
+    const data = Array.from(rows.values())
+        .map((row) => ({
+            plantId: row.plantId,
+            plantName: row.plantName,
+            purchaseCost: Number(row.purchaseCost.toFixed(2)),
+            distributionCost: Number(row.distributionCost.toFixed(2)),
+            totalCost: Number((row.purchaseCost + row.distributionCost).toFixed(2)),
+            purchaseOrderCount: row.purchaseOrderIdSet.size,
+            distributionCount: row.distributionIdSet.size,
+            purchaseItemCount: row.purchaseItemCount,
+            distributionItemCount: row.distributionItemCount,
+            canPurchase: row.canPurchase,
+            purchaseOrderIds: Array.from(row.purchaseOrderIdSet),
+            distributionIds: Array.from(row.distributionIdSet),
+        }))
+        .filter((row) => row.totalCost > 0)
+        .sort((a, b) => b.totalCost - a.totalCost);
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data,
+            message: 'Lay bao cao dong chi phi vat tu theo co so thanh cong',
             status: StatusCodes.OK,
             success: true,
         })

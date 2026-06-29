@@ -72,3 +72,9 @@ export const exportMaterialReportExcel = asyncHandler(async (req: Request, res: 
 export const getDistributionCostReport = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await materialService.getDistributionCostReport(req, res, next);
 });
+
+export const getMaterialCostFlowByPlantReport = asyncHandler(
+    async (req: Request, res: Response, next: NextFunction) => {
+        return await materialService.getMaterialCostFlowByPlantReport(req, res, next);
+    }
+);
