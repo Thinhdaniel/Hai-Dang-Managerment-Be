@@ -275,6 +275,15 @@ export const serializeTransfer = (input: any) => {
         transfer?.toPlantId && typeof transfer.toPlantId === 'object' && transfer.toPlantId.name
             ? serializePlant(transfer.toPlantId)
             : undefined;
+    const sourceSnapshots = Array.isArray(transfer?.sourceSnapshots)
+        ? transfer.sourceSnapshots.map((item: any) => ({
+              assetId: toId(item?.assetId),
+              plantId: toId(item?.plantId),
+              area: item?.area,
+              machineCode: item?.machineCode,
+              name: item?.name,
+          }))
+        : [];
 
     return {
         id: toId(transfer),
@@ -287,6 +296,7 @@ export const serializeTransfer = (input: any) => {
         fromPlantId: fromPlant?.id ?? toId(transfer?.fromPlantId),
         fromPlant,
         fromArea: transfer?.fromArea,
+        sourceSnapshots,
         toPlantId: toPlant?.id ?? toId(transfer?.toPlantId),
         toPlant,
         toArea: transfer?.toArea,

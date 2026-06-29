@@ -79,6 +79,15 @@ const getAssets = (transfer: any) => {
     return [];
 };
 
+const getAssetId = (asset: any) => String(asset?.id || asset?._id || asset?.assetId || '');
+
+const getSourceAreaByAsset = (transfer: any, asset: any) => {
+    const assetId = getAssetId(asset);
+    const snapshots = Array.isArray(transfer.sourceSnapshots) ? transfer.sourceSnapshots : [];
+    const snapshot = snapshots.find((item: any) => String(item?.assetId || '') === assetId);
+    return snapshot?.area || transfer.fromArea || asset?.area || '';
+};
+
 const getTransferCode = (transfer: any) =>
     transfer.transferCode ||
     `PXK-DC-${dayjs(transfer.createdAt || new Date()).format('YYYY')}-${String(transfer.id || '').slice(-5).toUpperCase()}`;
@@ -192,7 +201,7 @@ export const generateTransferStockOutXlsx = async (transfer: any): Promise<Buffe
             asset.serial || '',
             [asset.type, asset.model].filter(Boolean).join(' / '),
             asset.brand?.name || '',
-            transfer.fromArea || '',
+            getSourceAreaByAsset(transfer, asset),
             transfer.toArea || '',
             assetStatusLabel[asset.status] || asset.status || '',
             asset.note || '',

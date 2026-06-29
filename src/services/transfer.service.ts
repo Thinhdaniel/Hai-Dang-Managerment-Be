@@ -78,6 +78,13 @@ const formatAssetLabel = (assets: any[]) => {
     return `${assets.length} thiet bi`;
 };
 
+const buildSourceAreaSummary = (assets: any[]) => {
+    const areas = Array.from(new Set(assets.map((asset) => trimLocation(asset.area)).filter(Boolean)));
+    if (!areas.length) return undefined;
+    if (areas.length === 1) return areas[0];
+    return 'Nhiều khu vực';
+};
+
 export const getAllTransfers = async (req: Request, res: Response, next: NextFunction) => {
     const filter = await buildFilter(req.query);
     const { page, limit, skip } = getPagination(req.query as Record<string, any>);
@@ -212,21 +219,23 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
 
     const [firstAsset] = assets;
     const hasDifferentSource = assets.some(
-        (asset) =>
-            !sameId(asset.plantId, firstAsset.plantId) || trimLocation(asset.area) !== trimLocation(firstAsset.area)
+        (asset) => !sameId(asset.plantId, firstAsset.plantId)
     );
 
     if (hasDifferentSource) {
-        throw new BadRequestError('Chi co the tao mot lenh cho cac thiet bi cung co so va cung khu vuc hien tai');
+        throw new BadRequestError('Chi co the tao mot lenh cho cac thiet bi cung co so hien tai');
     }
 
-    const fromArea = trimLocation(firstAsset.area);
+    const fromArea = buildSourceAreaSummary(assets);
     const toArea = trimLocation(req.body.toArea);
-    const isSamePlant = String(firstAsset.plantId) === String(req.body.toPlantId);
-    const isSameArea = fromArea === toArea;
+    const unchangedDestinationAssets = assets.filter(
+        (asset) => sameId(asset.plantId, req.body.toPlantId) && trimLocation(asset.area) === toArea
+    );
 
-    if (isSamePlant && isSameArea) {
-        throw new BadRequestError('Vi tri dieu chuyen moi phai khac vi tri hien tai cua thiet bi');
+    if (unchangedDestinationAssets.length) {
+        throw new BadRequestError(
+            `Vi tri dieu chuyen moi phai khac vi tri hien tai cua thiet bi: ${unchangedDestinationAssets.map((asset) => asset.name).join(', ')}`
+        );
     }
 
     const item = await transferRepository.create({
@@ -235,6 +244,13 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
         assetIds: assets.map((asset) => asset._id),
         fromPlantId: firstAsset.plantId,
         fromArea,
+        sourceSnapshots: assets.map((asset) => ({
+            assetId: asset._id,
+            plantId: asset.plantId,
+            area: trimLocation(asset.area),
+            machineCode: asset.machineCode,
+            name: asset.name,
+        })),
         toArea,
         createdBy: req.userId,
     });

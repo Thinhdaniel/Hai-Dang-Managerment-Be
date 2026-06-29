@@ -25,6 +25,11 @@ app.use(morgan('dev'));
 app.use(helmet());
 app.use(compression());
 
+app.use((req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet, noimageindex');
+    next();
+});
+
 app.use(cookieParser());
 
 app.use(

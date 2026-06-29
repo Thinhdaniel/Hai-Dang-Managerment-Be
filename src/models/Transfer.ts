@@ -20,6 +20,34 @@ const TransferSchema = new mongoose.Schema(
             type: String,
             trim: true,
         },
+        sourceSnapshots: {
+            type: [
+                {
+                    assetId: {
+                        type: mongoose.Schema.Types.ObjectId,
+                        ref: 'Asset',
+                        required: true,
+                    },
+                    plantId: {
+                        type: mongoose.Schema.Types.ObjectId,
+                        ref: 'Plant',
+                    },
+                    area: {
+                        type: String,
+                        trim: true,
+                    },
+                    machineCode: {
+                        type: String,
+                        trim: true,
+                    },
+                    name: {
+                        type: String,
+                        trim: true,
+                    },
+                },
+            ],
+            default: [],
+        },
         toPlantId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Plant',

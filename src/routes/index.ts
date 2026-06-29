@@ -33,6 +33,7 @@ import assetDisposalRoutes from './asset-disposal.route';
 import digestRoutes from './digest.route';
 import telegramRoutes from './telegram.route';
 import internalRoutes from './internal.route';
+import stocktakeRoutes from './stocktake.route';
 
 const router = Router();
 
@@ -69,5 +70,6 @@ router.use('/asset-disposals', assetDisposalRoutes);
 router.use('/digests', digestRoutes);
 router.use('/telegram', telegramRoutes);
 router.use('/internal', internalRoutes);
+router.use('/stocktakes', stocktakeRoutes);
 
 export default router;
