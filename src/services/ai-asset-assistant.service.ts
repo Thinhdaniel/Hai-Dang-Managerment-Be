@@ -51,7 +51,14 @@ const resolveByName = (candidates: { id: string; name: string }[], rawName?: str
 // ===== Plan schema (AI sinh ra, validate cứng) =====
 const planSchema = z
     .object({
-        intent: z.enum(['list', 'count', 'aggregate', 'rank', 'answer']).default('list'),
+        intent: z.enum(['list', 'count', 'aggregate', 'rank', 'answer', 'transfer_draft']).default('list'),
+        // Chỉ dùng khi intent=transfer_draft: máy cần chuyển + cơ sở đích (AI soạn, người chốt).
+        transfer: z
+            .object({
+                machineRefs: z.array(z.string()).nullish(),
+                toPlantName: z.string().nullish(),
+            })
+            .nullish(),
         filters: z
             .object({
                 search: z.string().max(200).nullish(),
@@ -86,7 +93,8 @@ const buildPlanSystemPrompt = (plantNames: string[], brandNames: string[], areas
         '',
         'Schema JSON:',
         '{',
-        '  "intent": "list" | "count" | "aggregate" | "rank" | "answer",',
+        '  "intent": "list" | "count" | "aggregate" | "rank" | "answer" | "transfer_draft",',
+        '  "transfer": { "machineRefs": string[], "toPlantName": string|null } | null,  // chi khi intent=transfer_draft',
         '  "filters": {',
         '    "search": string|null,            // ten/ma/serial/loai/model may',
         '    "status": string[]|null,          // ma trang thai',
@@ -110,6 +118,7 @@ const buildPlanSystemPrompt = (plantNames: string[], brandNames: string[], areas
             .join(', ')}.`,
         'Co nghiep vu (flags): "overdue_maintenance"=may qua han bao tri, "mislocated"=may lech vi tri GPS so voi co so, "no_qr"=may chua co tem QR, "not_scanned"=lau chua quet QR (kem notScannedDays).',
         'Khi hoi "bao nhieu/co may cai" => intent "count". "top/nhieu nhat/xep hang" => intent "rank" + aggregate "top_broken". "tong gia tri" => aggregate "sum_value". "phan theo trang thai/co so" => breakdown_*.',
+        'Khi nguoi dung muon DIEU CHUYEN / chuyen / dieu may sang co so khac => intent "transfer_draft": dua TAT CA ma may/serial nhac den vao transfer.machineRefs (mang chuoi), co so dich vao transfer.toPlantName. Chi SOAN, KHONG tao lenh.',
         '',
         plantNames.length ? `Co so hien co: ${plantNames.join(', ')}.` : '',
         brandNames.length ? `Hang hien co: ${brandNames.join(', ')}.` : '',
@@ -382,6 +391,49 @@ export const assetQueryTool = async (args: {
     };
 };
 
+// Soạn nháp lệnh điều chuyển: phân giải máy theo mã/serial/QR + cơ sở đích (KHÔNG tạo lệnh).
+const TRANSFER_WARN_STATUSES = new Set(['maintenance', 'broken', 'borrowing']);
+const resolveTransferDraft = async (
+    refs: string[],
+    toPlantName: string | undefined,
+    plants: { id: string; name: string }[]
+) => {
+    const cleaned = [...new Set((refs || []).map((r) => String(r || '').trim()).filter(Boolean))].slice(0, 50);
+    const assets: any[] = [];
+    const seen = new Set<string>();
+    const unresolved: string[] = [];
+    for (const ref of cleaned) {
+        const exact = new RegExp(`^${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+        const doc = await Asset.findOne({
+            isDeleted: { $ne: true },
+            $or: [{ machineCode: exact }, { serial: exact }, { publicId: exact }],
+        })
+            .populate('brandId')
+            .populate('plantId')
+            .lean();
+        if (doc) {
+            const id = String((doc as any)._id);
+            if (!seen.has(id)) {
+                seen.add(id);
+                assets.push(serializeAsset(doc));
+            }
+        } else {
+            unresolved.push(ref);
+        }
+    }
+    const toPlant = resolveByName(plants, toPlantName);
+    const warnings: string[] = [];
+    assets.forEach((a) => {
+        if (toPlant && String(a.plantId) === toPlant.id) {
+            warnings.push(`${a.machineCode || a.name}: đã ở ${toPlant.name}`);
+        }
+        if (a.status && TRANSFER_WARN_STATUSES.has(a.status)) {
+            warnings.push(`${a.machineCode || a.name}: đang ${STATUS_LABEL[a.status] || a.status}`);
+        }
+    });
+    return { assets, toPlantId: toPlant?.id, toPlantName: toPlant?.name, unresolved, warnings };
+};
+
 // ===== Core (tái dùng cho trợ lý toàn cục) =====
 export const runAssetAssistant = async (messages: AssistantMessage[]) => {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content?.trim() || '';
@@ -441,6 +493,48 @@ export const runAssetAssistant = async (messages: AssistantMessage[]) => {
             .filter((t) => t && !drop.has(t))
             .join(' ');
         plan.filters.search = cleaned || undefined;
+    }
+
+    // Soạn lệnh điều chuyển: phân giải máy + cơ sở đích, trả thẻ hành động cho FE mở form.
+    if (plan.intent === 'transfer_draft') {
+        const refs = (plan.transfer?.machineRefs ?? []) as string[];
+        const toPlantName = plan.transfer?.toPlantName ?? matchedPlant?.name ?? undefined;
+        const draft = await resolveTransferDraft(refs, toPlantName ?? undefined, plants);
+        const found = draft.assets.length;
+        const unresolvedNote = draft.unresolved.length
+            ? `, ${draft.unresolved.length} mã chưa khớp (${draft.unresolved.join(', ')})`
+            : '';
+        const answer = !found
+            ? `Chưa tìm thấy máy nào khớp${refs.length ? ` (${refs.join(', ')})` : ''}. Bạn cho mình mã máy hoặc serial cụ thể nhé.`
+            : `Tìm thấy ${found} máy${unresolvedNote}.` +
+              (draft.toPlantName
+                  ? ` Sẵn sàng tạo lệnh điều chuyển sang ${draft.toPlantName} — bấm "Mở form điều chuyển" để xem lại và xác nhận.`
+                  : ' Bạn muốn chuyển sang cơ sở nào?');
+        return {
+            domain: 'asset' as const,
+            answer,
+            intent: 'transfer_draft',
+            count: found,
+            items: draft.assets.map((a: any) => ({
+                id: a.id,
+                machineCode: a.machineCode,
+                name: a.name,
+                status: a.status,
+                statusLabel: a.status ? STATUS_LABEL[a.status] : undefined,
+                plantName: a.plant?.name,
+                brandName: a.brand?.name,
+                area: a.area,
+                purchasePrice: a.purchasePrice,
+                mislocated: Boolean(a.locationMismatch?.mismatch),
+            })),
+            aggregates: {},
+            transferDraft: draft,
+            appliedFilters: {},
+            followups: ['Chuyển máy khác sang cơ sở này', 'Tìm máy theo mã/serial', 'Máy nào đang tồn kho?'],
+            provider,
+            model,
+            tier,
+        };
     }
 
     const exec = await executePlan(plan, matchedPlant?.id, matchedBrand?.id);
