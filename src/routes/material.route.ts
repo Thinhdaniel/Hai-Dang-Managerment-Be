@@ -42,6 +42,8 @@ router.get('/export-excel', authorize(...ROLE_GROUPS.MANAGEMENT), materialContro
 router.get('/import-template', authorize(...ROLE_GROUPS.MANAGEMENT), materialController.downloadMaterialImportTemplate);
 router.post('/import/preview', authorize(...ROLE_GROUPS.MANAGEMENT), upload.single('file'), materialController.previewMaterialImport);
 router.post('/import/confirm', authorize(...ROLE_GROUPS.MANAGEMENT), upload.single('file'), materialController.confirmMaterialImport);
+router.post('/cost-type/suggest', authorize(...ROLE_GROUPS.MANAGEMENT), materialController.suggestMaterialCostTypes);
+router.patch('/cost-type', authorize(...ROLE_GROUPS.MANAGEMENT), materialController.saveMaterialCostTypes);
 router.post('/', authorize(...ROLE_GROUPS.MANAGEMENT), validator(createMaterialSchema), materialController.createMaterial);
 router.get('/', materialController.getAllMaterials);
 router.get('/:id', validateObjectId, materialController.getMaterialById);

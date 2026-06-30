@@ -15,6 +15,7 @@ export const AI_FEATURES = {
     ASSET_SEARCH: 'asset-search', // Trợ lý máy: lập query-plan (mức tiêu chuẩn)
     ASSET_ANSWER: 'asset-answer', // Trợ lý máy: diễn giải kết quả (luôn dùng model rẻ)
     MATERIAL_MATCH: 'material-match', // Khớp tên vật tư Excel với danh mục (JSON, cần chính xác)
+    MATERIAL_COST_TYPE: 'material-cost-type', // Phân loại bản chất chi phí vật tư/máy (JSON, gán 1 lần)
     CHAT_SUMMARY: 'chat-summary', // Tóm tắt hội thoại nội bộ
     OCR_INVOICE: 'ocr-invoice', // OCR ảnh hóa đơn mua vật tư -> trích dòng (vision, JSON)
     OCR_SUPPLY_REQUEST: 'ocr-supply-request', // OCR ảnh phiếu đề xuất cấp vật tư -> trích dòng (vision, JSON)
@@ -58,6 +59,7 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     'asset-answer': ['bb/deepseek-v4-flash', 'bb/gpt-5.4-nano', 'gc/gemini-2.5-flash'], // diễn giải kết quả: nhanh-rẻ
     // Các tác vụ khác
     'material-match': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // khớp tên vật tư (JSON, cần ổn định)
+    'material-cost-type': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // phân loại chi phí (JSON ổn định)
     'supply-request-draft': ['bb/gpt-5.4-nano', 'gc/gemini-2.5-flash'],
     'chat-summary': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // JSON ổn định
     // OCR hóa đơn/phiếu: cần model VISION (đọc ảnh). Gemini đọc ảnh + tiếng Việt ổn định nhất ->

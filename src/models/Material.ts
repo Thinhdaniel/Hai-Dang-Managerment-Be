@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { MATERIAL_COST_TYPE_VALUES } from '@/constant/materialCostType';
 
 const MaterialSchema = new mongoose.Schema(
     {
@@ -14,6 +15,11 @@ const MaterialSchema = new mongoose.Schema(
         category: {
             type: String,
             trim: true,
+        },
+        // Phân loại bản chất chi phí (consumable/spare_part/tool/asset). Rỗng = chưa phân loại.
+        costType: {
+            type: String,
+            enum: MATERIAL_COST_TYPE_VALUES,
         },
         unit: {
             type: String,

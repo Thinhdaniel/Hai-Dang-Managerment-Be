@@ -1,4 +1,5 @@
 import * as materialService from '@/services/material.service';
+import * as materialCostTypeService from '@/services/ai-material-cost-type.service';
 import asyncHandler from '@/utils/asyncHandler';
 import { NextFunction, Request, Response } from 'express';
 
@@ -78,3 +79,11 @@ export const getMaterialCostFlowByPlantReport = asyncHandler(
         return await materialService.getMaterialCostFlowByPlantReport(req, res, next);
     }
 );
+
+export const suggestMaterialCostTypes = asyncHandler(async (req: Request, res: Response) => {
+    return await materialCostTypeService.suggestMaterialCostTypes(req, res);
+});
+
+export const saveMaterialCostTypes = asyncHandler(async (req: Request, res: Response) => {
+    return await materialCostTypeService.saveMaterialCostTypes(req, res);
+});

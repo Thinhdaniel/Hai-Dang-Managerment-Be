@@ -41,6 +41,7 @@ export const serializeMaterial = (input: any) => {
         name: material?.name,
         code: material?.code,
         category: material?.category,
+        costType: material?.costType,
         unit: material?.unit,
         description: material?.description,
         minStockLevel: material?.minStockLevel ?? 0,
