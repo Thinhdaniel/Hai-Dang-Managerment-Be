@@ -109,17 +109,24 @@ if (!result.success) {
 
 const envVars = result.data;
 
-// Parse map model theo tác vụ AI (feature -> model). Sai JSON thì bỏ qua, không làm chết app.
-const parseFeatureModels = (raw?: string): Record<string, string> => {
+// Parse map model theo tác vụ AI. Mỗi feature nhận 1 model (string) HOẶC chuỗi
+// model dự phòng (mảng string) — gọi lần lượt tới khi 1 model chạy được.
+// Vd: {"asset-search":["bb/claude-sonnet-4.6","kr/claude-sonnet-4.5-agentic"]}
+const parseFeatureModels = (raw?: string): Record<string, string | string[]> => {
     if (!raw) return {};
     try {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            return Object.fromEntries(
-                Object.entries(parsed)
-                    .filter(([, v]) => typeof v === 'string' && v)
-                    .map(([k, v]) => [k, String(v)])
-            );
+            const out: Record<string, string | string[]> = {};
+            for (const [key, value] of Object.entries(parsed)) {
+                if (typeof value === 'string' && value) {
+                    out[key] = value;
+                } else if (Array.isArray(value)) {
+                    const list = value.filter((item): item is string => typeof item === 'string' && !!item);
+                    if (list.length) out[key] = list;
+                }
+            }
+            return out;
         }
         return {};
     } catch {

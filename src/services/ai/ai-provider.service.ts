@@ -56,13 +56,18 @@ const normalizeProvider = (): AiProviderName => {
     return config.ai.provider;
 };
 
-// Chọn model theo tác vụ; biến thể "<feature>-light|-standard|-heavy|-answer" tự suy về feature gốc nếu chưa map riêng.
-const resolveFeatureModel = (feature?: string): string | undefined => {
-    if (!feature) return undefined;
+const toModelList = (value?: string | string[]): string[] =>
+    Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
+
+// Chuỗi model theo tác vụ (ưu tiên giảm dần). Biến thể "<feature>-light|-standard|-heavy|-answer"
+// tự suy về feature gốc nếu chưa map riêng.
+const resolveFeatureModels = (feature?: string): string[] => {
+    if (!feature) return [];
     const map = config.ai.featureModels || {};
-    if (map[feature]) return map[feature];
+    const direct = toModelList(map[feature]);
+    if (direct.length) return direct;
     const base = feature.replace(/-(light|standard|heavy|answer)$/, '');
-    return base !== feature ? map[base] : undefined;
+    return base !== feature ? toModelList(map[base]) : [];
 };
 
 const getOpenAiCompatibleConfig = (provider: AiProviderName) => {
@@ -103,9 +108,8 @@ const callOpenAiCompatible = async (
 ): Promise<AiGenerateTextResult> => {
     const startedAt = Date.now();
     const providerConfig = getOpenAiCompatibleConfig(provider);
-    // Ưu tiên model: truyền tay > map theo tác vụ (AI_FEATURE_MODELS) > model JSON/mặc định.
-    const featureModel = resolveFeatureModel(options.feature);
-    const model = options.model || featureModel || (options.jsonMode ? providerConfig.jsonModel : providerConfig.model);
+    // Model đã được generateText quyết theo chuỗi dự phòng và truyền vào options.model.
+    const model = options.model || (options.jsonMode ? providerConfig.jsonModel : providerConfig.model);
 
     const response = await axios.post<OpenAiCompatibleResponse>(
         `${providerConfig.baseUrl}/chat/completions`,
@@ -141,8 +145,7 @@ const callOpenAiCompatible = async (
 
 const callOllama = async (options: AiGenerateTextOptions): Promise<AiGenerateTextResult> => {
     const startedAt = Date.now();
-    const featureModel = resolveFeatureModel(options.feature);
-    const model = options.model || featureModel || (options.jsonMode ? config.ai.ollama.searchModel : config.ai.ollama.defaultModel);
+    const model = options.model || (options.jsonMode ? config.ai.ollama.searchModel : config.ai.ollama.defaultModel);
 
     const response = await axios.post<OllamaChatResponse>(
         `${trimTrailingSlash(config.ai.ollama.baseUrl)}/api/chat`,
@@ -193,16 +196,47 @@ export const extractJsonObject = (content: string) => {
     return trimmed;
 };
 
+// Dựng chuỗi model sẽ thử theo thứ tự: model truyền tay > chuỗi theo tác vụ > model nền của provider.
+const buildModelChain = (provider: AiProviderName, options: AiGenerateTextOptions): string[] => {
+    if (options.model) return [options.model];
+    const chain = [...resolveFeatureModels(options.feature)];
+    let providerFallback: string;
+    if (provider === 'ollama') {
+        providerFallback = options.jsonMode ? config.ai.ollama.searchModel : config.ai.ollama.defaultModel;
+    } else {
+        const providerConfig = getOpenAiCompatibleConfig(provider);
+        providerFallback = options.jsonMode ? providerConfig.jsonModel : providerConfig.model;
+    }
+    if (providerFallback && !chain.includes(providerFallback)) chain.push(providerFallback);
+    return chain.length ? chain : [providerFallback];
+};
+
 export const aiProviderService = {
     async generateText(options: AiGenerateTextOptions): Promise<AiGenerateTextResult> {
         const provider = normalizeProvider();
         if (provider === 'disabled') {
             throw new Error('AI provider is disabled');
         }
-        if (provider === 'ollama') {
-            return callOllama(options);
+        // Gọi lần lượt theo chuỗi dự phòng; model lỗi/không khả dụng thì tự rớt sang model kế tiếp.
+        const chain = buildModelChain(provider, options);
+        let lastError: unknown;
+        for (let i = 0; i < chain.length; i += 1) {
+            const model = chain[i];
+            try {
+                return provider === 'ollama'
+                    ? await callOllama({ ...options, model })
+                    : await callOpenAiCompatible(provider, { ...options, model });
+            } catch (error) {
+                lastError = error;
+                if (i < chain.length - 1) {
+                    const reason = error instanceof Error ? error.message : String(error);
+                    console.warn(
+                        `[AI] model "${model}"${options.feature ? ` (${options.feature})` : ''} lỗi: ${reason} — thử model dự phòng "${chain[i + 1]}"...`
+                    );
+                }
+            }
         }
-        return callOpenAiCompatible(provider, options);
+        throw lastError ?? new Error('AI provider failed');
     },
 
     async generateJson<T>(options: AiGenerateTextOptions): Promise<AiGenerateTextResult & { data: T }> {
