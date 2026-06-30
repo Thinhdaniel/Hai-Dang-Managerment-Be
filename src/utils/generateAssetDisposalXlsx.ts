@@ -228,6 +228,18 @@ const groupByType = (items: any[]): Array<[string, any[]]> => {
 
 const rateOf = (agg: Aggregate): number | '' => (agg.purchase > 0 ? agg.recovery / agg.purchase : '');
 
+// Số cột (1->A, 2->B...) sang chữ cái Excel để dựng range merge động.
+const colLetter = (col: number): string => {
+    let result = '';
+    let n = col;
+    while (n > 0) {
+        const rem = (n - 1) % 26;
+        result = String.fromCharCode(65 + rem) + result;
+        n = Math.floor((n - 1) / 26);
+    }
+    return result;
+};
+
 const MONEY_FMT = '#,##0';
 const PCT_FMT = '0.0%';
 const BREAKDOWN_ALIGN: Array<'left' | 'center' | 'right'> = ['left', 'center', 'right', 'right', 'right', 'center'];
@@ -300,6 +312,49 @@ const writeBreakdownTable = (
     return r;
 };
 
+// Bảng phân tích chéo: hàng = loại máy, cột = tình trạng (chỉ cột có dữ liệu), ô = số lượng.
+const writeConditionCrossTab = (ws: ExcelJS.Worksheet, startRow: number, items: any[]): number => {
+    const conds = CONDITION_ORDER.filter(([key]) =>
+        items.some((it) => (it.condition || 'unknown') === key)
+    );
+    const lastCol = 2 + conds.length + 1; // B(label) + cột tình trạng + cột Tổng
+    let r = startRow;
+
+    mergeValue(ws, `B${r}:${colLetter(lastCol)}${r}`, 'PHÂN TÍCH: LOẠI MÁY × TÌNH TRẠNG (số lượng)', {
+        font: { name: FONT, size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+        alignment: { horizontal: 'left', vertical: 'middle' },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } },
+    });
+    ws.getRow(r).height = 20;
+    r += 1;
+
+    const align: Array<'left' | 'center' | 'right'> = ['left', ...conds.map(() => 'center' as const), 'center'];
+    putRow(ws, r, 2, ['Loại máy', ...conds.map(([, label]) => label), 'Tổng'], {
+        bold: true,
+        size: 9.5,
+        fill: LIGHT,
+        align,
+        height: 30,
+    });
+    r += 1;
+
+    groupByType(items).forEach(([loai, list]) => {
+        const counts = conds.map(([key]) => list.filter((it) => (it.condition || 'unknown') === key).length);
+        putRow(ws, r, 2, [loai, ...counts, list.length], { size: 9.5, align });
+        r += 1;
+    });
+
+    const totalCounts = conds.map(([key]) => items.filter((it) => (it.condition || 'unknown') === key).length);
+    putRow(ws, r, 2, ['Tổng cộng', ...totalCounts, items.length], {
+        bold: true,
+        size: 9.5,
+        fill: SUBTOTAL,
+        align,
+    });
+    r += 2;
+    return r;
+};
+
 const buildSummarySheet = (workbook: ExcelJS.Workbook, detail: any) => {
     const batch = detail.batch ?? {};
     const items: any[] = Array.isArray(detail.items) ? detail.items : [];
@@ -314,7 +369,19 @@ const buildSummarySheet = (workbook: ExcelJS.Workbook, detail: any) => {
             margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
         },
     });
-    ws.columns = [{ width: 3 }, { width: 26 }, { width: 9 }, { width: 16 }, { width: 16 }, { width: 16 }, { width: 12 }];
+    ws.columns = [
+        { width: 3 },
+        { width: 26 },
+        { width: 11 },
+        { width: 15 },
+        { width: 15 },
+        { width: 15 },
+        { width: 12 },
+        { width: 11 },
+        { width: 11 },
+        { width: 11 },
+        { width: 11 },
+    ];
     ws.views = [{ showGridLines: false }];
 
     mergeValue(ws, 'B1:G1', 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG', {
@@ -384,13 +451,7 @@ const buildSummarySheet = (workbook: ExcelJS.Workbook, detail: any) => {
     const categoryRows = groupByType(items).map(([label, list]) => ({ label, agg: summarize(list) }));
     r = writeBreakdownTable(ws, r, 'PHÂN LOẠI THEO LOẠI MÁY', 'Loại máy', categoryRows);
 
-    const conditionRows = CONDITION_ORDER.map(([key, label]) => ({
-        label,
-        list: items.filter((item) => (item.condition || 'unknown') === key),
-    }))
-        .filter((row) => row.list.length)
-        .map((row) => ({ label: row.label, agg: summarize(row.list) }));
-    r = writeBreakdownTable(ws, r, 'THEO TÌNH TRẠNG MÁY', 'Tình trạng', conditionRows);
+    r = writeConditionCrossTab(ws, r, items);
 
     const actionRows = ACTION_ORDER.map(([key, label]) => ({
         label,
@@ -407,7 +468,7 @@ const buildSummarySheet = (workbook: ExcelJS.Workbook, detail: any) => {
         { font: { name: FONT, size: 9, italic: true }, alignment: { vertical: 'top', wrapText: true } }
     );
 
-    ws.pageSetup.printArea = `A1:G${r + 1}`;
+    ws.pageSetup.printArea = `A1:K${r + 1}`;
 };
 
 const buildPrintableSheet = (workbook: ExcelJS.Workbook, detail: any) => {
@@ -589,7 +650,18 @@ const buildPrintableSheet = (workbook: ExcelJS.Workbook, detail: any) => {
         { font: { name: FONT, size: 9.5, bold: true }, alignment: { horizontal: 'right', vertical: 'middle' } }
     );
 
-    const noteRow = recoveryRow + 2;
+    // Chi phí thanh lý + kết quả ròng để trống điền tay (mục IV biên bản chuẩn).
+    const costRow = recoveryRow + 1;
+    mergeValue(ws, `A${costRow}:D${costRow}`, 'Chi phí thanh lý: ………………………… đ', {
+        font: { name: FONT, size: 9.5 },
+        alignment: { horizontal: 'left', vertical: 'middle' },
+    });
+    mergeValue(ws, `E${costRow}:H${costRow}`, 'Kết quả ròng (thu hồi − chi phí): ………………………… đ', {
+        font: { name: FONT, size: 9.5 },
+        alignment: { horizontal: 'right', vertical: 'middle' },
+    });
+
+    const noteRow = costRow + 2;
     mergeValue(
         ws,
         `A${noteRow}:H${noteRow + 1}`,
@@ -704,11 +776,33 @@ const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
         (a, b) => categoryKey(a).localeCompare(categoryKey(b), 'vi') || recoveryValue(b) - recoveryValue(a)
     );
 
-    sorted.forEach((item, index) => {
+    // Gom theo loại + chèn dòng "Cộng nhóm" để thống kê số lượng/phân loại ngay tại sheet.
+    const subtotalRowNumbers: number[] = [];
+    let itemNo = 0;
+    let groupName = '';
+    let groupBucket: any[] = [];
+    const flushGroup = () => {
+        if (!groupBucket.length) return;
+        const agg = summarize(groupBucket);
+        const sub = ws.addRow({
+            name: `Cộng ${groupName}: ${agg.count} máy`,
+            purchasePrice: agg.purchase || '',
+            estimatedValue: agg.estimated || '',
+            finalValue: agg.final || '',
+        });
+        subtotalRowNumbers.push(sub.number);
+        groupBucket = [];
+    };
+
+    sorted.forEach((item) => {
+        const key = categoryKey(item);
+        if (groupName && key !== groupName) flushGroup();
+        groupName = key;
+        itemNo += 1;
         const price = purchasePriceCell(item);
         const rate = Number(price) > 0 ? recoveryValue(item) / Number(price) : '';
         ws.addRow({
-            index: index + 1,
+            index: itemNo,
             batchCode: batch.code,
             code: codeText(item),
             name: nameText(item),
@@ -734,7 +828,10 @@ const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
             reason: item.reason || batch.reason || '',
             note: item.note || '',
         });
+        groupBucket.push(item);
     });
+    flushGroup();
+    const subtotalSet = new Set(subtotalRowNumbers);
 
     // Dòng tổng cộng
     const totals = summarize(items);
@@ -746,19 +843,15 @@ const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
         recoveryRate: rateOf(totals) === '' ? '' : (rateOf(totals) as number),
     });
     totalRow.font = { name: FONT, size: 10, bold: true };
-
-    const moneyColIndex: Record<string, number> = {};
-    ws.columns.forEach((col, idx) => {
-        if (col.key) moneyColIndex[col.key] = idx + 1;
-    });
+    const grandRowNumber = totalRow.number;
 
     ws.eachRow((row, rowNumber) => {
+        const isHeader = rowNumber === 1;
+        const isSubtotal = subtotalSet.has(rowNumber);
+        const isGrand = rowNumber === grandRowNumber;
+        const emphasised = isSubtotal || isGrand;
         row.eachCell((current, colNumber) => {
-            const isHeader = rowNumber === 1;
-            current.font = current.font ?? { name: FONT, size: 9.5 };
-            if (!isHeader) {
-                current.font = { name: FONT, size: 9.5, bold: !!(current.font && current.font.bold) };
-            }
+            current.font = { name: FONT, size: isHeader || isGrand ? 10 : 9.5, bold: emphasised || isHeader, color: isHeader ? { argb: 'FFFFFFFF' } : undefined };
             current.border = border;
             const key = (ws.columns[colNumber - 1] as any)?.key;
             const isMoney = key === 'purchasePrice' || key === 'estimatedValue' || key === 'finalValue';
@@ -773,6 +866,9 @@ const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
                 if (isMoney) current.numFmt = MONEY_FMT;
                 if (isPct) current.numFmt = PCT_FMT;
                 if (isAge) current.numFmt = '0.0';
+            }
+            if (emphasised) {
+                current.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isGrand ? SUBTOTAL : LIGHT } };
             }
         });
         if (rowNumber > 1) row.height = 22;
