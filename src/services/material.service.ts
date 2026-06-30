@@ -1604,7 +1604,9 @@ const getPurchaseItemPlantName = (order: any, item: any, plantNameById: Map<stri
 export const getPurchaseCostEntriesByPlant = async (opts: {
     startDate?: Date;
     endDate?: Date;
-}): Promise<Array<{ plantId: string; plantName: string; cost: number; effectiveDate: Date; orderId: string }>> => {
+}): Promise<
+    Array<{ plantId: string; plantName: string; cost: number; effectiveDate: Date; orderId: string; materialId?: string }>
+> => {
     const filters: MaterialReportFilters = {
         startDate: opts.startDate,
         endDate: opts.endDate,
@@ -1617,7 +1619,14 @@ export const getPurchaseCostEntriesByPlant = async (opts: {
     ]);
     const plantNameById = new Map(plants.map((plant: any) => [String(plant._id), plant.name || 'Chưa xác định']));
 
-    const entries: Array<{ plantId: string; plantName: string; cost: number; effectiveDate: Date; orderId: string }> = [];
+    const entries: Array<{
+        plantId: string;
+        plantName: string;
+        cost: number;
+        effectiveDate: Date;
+        orderId: string;
+        materialId?: string;
+    }> = [];
     purchaseOrders.forEach((order: any) => {
         const orderId = String(order._id);
         const effectiveDate = getOrderEffectiveDate(order);
@@ -1630,6 +1639,7 @@ export const getPurchaseCostEntriesByPlant = async (opts: {
                 cost: Number(item.totalWithVat ?? item.totalPrice ?? 0),
                 effectiveDate,
                 orderId,
+                materialId: item.materialId ? String(item.materialId) : undefined,
             });
         });
     });

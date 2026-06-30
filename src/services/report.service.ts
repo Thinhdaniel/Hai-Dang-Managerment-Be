@@ -1,11 +1,13 @@
 import DistributionRecord from '@/models/DistributionRecord';
 import Maintenance from '@/models/Maintenance';
 import Asset from '@/models/Asset';
+import Material from '@/models/Material';
 import customResponse from '@/utils/response';
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
 import { getPurchaseCostEntriesByPlant } from '@/services/material.service';
+import { CAPEX_COST_TYPES } from '@/constant/materialCostType';
 
 type ReportGroupBy = 'day' | 'month' | 'quarter';
 
@@ -21,6 +23,7 @@ type FacilityCostPlantRow = {
     plantName: string;
     materialDistributionCost: number;
     materialSelfPurchaseCost: number;
+    materialCapexCost: number;
     externalRepairCost: number;
     totalCost: number;
     distributionCount: number;
@@ -103,6 +106,31 @@ const getDistributionCost = (record: any) => {
     return roundMoney(itemTotal || Number(record.totalWithVat ?? record.totalAmount ?? 0));
 };
 
+const CAPEX_COST_TYPE_SET = new Set<string>(CAPEX_COST_TYPES);
+
+// Tách chi phí vật tư của 1 nhóm item thành OPEX (tiêu hao/linh kiện/CHƯA phân loại)
+// và CAPEX (tool/asset). costTypeMap: materialId -> costType. Item chưa có materialId
+// hoặc chưa phân loại -> tính vào OPEX (giữ hành vi cũ tới khi danh mục được gán).
+const splitItemsCost = (items: any[], costTypeMap: Map<string, string | undefined>) => {
+    let opex = 0;
+    let capex = 0;
+    (items ?? []).forEach((item: any) => {
+        const amount = Number(item.totalWithVat ?? item.totalPrice ?? 0);
+        if (!amount) return;
+        const ct = item.materialId ? costTypeMap.get(String(item.materialId)) : undefined;
+        if (ct && CAPEX_COST_TYPE_SET.has(ct)) capex += amount;
+        else opex += amount;
+    });
+    return { opex, capex };
+};
+
+// Chi phí cấp phát tách OPEX/CAPEX; không có item chi tiết -> coi toàn bộ là OPEX.
+const splitDistributionCost = (record: any, costTypeMap: Map<string, string | undefined>) => {
+    const { opex, capex } = splitItemsCost(record.items ?? [], costTypeMap);
+    if (opex + capex > 0) return { opex: roundMoney(opex), capex: roundMoney(capex) };
+    return { opex: roundMoney(Number(record.totalWithVat ?? record.totalAmount ?? 0)), capex: 0 };
+};
+
 const getMaintenanceCost = (item: any) => {
     const costItemsTotal = (item.externalRepair?.costItems ?? []).reduce(
         (sum: number, costItem: any) => sum + Number(costItem.amount ?? 0),
@@ -128,6 +156,7 @@ const getOrCreatePlantRow = (
         plantName,
         materialDistributionCost: 0,
         materialSelfPurchaseCost: 0,
+        materialCapexCost: 0,
         externalRepairCost: 0,
         totalCost: 0,
         distributionCount: 0,
@@ -216,6 +245,12 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         }),
     ]);
 
+    // Bản đồ phân loại chi phí (materialId -> costType) để tách OPEX vs CAPEX.
+    const materialCostTypeDocs = await Material.find({ isDeleted: { $ne: true } }).select('_id costType').lean();
+    const costTypeMap = new Map<string, string | undefined>(
+        materialCostTypeDocs.map((m: any) => [String(m._id), m.costType || undefined])
+    );
+
     const plantRows = new Map<string, FacilityCostPlantRow>();
     const assetIdsByPlant = new Map<string, Set<string>>();
     const periodRows = new Map<
@@ -224,6 +259,7 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
             period: string;
             materialDistributionCost: number;
             materialSelfPurchaseCost: number;
+            materialCapexCost: number;
             externalRepairCost: number;
             totalCost: number;
         }
@@ -233,11 +269,12 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         const effectiveDate = getDistributionDate(record);
         if (!isDateInRange(effectiveDate, filters)) return;
 
-        const cost = getDistributionCost(record);
+        const { opex: distOpex, capex: distCapex } = splitDistributionCost(record, costTypeMap);
         const plantId = record.toPlantId?._id ? String(record.toPlantId._id) : undefined;
         const plantName = record.toPlantId?.name ?? 'Chưa xác định';
         const plantRow = getOrCreatePlantRow(plantRows, plantId, plantName);
-        plantRow.materialDistributionCost = roundMoney(plantRow.materialDistributionCost + cost);
+        plantRow.materialDistributionCost = roundMoney(plantRow.materialDistributionCost + distOpex);
+        plantRow.materialCapexCost = roundMoney(plantRow.materialCapexCost + distCapex);
         plantRow.distributionCount += 1;
 
         const period = getPeriodLabel(effectiveDate, filters.groupBy);
@@ -245,10 +282,12 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
             period,
             materialDistributionCost: 0,
             materialSelfPurchaseCost: 0,
+            materialCapexCost: 0,
             externalRepairCost: 0,
             totalCost: 0,
         };
-        periodRow.materialDistributionCost = roundMoney(periodRow.materialDistributionCost + cost);
+        periodRow.materialDistributionCost = roundMoney(periodRow.materialDistributionCost + distOpex);
+        periodRow.materialCapexCost = roundMoney(periodRow.materialCapexCost + distCapex);
         periodRows.set(period, periodRow);
     });
 
@@ -283,6 +322,7 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
             period,
             materialDistributionCost: 0,
             materialSelfPurchaseCost: 0,
+            materialCapexCost: 0,
             externalRepairCost: 0,
             totalCost: 0,
         };
@@ -303,18 +343,30 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
             if (!selfPurchasePlantIds.has(entry.plantId)) return;
             if (filters.plantId && entry.plantId !== filters.plantId) return;
 
+            const entryCt = entry.materialId ? costTypeMap.get(entry.materialId) : undefined;
+            const entryIsCapex = !!entryCt && CAPEX_COST_TYPE_SET.has(entryCt);
+
             const plantRow = getOrCreatePlantRow(plantRows, entry.plantId, entry.plantName);
-            plantRow.materialSelfPurchaseCost = roundMoney(plantRow.materialSelfPurchaseCost + entry.cost);
+            if (entryIsCapex) {
+                plantRow.materialCapexCost = roundMoney(plantRow.materialCapexCost + entry.cost);
+            } else {
+                plantRow.materialSelfPurchaseCost = roundMoney(plantRow.materialSelfPurchaseCost + entry.cost);
+            }
 
             const period = getPeriodLabel(entry.effectiveDate, filters.groupBy);
             const periodRow = periodRows.get(period) ?? {
                 period,
                 materialDistributionCost: 0,
                 materialSelfPurchaseCost: 0,
+                materialCapexCost: 0,
                 externalRepairCost: 0,
                 totalCost: 0,
             };
-            periodRow.materialSelfPurchaseCost = roundMoney(periodRow.materialSelfPurchaseCost + entry.cost);
+            if (entryIsCapex) {
+                periodRow.materialCapexCost = roundMoney(periodRow.materialCapexCost + entry.cost);
+            } else {
+                periodRow.materialSelfPurchaseCost = roundMoney(periodRow.materialSelfPurchaseCost + entry.cost);
+            }
             periodRows.set(period, periodRow);
         });
 
@@ -393,6 +445,7 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
         .slice(0, 10);
     const materialDistributionCost = costByPlant.reduce((sum, row) => sum + row.materialDistributionCost, 0);
     const materialSelfPurchaseCost = costByPlant.reduce((sum, row) => sum + row.materialSelfPurchaseCost, 0);
+    const materialCapexCost = costByPlant.reduce((sum, row) => sum + row.materialCapexCost, 0);
     const externalRepairCost = costByPlant.reduce((sum, row) => sum + row.externalRepairCost, 0);
     const externalRepairAssetCount = new Set(
         completedRepairs.map((item: any) => (item.assetId?._id ? String(item.assetId._id) : undefined)).filter(Boolean)
@@ -403,6 +456,8 @@ export const buildFacilityCostReport = async (filters: FacilityCostFilters) => {
             materialDistributionCost: roundMoney(materialDistributionCost),
             materialSelfPurchaseCost: roundMoney(materialSelfPurchaseCost),
             materialTotalCost: roundMoney(materialDistributionCost + materialSelfPurchaseCost),
+            // CAPEX (CCDC + máy móc) tách riêng — KHÔNG cộng vào chi phí vận hành.
+            materialCapexCost: roundMoney(materialCapexCost),
             externalRepairCost: roundMoney(externalRepairCost),
             totalFacilityCost: roundMoney(materialDistributionCost + materialSelfPurchaseCost + externalRepairCost),
             distributionRecordCount: distributions.filter((record: any) =>
@@ -459,9 +514,10 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
     wsOverview.addRow(['Chi tieu', 'Gia tri']);
     wsOverview.addRow(['Chi phi vat tu CS1 cap phat', report.summary.materialDistributionCost]);
     wsOverview.addRow(['Chi phi vat tu co so tu mua', report.summary.materialSelfPurchaseCost]);
-    wsOverview.addRow(['Tong chi phi vat tu', report.summary.materialTotalCost]);
+    wsOverview.addRow(['Tong chi phi vat tu (van hanh)', report.summary.materialTotalCost]);
     wsOverview.addRow(['Chi phi sua ngoai', report.summary.externalRepairCost]);
     wsOverview.addRow(['Tong chi phi van hanh', report.summary.totalFacilityCost]);
+    wsOverview.addRow(['Mua sam & dau tu (CAPEX: may moc + CCDC)', report.summary.materialCapexCost]);
     wsOverview.addRow(['So phieu cap phat vat tu', report.summary.distributionRecordCount]);
     wsOverview.addRow(['So phieu sua ngoai hoan tat', report.summary.externalRepairCount]);
     wsOverview.addRow(['So may sua ngoai', report.summary.externalRepairAssetCount]);
@@ -486,6 +542,12 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
         },
         { header: 'Chi phi sua ngoai', key: 'externalRepairCost', width: 20, style: { numFmt: '#,##0' } },
         { header: 'Tong chi phi van hanh', key: 'totalCost', width: 22, style: { numFmt: '#,##0' } },
+        {
+            header: 'Mua sam & dau tu (CAPEX)',
+            key: 'materialCapexCost',
+            width: 24,
+            style: { numFmt: '#,##0' },
+        },
         { header: 'Ty trong sua ngoai (%)', key: 'repairSharePercent', width: 18 },
         { header: 'So phieu cap phat vat tu', key: 'distributionCount', width: 22 },
         { header: 'So phieu sua ngoai', key: 'externalRepairCount', width: 16 },
@@ -511,6 +573,12 @@ export const exportFacilityCostSummaryExcel = async (req: Request, res: Response
         },
         { header: 'Chi phi sua ngoai', key: 'externalRepairCost', width: 20, style: { numFmt: '#,##0' } },
         { header: 'Tong chi phi van hanh', key: 'totalCost', width: 22, style: { numFmt: '#,##0' } },
+        {
+            header: 'Mua sam & dau tu (CAPEX)',
+            key: 'materialCapexCost',
+            width: 24,
+            style: { numFmt: '#,##0' },
+        },
     ];
     report.costByPeriod.forEach((row) => wsPeriod.addRow(row));
     styleWorksheet(wsPeriod);
