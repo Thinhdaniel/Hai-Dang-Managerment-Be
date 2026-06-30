@@ -68,7 +68,13 @@ const codeText = (item: any) => text(item.machineCode || item.asset?.machineCode
 const nameText = (item: any) => text(item.name || item.asset?.name);
 const brandText = (item: any) => String(item.asset?.brand?.name ?? '').trim();
 const typeText = (item: any) => String(item.type || item.asset?.type || '').trim();
-const groupKey = (item: any) => typeText(item) || UNCLASSIFIED;
+// Gom nhóm theo TÊN máy (đã chuẩn, vd "Máy 1 kim") chứ KHÔNG theo trường type —
+// type nhập tự do, lẫn nhiều mã viết tắt (1k / M1K / vs4c…) nên cùng một loại máy
+// bị tách thành nhiều nhóm. Tên trống mới fallback sang type rồi tới "Khác".
+const categoryKey = (item: any) => {
+    const name = String(item.name || item.asset?.name || '').trim();
+    return name || typeText(item) || UNCLASSIFIED;
+};
 const ownershipText = (item: any) => {
     const value = item.asset?.ownershipType;
     return value ? OWNERSHIP_LABEL[value] || value : '';
@@ -213,7 +219,7 @@ const summarize = (list: any[]): Aggregate =>
 const groupByType = (items: any[]): Array<[string, any[]]> => {
     const map = new Map<string, any[]>();
     items.forEach((item) => {
-        const key = groupKey(item);
+        const key = categoryKey(item);
         if (!map.has(key)) map.set(key, []);
         map.get(key)!.push(item);
     });
@@ -662,7 +668,7 @@ const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
         { header: 'Mã máy/QR', key: 'code', width: 18 },
         { header: 'Tên máy', key: 'name', width: 26 },
         { header: 'Nhãn hiệu', key: 'brand', width: 16 },
-        { header: 'Loại', key: 'type', width: 18 },
+        { header: 'Loại (mã)', key: 'type', width: 14 },
         { header: 'Model', key: 'model', width: 16 },
         { header: 'Serial', key: 'serial', width: 16 },
         { header: 'Hình thức SH', key: 'ownership', width: 16 },
@@ -695,7 +701,7 @@ const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
     });
 
     const sorted = [...items].sort(
-        (a, b) => groupKey(a).localeCompare(groupKey(b), 'vi') || recoveryValue(b) - recoveryValue(a)
+        (a, b) => categoryKey(a).localeCompare(categoryKey(b), 'vi') || recoveryValue(b) - recoveryValue(a)
     );
 
     sorted.forEach((item, index) => {
@@ -707,7 +713,7 @@ const buildDetailSheet = (workbook: ExcelJS.Workbook, detail: any) => {
             code: codeText(item),
             name: nameText(item),
             brand: brandText(item),
-            type: typeText(item) || UNCLASSIFIED,
+            type: typeText(item) || '',
             model: item.model || item.asset?.model || '',
             serial: item.serial || item.asset?.serial || '',
             ownership: ownershipText(item),
