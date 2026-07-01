@@ -434,6 +434,47 @@ const resolveTransferDraft = async (
     return { assets, toPlantId: toPlant?.id, toPlantName: toPlant?.name, unresolved, warnings };
 };
 
+// Soạn nháp lệnh điều chuyển (tái dùng cho cả trợ lý máy lẫn trợ lý vận hành):
+// phân giải mã/serial máy + cơ sở đích, trả kèm câu trả lời thân thiện + danh sách máy rút gọn.
+// Truyền sẵn `plantsArg` để tránh truy vấn Plant lặp lại nếu nơi gọi đã có.
+export const buildTransferDraft = async (
+    refs: string[],
+    toPlantName?: string,
+    plantsArg?: { id: string; name: string }[]
+) => {
+    const plants =
+        plantsArg ??
+        (await Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean()).map((d: any) => ({
+            id: String(d._id),
+            name: String(d.name ?? ''),
+        }));
+    const cleanRefs = (refs || []).map((r) => String(r || '').trim()).filter(Boolean);
+    const draft = await resolveTransferDraft(cleanRefs, toPlantName, plants);
+    const found = draft.assets.length;
+    const unresolvedNote = draft.unresolved.length
+        ? `, ${draft.unresolved.length} mã chưa khớp (${draft.unresolved.join(', ')})`
+        : '';
+    const answer = !found
+        ? `Chưa tìm thấy máy nào khớp${cleanRefs.length ? ` (${cleanRefs.join(', ')})` : ''}. Bạn cho mình mã máy hoặc serial cụ thể nhé.`
+        : `Tìm thấy ${found} máy${unresolvedNote}.` +
+          (draft.toPlantName
+              ? ` Sẵn sàng tạo lệnh điều chuyển sang ${draft.toPlantName} — bấm "Mở form điều chuyển" để xem lại và xác nhận.`
+              : ' Bạn muốn chuyển sang cơ sở nào?');
+    const items = draft.assets.map((a: any) => ({
+        id: a.id,
+        machineCode: a.machineCode,
+        name: a.name,
+        status: a.status,
+        statusLabel: a.status ? STATUS_LABEL[a.status] : undefined,
+        plantName: a.plant?.name,
+        brandName: a.brand?.name,
+        area: a.area,
+        purchasePrice: a.purchasePrice,
+        mislocated: Boolean(a.locationMismatch?.mismatch),
+    }));
+    return { answer, count: found, items, transferDraft: draft };
+};
+
 // ===== Core (tái dùng cho trợ lý toàn cục) =====
 export const runAssetAssistant = async (messages: AssistantMessage[]) => {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content?.trim() || '';
@@ -499,36 +540,15 @@ export const runAssetAssistant = async (messages: AssistantMessage[]) => {
     if (plan.intent === 'transfer_draft') {
         const refs = (plan.transfer?.machineRefs ?? []) as string[];
         const toPlantName = plan.transfer?.toPlantName ?? matchedPlant?.name ?? undefined;
-        const draft = await resolveTransferDraft(refs, toPlantName ?? undefined, plants);
-        const found = draft.assets.length;
-        const unresolvedNote = draft.unresolved.length
-            ? `, ${draft.unresolved.length} mã chưa khớp (${draft.unresolved.join(', ')})`
-            : '';
-        const answer = !found
-            ? `Chưa tìm thấy máy nào khớp${refs.length ? ` (${refs.join(', ')})` : ''}. Bạn cho mình mã máy hoặc serial cụ thể nhé.`
-            : `Tìm thấy ${found} máy${unresolvedNote}.` +
-              (draft.toPlantName
-                  ? ` Sẵn sàng tạo lệnh điều chuyển sang ${draft.toPlantName} — bấm "Mở form điều chuyển" để xem lại và xác nhận.`
-                  : ' Bạn muốn chuyển sang cơ sở nào?');
+        const d = await buildTransferDraft(refs, toPlantName ?? undefined, plants);
         return {
             domain: 'asset' as const,
-            answer,
+            answer: d.answer,
             intent: 'transfer_draft',
-            count: found,
-            items: draft.assets.map((a: any) => ({
-                id: a.id,
-                machineCode: a.machineCode,
-                name: a.name,
-                status: a.status,
-                statusLabel: a.status ? STATUS_LABEL[a.status] : undefined,
-                plantName: a.plant?.name,
-                brandName: a.brand?.name,
-                area: a.area,
-                purchasePrice: a.purchasePrice,
-                mislocated: Boolean(a.locationMismatch?.mismatch),
-            })),
+            count: d.count,
+            items: d.items,
             aggregates: {},
-            transferDraft: draft,
+            transferDraft: d.transferDraft,
             appliedFilters: {},
             followups: ['Chuyển máy khác sang cơ sở này', 'Tìm máy theo mã/serial', 'Máy nào đang tồn kho?'],
             provider,

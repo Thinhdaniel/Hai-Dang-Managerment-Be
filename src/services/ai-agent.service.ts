@@ -6,7 +6,7 @@ import DistributionRecord from '@/models/DistributionRecord';
 import { dashboardRepository } from '@/repositories/dashboard.repository';
 import { aiProviderService, extractJsonObject } from '@/services/ai/ai-provider.service';
 import { ASSET_SEARCH_TIERS } from '@/constant/aiModels';
-import { assetQueryTool, type AssistantMessage } from '@/services/ai-asset-assistant.service';
+import { assetQueryTool, buildTransferDraft, type AssistantMessage } from '@/services/ai-asset-assistant.service';
 import { computeVarianceData } from '@/services/variance.service';
 import {
     analyzePurchases,
@@ -102,6 +102,7 @@ type ToolName =
     | 'search_assets'
     | 'locate_asset'
     | 'transfer_orders'
+    | 'draft_transfer'
     | 'top_broken_assets'
     | 'low_stock_materials'
     | 'top_used_materials'
@@ -175,6 +176,25 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
                     })),
                 },
                 render: { domain: 'asset', count: t.count, items: [], aggregates: { transferOrders: t } },
+            };
+        }
+        case 'draft_transfer': {
+            // Soạn NHÁP lệnh điều chuyển (AI soạn → FE mở form → người chốt). KHÔNG tạo lệnh ở đây.
+            const d = await buildTransferDraft(args?.machineRefs ?? [], args?.toPlantName ?? undefined);
+            return {
+                ai: {
+                    soMay: d.count,
+                    coSoDich: d.transferDraft.toPlantName,
+                    chuaKhop: d.transferDraft.unresolved,
+                    canhBao: d.transferDraft.warnings,
+                    may: d.items.slice(0, 8).map((i: any) => ({ ma: i.machineCode, ten: i.name, coSoHienTai: i.plantName })),
+                },
+                render: {
+                    domain: 'asset',
+                    count: d.count,
+                    items: d.items,
+                    aggregates: { transferDraft: d.transferDraft, transferAnswer: d.answer },
+                },
             };
         }
         case 'top_broken_assets': {
@@ -508,6 +528,38 @@ const extractRequestCode = (q: string): string | undefined => {
     return m ? m[0] : undefined;
 };
 
+// Trích các MÃ MÁY/serial nhiều đoạn (vd "MCV-SANTIAN-HD-001", "VS4C-SIRUBA-HD-002") — giữ mã có cả chữ lẫn số.
+const extractMachineCodes = (q: string): string[] => {
+    const raw = q.match(/\b[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\b/g) || [];
+    return [...new Set(raw.filter((c) => /[A-Za-z]/.test(c) && /\d/.test(c) && c.length >= 5))];
+};
+
+// Lấy tên cơ sở ĐÍCH đứng sau "sang/tới/đến/về/qua ...".
+const extractTransferDest = (q: string): string | undefined => {
+    const m = q.match(/\b(?:sang|tới|toi|đến|den|về|ve|qua)\s+(.+)$/i);
+    if (!m) return undefined;
+    const dest = m[1].trim().split(/[,.;\n]/)[0].trim();
+    return dest || undefined;
+};
+
+// Nhận diện ý định SOẠN lệnh điều chuyển (khác với XEM danh sách lệnh đã có):
+// cần có mã máy cụ thể + động từ soạn hoặc cơ sở đích.
+const transferDraftRoute = (q: string): { tool: ToolName; args: any } | null => {
+    const n = normalize(q);
+    const refs = extractMachineCodes(q);
+    if (!refs.length) return null;
+    const hasDest = / sang | toi | den | ve | qua /.test(` ${n} `);
+    const draftVerb =
+        n.includes('soan lenh') ||
+        n.includes('tao lenh') ||
+        n.includes('lap lenh') ||
+        n.includes('lam lenh') ||
+        n.includes('tao phieu dieu chuyen') ||
+        /(dieu chuyen|chuyen)\s+(may|thiet bi|no|nay|con)/.test(n);
+    if (!hasDest && !draftVerb) return null;
+    return { tool: 'draft_transfer', args: { machineRefs: refs, toPlantName: extractTransferDest(q) } };
+};
+
 const hasSupplyRequestSignal = (n: string) =>
     n.includes('phieu de xuat cap') ||
     n.includes('de xuat cap vat tu') ||
@@ -623,6 +675,9 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     const code = extractOrderCode(q);
     const routedRequest = requestRoute(q);
     if (routedRequest) return routedRequest;
+    // Soạn nháp lệnh điều chuyển (có mã máy + đích) — ưu tiên trước nhánh XEM danh sách lệnh.
+    const draftRoute = transferDraftRoute(q);
+    if (draftRoute) return draftRoute;
     // Lệnh điều chuyển (ưu tiên trước đơn mua).
     if (n.includes('dieu chuyen') || n.includes('lenh chuyen')) {
         const period = n.includes('hom nay') ? 'today' : n.includes('tuan') ? 'week' : n.includes('thang') ? 'month' : undefined;
@@ -684,6 +739,9 @@ const forceRoute = (q: string): { tool: ToolName; args: any } | null => {
     const n = normalize(q);
     const routedRequest = requestRoute(q);
     if (routedRequest) return routedRequest;
+    // Soạn nháp lệnh điều chuyển: chạy sẵn để trả thẻ "Mở form điều chuyển" ngay, không để model hỏi lại.
+    const draftRoute = transferDraftRoute(q);
+    if (draftRoute) return draftRoute;
     // So sánh mua vs cấp phát.
     if (n.includes('so sanh') && n.includes('mua') && n.includes('cap phat')) {
         return { tool: 'compare_cost', args: { period: detectPeriod(q) } };
@@ -702,6 +760,7 @@ const forceRoute = (q: string): { tool: ToolName; args: any } | null => {
 const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null => {
     if (!render) return null;
     const a = render.aggregates || {};
+    if (a.transferDraft) return a.transferAnswer || `Đã soạn nháp lệnh điều chuyển cho ${render.count} máy.`;
     if (a.materialRequests) {
         const r = a.materialRequests;
         const rows = r.rows || [];
@@ -898,6 +957,7 @@ const SYSTEM_PROMPT = [
     '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke NHIEU may theo bo loc. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
     '- locate_asset(args:{query}): tra cuu 1 MAY CU THE theo MA may / SERIAL / TEN -> vi tri (co so quan ly + khu vuc + noi quet QR cuoi + co lech vi tri khong) + tinh trang + LENH DIEU CHUYEN lien quan. Dung khi hoi "may X dang o dau", "may serial ... co lenh dieu chuyen nao khong".',
     '- transfer_orders(args:{period?:today|week|month, status?:pending|approved|completed|rejected|cancelled, plantName?, limit?}): tra cuu LENH DIEU CHUYEN (kem danh sach may trong lenh). Dung khi hoi "lenh dieu chuyen hom nay/gan day", "lenh gan nhat gom may nao", "lenh nao dang cho duyet". Khong truyen period = gan day (2 tuan).',
+    '- draft_transfer(args:{machineRefs:[ma/serial may], toPlantName?}): SOAN NHAP lenh dieu chuyen (KHONG tao that) -> tra the "Mo form dieu chuyen" de nguoi dung chot. Dung khi nguoi dung MUON DIEU CHUYEN may cu the sang co so khac, vd "dieu chuyen may MCV-... sang Co So 2", "soan lenh chuyen 3 may nay ve Co So 1". machineRefs = cac MA MAY/serial trong cau; toPlantName = co so DICH.',
     '- top_broken_assets(args:{plantName?,limit?}): may hong nhieu nhat.',
     '',
     'TOOL VAT TU & KHO:',
@@ -938,6 +998,7 @@ const VALID_TOOLS = new Set<ToolName>([
     'search_assets',
     'locate_asset',
     'transfer_orders',
+    'draft_transfer',
     'top_broken_assets',
     'low_stock_materials',
     'top_used_materials',
@@ -970,6 +1031,7 @@ const TOOL_LABEL: Record<ToolName, string> = {
     search_assets: 'Máy móc',
     locate_asset: 'Tra cứu máy',
     transfer_orders: 'Lệnh điều chuyển',
+    draft_transfer: 'Soạn lệnh điều chuyển',
     top_broken_assets: 'Máy hỏng nhiều',
     low_stock_materials: 'Vật tư sắp hết',
     top_used_materials: 'Vật tư cấp phát nhiều',
@@ -1076,6 +1138,7 @@ export const runAssistant = async (messages: AssistantMessage[], emit?: (step: A
                     'request_lifecycle',
                     'request_backlog',
                     'request_risk_analysis',
+                    'draft_transfer',
                 ].includes(forced.tool)
             ) {
                 answer = buildDeterministicAnswer(lastRender) || '';
@@ -1114,7 +1177,7 @@ export const runAssistant = async (messages: AssistantMessage[], emit?: (step: A
             convo.push({
                 role: 'user',
                 content:
-                    'Tool do khong ton tai. Chi duoc dung: search_assets, locate_asset, transfer_orders, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, supply_requests, supply_request_analysis, purchase_requests, purchase_request_analysis, request_lifecycle, request_backlog, request_risk_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, cost_overview, compare_cost, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
+                    'Tool do khong ton tai. Chi duoc dung: search_assets, locate_asset, transfer_orders, draft_transfer, top_broken_assets, low_stock_materials, top_used_materials, search_materials, material_usage_by_plant, distribution_analysis, supply_requests, supply_request_analysis, purchase_requests, purchase_request_analysis, request_lifecycle, request_backlog, request_risk_analysis, purchase_analysis, purchase_orders, material_price_history, supplier_comparison, purchase_suggestion, cost_variance, cost_overview, compare_cost, summary_metrics. Hay chon tool dung; neu cau hoi ngoai pham vi, tra {"final":"giai thich ngan"}.',
             });
             continue;
         }
@@ -1202,6 +1265,7 @@ export const runAssistant = async (messages: AssistantMessage[], emit?: (step: A
         count: lastRender?.count ?? 0,
         items: lastRender?.items ?? [],
         aggregates: lastRender?.aggregates ?? {},
+        transferDraft: (lastRender?.aggregates as any)?.transferDraft,
         appliedFilters: lastRender?.appliedFilters,
         followups: followups.slice(0, 3),
         sources: sourceList,
