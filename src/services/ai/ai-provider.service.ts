@@ -24,6 +24,9 @@ export type AiGenerateTextOptions = {
     jsonMode?: boolean;
     timeoutMs?: number;
     feature?: string;
+    // Tắt/giảm "thinking" của model reasoning (vd gemini-2.5-flash nay bật thinking mặc định,
+    // đốt hết token budget -> JSON cắt cụt). 'none' = không suy luận nội bộ, dành trọn token cho output.
+    reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
 };
 
 export type AiGenerateTextResult = {
@@ -119,6 +122,7 @@ const callOpenAiCompatible = async (
             temperature: options.temperature ?? 0.2,
             max_tokens: options.maxTokens ?? 900,
             stream: false,
+            ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
         },
         {
             timeout: options.timeoutMs ?? config.ai.timeoutMs,

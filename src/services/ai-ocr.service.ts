@@ -17,9 +17,10 @@ import customResponse from '@/utils/response';
 // trả số dạng chuỗi/thiếu trường, strict parse sẽ throw -> rơi fallback oan. Ở đây đọc KHOAN
 // DUNG (ép kiểu mềm, bỏ trường lỗi) + thử lại nhiều lần (model chính x2 + model vision dự phòng) cho ổn định.
 
-// Model vision ỔN ĐỊNH cho OCR. BẮT BUỘC dùng model KHÔNG-"thinking" (gemini-2.5-flash):
-// model thinking (vd gemini-2.5-pro) đốt token budget vào suy luận nội bộ -> chỉ còn vài chục
-// token cho JSON -> output bị CẮT CỤT với phiếu nhiều dòng -> parse lỗi -> rơi fallback rỗng.
+// Model vision cho OCR. LƯU Ý: gemini-2.5-flash NAY ĐÃ BẬT "thinking" mặc định (đốt 2.6k–5.7k
+// token suy luận) -> nếu không tắt, nó ngốn hết max_tokens, JSON bị CẮT CỤT -> parse lỗi -> quét
+// thất bại (fallback rỗng). Vì vậy call OCR PHẢI kèm reasoningEffort:'none' (xem generateJson bên
+// dưới) để tắt thinking: vừa hết cắt cụt, vừa nhanh ~4x (~6s thay vì ~24s).
 const OCR_RELIABLE_VISION_MODEL = 'gc/gemini-2.5-flash';
 
 // CHỈ honor AI_OCR_MODEL riêng cho OCR (KHÔNG kế thừa AI_VISION_MODEL chung — env đó có thể là
@@ -176,7 +177,11 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
             feature: 'ocr-invoice',
             model,
             temperature: 0.05,
-            maxTokens: 6000,
+            // Tắt thinking: gemini-2.5-flash nay bật reasoning mặc định (đốt vài nghìn token) ->
+            // JSON bị CẮT CỤT -> parse lỗi -> quét thất bại. 'none' trả trọn token cho JSON + nhanh ~4x.
+            reasoningEffort: 'none',
+            // Lưới an toàn nếu route nào đó bỏ qua reasoning_effort: cho dư chỗ để JSON không cắt cụt.
+            maxTokens: 12000,
             timeoutMs: 75000,
             messages: [
                 {
@@ -256,7 +261,9 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
             feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
             model,
             temperature: 0.04,
-            maxTokens: 6000,
+            // Tắt thinking (xem giải thích ở scanPurchaseInvoice) + dư maxTokens làm lưới an toàn.
+            reasoningEffort: 'none',
+            maxTokens: 12000,
             timeoutMs: 75000,
             messages: [
                 {
