@@ -18,9 +18,9 @@ import customResponse from '@/utils/response';
 // DUNG (ép kiểu mềm, bỏ trường lỗi) + thử lại nhiều lần (model chính x2 + model vision dự phòng) cho ổn định.
 
 // Model vision cho OCR. LƯU Ý: gemini-2.5-flash NAY ĐÃ BẬT "thinking" mặc định (đốt 2.6k–5.7k
-// token suy luận) -> nếu không tắt, nó ngốn hết max_tokens, JSON bị CẮT CỤT -> parse lỗi -> quét
-// thất bại (fallback rỗng). Vì vậy call OCR PHẢI kèm reasoningEffort:'none' (xem generateJson bên
-// dưới) để tắt thinking: vừa hết cắt cụt, vừa nhanh ~4x (~6s thay vì ~24s).
+// token suy luận) -> nếu để mặc định, nó ngốn hết max_tokens, JSON bị CẮT CỤT -> parse lỗi -> quét
+// thất bại (fallback rỗng). Vì vậy call OCR kèm reasoningEffort:'low' + maxTokens dư (xem generateJson
+// bên dưới): đủ suy luận để MAP CỘT chuẩn, vừa không cắt cụt. ('none' nhanh hơn nhưng map ẩu.)
 const OCR_RELIABLE_VISION_MODEL = 'gc/gemini-2.5-flash';
 
 // CHỈ honor AI_OCR_MODEL riêng cho OCR (KHÔNG kế thừa AI_VISION_MODEL chung — env đó có thể là
@@ -98,15 +98,16 @@ const cleanText = (value: unknown): string | undefined => {
 
 const buildPrompt = () =>
     [
-        'Ban la tro ly OCR phieu/hoa don mua vat tu cua cong ty may (tieng Viet).',
-        'Doc anh dinh kem (thuong la BANG "DANH SACH MUA VAT TU") va trich CHINH XAC tung dong + thong tin chung.',
-        'Chi tra ve JSON hop le, khong markdown, khong giai thich ngoai JSON.',
-        'TUYET DOI khong bia: truong nao khong doc duoc thi de null.',
-        'So tien/so luong tra ve SO thuan, KHONG dau phan cach nghin (vd "1.200.000" -> 1200000, "12,5" -> 12.5). Don gia theo VND.',
-        'PHAN BIET 2 cot so luong neu co: "So luong can" -> quantityRequested; "So luong" (cot gan don gia, khop thanh tien) -> quantity.',
-        'vatRate la phan tram thue (vd 8, 10), KHONG phai tien thue. Neu cot VAT trong hoac gach "-" (hang khong chiu thue) thi vatRate = 0. Chi de null khi anh mo khong doc duoc cot nay.',
-        'Lay theo TUNG DONG: plantName=cot "Co so", proposedBy=cot "Nguoi de xuat", supplierName=cot "Nha cung cap/Nha cung", purpose=cot "Noi dung", note=cot "Ghi chu".',
-        'Ngay (orderDate=Ngay len don, receivedDate=Ngay nhan): tra ve ISO YYYY-MM-DD (vd 1/6/2026 -> 2026-06-01). Khong doc duoc thi null.',
+        'Ban la tro ly OCR phieu/hoa don MUA VAT TU cua cong ty may (tieng Viet). Doc anh va trich CHINH XAC tung dong + thong tin chung.',
+        'Chi tra ve JSON hop le, khong markdown, khong giai thich ngoai JSON. TUYET DOI khong bia: truong nao khong doc duoc thi de null.',
+        'Anh THUONG la bang "DANH SACH MUA VAT TU" cua cong ty, THU TU COT tu TRAI->PHAI nhu sau (map DUNG theo VI TRI cot):',
+        '  1)STT  2)Ten vat tu (materialName)  3)Co so (plantName)  4)Nguoi de xuat (proposedBy = TEN NGUOI)  5)So luong can (quantityRequested)  6)DVT (unit)  7)So luong mua (quantity)  8)Don gia (unitPrice)  9)Thanh tien [BO QUA]  10)VAT % (vatRate)  11)Tien thue VAT [BO QUA]  12)Tong cong [BO QUA]  13)Ngay len don (orderDate)  14)Ngay nhan (receivedDate)  15)Trang thai thanh toan [BO QUA]  16)Nha cung cap (supplierName = NOI MUA)  17)Noi dung/Muc dich (purpose).',
+        'CUC KY QUAN TRONG — dung nham 2 cot khac nhau: cot 3 "Co so" (don vi NOI BO nhan hang, vd "Dai Pham","Co so 1","Co so 2","Phu Son") KHAC HOAN TOAN cot 16 "Nha cung cap" (noi BAN, vd "Khai Quang","Hoan Linh","Tap hoa","Shoppe"). TUYET DOI khong gan ten co so vao supplierName va nguoc lai.',
+        'Cot 4 "Nguoi de xuat" la TEN NGUOI (vd "A Tuan CK","Quyen","Nhung","Long") — dung nham voi ten co so/NCC.',
+        'PHAN BIET 2 cot so luong: cot 5 "So luong can" -> quantityRequested; cot 7 "So luong (mua)" (gan don gia, khop thanh tien) -> quantity.',
+        'vatRate = phan tram thue (vd 8, 10), KHONG phai tien thue. Neu o VAT TRONG hoac gach "-" (hang khong chiu thue) thi vatRate = 0 (KHONG de null).',
+        'Neu anh KHONG theo mau tren (hoa don NCC ngoai, layout khac) thi map theo TIEU DE COT / y nghia tung cot.',
+        'So tien/so luong tra ve SO thuan, KHONG dau phan cach nghin (vd "2.559.600" -> 2559600, "12,5" -> 12.5). Ngay tra ISO YYYY-MM-DD (vd 23/6/2026 -> 2026-06-23).',
         'materialName giu nguyen ten hang nhu tren phieu. Bo qua dong tong cong/thanh tien tong/chu ky.',
         'Output schema (chi JSON):',
         '{"header":{"supplierName":null,"invoiceNo":null,"invoiceDate":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"quantity":null,"unitPrice":null,"vatRate":null,"plantName":null,"proposedBy":null,"supplierName":null,"purpose":null,"note":null,"orderDate":null,"receivedDate":null}]}',
@@ -177,11 +178,12 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
             feature: 'ocr-invoice',
             model,
             temperature: 0.05,
-            // Tắt thinking: gemini-2.5-flash nay bật reasoning mặc định (đốt vài nghìn token) ->
-            // JSON bị CẮT CỤT -> parse lỗi -> quét thất bại. 'none' trả trọn token cho JSON + nhanh ~4x.
-            reasoningEffort: 'none',
-            // Lưới an toàn nếu route nào đó bỏ qua reasoning_effort: cho dư chỗ để JSON không cắt cụt.
-            maxTokens: 12000,
+            // reasoning 'low': ĐỦ suy luận để MAP CỘT chuẩn (phân biệt Cơ sở vs NCC, VAT trống=0, SL cần vs
+            // SL mua) nhưng KHÔNG đốt hết token như mặc định (gemini-2.5-flash nay bật thinking rất nặng ->
+            // JSON cắt cụt -> quét hỏng). 'none' map ẩu (bỏ qua rule VAT=0); 'low' chuẩn hơn, vẫn nhanh.
+            reasoningEffort: 'low',
+            // Dư maxTokens để reasoning(low ~1k) + JSON đầy đủ (phiếu nhiều dòng) không bị cắt cụt.
+            maxTokens: 16000,
             timeoutMs: 75000,
             messages: [
                 {
@@ -261,9 +263,9 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
             feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
             model,
             temperature: 0.04,
-            // Tắt thinking (xem giải thích ở scanPurchaseInvoice) + dư maxTokens làm lưới an toàn.
-            reasoningEffort: 'none',
-            maxTokens: 12000,
+            // reasoning 'low' + dư maxTokens (xem giải thích ở scanPurchaseInvoice): map cột chuẩn mà không cắt cụt.
+            reasoningEffort: 'low',
+            maxTokens: 16000,
             timeoutMs: 75000,
             messages: [
                 {
