@@ -87,6 +87,27 @@ const sameSupplier = (a?: string, b?: string) => {
     return similarity(a, b) >= 0.72;
 };
 
+/**
+ * Điểm khớp tên vật tư: lấy MAX(jaccard, độ-chứa-trọn). Tên phiếu NCC thường dài hơn
+ * tên danh mục ("Mặt nguyệt vắt sổ 277505/277517/277516 hiệu LDM" vs "Mặt nguyệt vắt sổ 277505")
+ * — bên ngắn nằm TRỌN trong bên dài thì coi là khớp 100%. An toàn vì numbersConflict
+ * vẫn chặn biến thể (DBx1 ≠ DCx1, 9/65 ≠ 11/75). Bên ngắn chỉ 1 token thì không dùng
+ * độ-chứa (tránh "Kim" khớp mọi loại kim).
+ */
+const nameMatchScore = (a: unknown, b: unknown) => {
+    const ta = tokenSet(a);
+    const tb = tokenSet(b);
+    if (!ta.size || !tb.size) return 0;
+    let intersection = 0;
+    ta.forEach((token) => {
+        if (tb.has(token)) intersection += 1;
+    });
+    const jaccard = intersection / Math.max(ta.size, tb.size);
+    const smaller = Math.min(ta.size, tb.size);
+    const containment = smaller >= 2 ? intersection / smaller : 0;
+    return Math.max(jaccard, containment);
+};
+
 /** ĐVT đồng nghĩa hay gặp: phiếu NCC ghi "Chiếc" nhưng danh mục lưu "cái"… — quy về 1 dạng chuẩn. */
 const UNIT_SYNONYMS: Record<string, string> = {
     cai: 'cai',
@@ -230,7 +251,7 @@ const reconcileScans = (first: ReceiptOcrLine[], second: ReceiptOcrLine[]): Veri
         second.forEach((cand, idx) => {
             if (used.has(idx)) return;
             if (numbersConflict(line.materialName, cand.materialName)) return;
-            const sim = similarity(line.materialName, cand.materialName);
+            const sim = nameMatchScore(line.materialName, cand.materialName);
             if (sim > bestSim) {
                 bestSim = sim;
                 bestIdx = idx;
@@ -436,7 +457,7 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
             )
             .map((item: any) => ({
                 item,
-                nameSim: similarity(line.materialName, item.materialName),
+                nameSim: nameMatchScore(line.materialName, item.materialName),
                 unitOk: sameUnit(line.unit, item.unit),
             }))
             .filter((candidate: any) => candidate.nameSim >= 0.62)
@@ -472,7 +493,7 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                       )
                       .map((shortage: any) => ({
                           shortage,
-                          nameSim: similarity(line.materialName, shortage.materialName),
+                          nameSim: nameMatchScore(line.materialName, shortage.materialName),
                           unitOk: sameUnit(line.unit, shortage.unit),
                       }))
                       .filter((candidate: any) => candidate.nameSim >= 0.62)
