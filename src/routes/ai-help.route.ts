@@ -20,6 +20,7 @@ import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
 import { scanPurchaseInvoice, scanSupplyRequest } from '@/services/ai-ocr.service';
 import { reviewPurchaseRequest } from '@/services/ai-approval-review.service';
 import { runAnalyticsQuery, getAnalyticsCatalog } from '@/services/ai-analytics.service';
+import { runIncidentReplay } from '@/services/ai-incident-replay.service';
 import { getQrFieldInsight } from '@/services/ai-qr-field.service';
 import { imageUpload } from '@/middlewares/multerMiddleware';
 
@@ -41,5 +42,6 @@ router.post('/ocr/supply-request', imageUpload.single('image'), asyncHandler(sca
 router.post('/purchase-request/:id/review', asyncHandler(reviewPurchaseRequest));
 router.get('/analytics/catalog', asyncHandler(getAnalyticsCatalog));
 router.post('/analytics/query', asyncHandler(runAnalyticsQuery));
+router.post('/incident-replay', asyncHandler(runIncidentReplay));
 
 export default router;

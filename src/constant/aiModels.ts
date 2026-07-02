@@ -23,6 +23,7 @@ export const AI_FEATURES = {
     OCR_PURCHASE_RECEIPT_VERIFY: 'ocr-purchase-receipt-verify', // Lần đọc 2 độc lập (model khác dòng) để đối chiếu chéo
     APPROVAL_REVIEW: 'approval-review', // Rà soát phiếu mua trước khi duyệt (tóm tắt cảnh báo)
     ANALYTICS: 'analytics', // NL -> chart-spec cho AI Analytics Studio (JSON, cần ổn định)
+    INCIDENT_REPLAY: 'incident-replay', // Điều tra bất thường vận hành từ timeline/sự kiện thật
     HELP: 'help', // Trợ lý hướng dẫn sử dụng
     DIGEST: 'digest', // Bản tin AI định kỳ cho giám đốc (chất lượng cao, chạy ít lần)
     VARIANCE: 'variance', // Giải thích biến động chỉ số (câu ngắn, theo nhu cầu)
@@ -73,6 +74,7 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     'ocr-purchase-receipt-verify': ['bb/gpt-5.5', 'gc/gemini-2.5-pro'],
     'approval-review': ['bb/gpt-5.4', 'kr/claude-haiku-4.5'],
     analytics: ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // chart-spec JSON từ danh mục cho sẵn
+    'incident-replay': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5', 'gc/gemini-2.5-flash'],
     help: ['bb/gpt-5.4', 'kr/claude-sonnet-4.5'],
     digest: ['bb/gpt-5.5', 'gc/gemini-2.5-pro'], // bản tin giám đốc: chất lượng cao, chạy ít
     variance: ['bb/deepseek-v4-flash', 'kr/claude-haiku-4.5'],
