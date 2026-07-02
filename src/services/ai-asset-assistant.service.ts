@@ -36,6 +36,56 @@ const VALID_FLAGS = new Set(['overdue_maintenance', 'mislocated', 'no_qr', 'not_
 const normalize = (value?: string) =>
     (value ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
 
+const extractMachineCodes = (q: string): string[] => {
+    const raw = q.match(/\b[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\b/g) || [];
+    return [...new Set(raw.filter((c) => /[A-Za-z]/.test(c) && /\d/.test(c) && c.length >= 5))];
+};
+
+const extractMachineRefs = (q: string): string[] => {
+    const refs = extractMachineCodes(q);
+    const n = normalize(q);
+    const hasSerialSignal =
+        n.includes('seri') ||
+        n.includes('serial') ||
+        /\bsn\b/.test(n) ||
+        n.includes('so serial') ||
+        n.includes('so seri');
+    if (hasSerialSignal) refs.push(...(q.match(/\b\d{5,}\b/g) || []));
+    return [...new Set(refs.map((ref) => ref.trim()).filter(Boolean))];
+};
+
+const extractTransferDest = (q: string): string | undefined => {
+    const m = q.match(/\b(?:sang|tới|toi|đến|den|về|ve|qua)\s+(.+)$/i);
+    if (!m) return undefined;
+    const dest = m[1].trim().split(/[,.;\n]/)[0].trim();
+    return dest || undefined;
+};
+
+const inferTransferDraftPlan = (q: string): Plan | null => {
+    const n = normalize(q);
+    const refs = extractMachineRefs(q);
+    if (!refs.length) return null;
+    const hasDest = / sang | toi | den | ve | qua /.test(` ${n} `);
+    const draftVerb =
+        n.includes('soan lenh') ||
+        n.includes('tao lenh') ||
+        n.includes('lap lenh') ||
+        n.includes('lam lenh') ||
+        n.includes('mo lenh') ||
+        n.includes('tim va tao lenh') ||
+        n.includes('tao lenh dieu chuyen') ||
+        /(dieu chuyen|chuyen)\s+(may|thiet bi|no|nay|con)/.test(n);
+    if (!hasDest && !draftVerb) return null;
+    return {
+        intent: 'transfer_draft',
+        transfer: { machineRefs: refs, toPlantName: extractTransferDest(q) ?? null },
+        filters: {},
+        aggregate: null,
+        limit: null,
+        followups: ['Chọn cơ sở đích', 'Tìm thêm máy theo serial', 'Mở danh sách điều chuyển'],
+    };
+};
+
 const resolveByName = (candidates: { id: string; name: string }[], rawName?: string) => {
     const target = normalize(rawName);
     if (!target) return undefined;
@@ -118,7 +168,7 @@ const buildPlanSystemPrompt = (plantNames: string[], brandNames: string[], areas
             .join(', ')}.`,
         'Co nghiep vu (flags): "overdue_maintenance"=may qua han bao tri, "mislocated"=may lech vi tri GPS so voi co so, "no_qr"=may chua co tem QR, "not_scanned"=lau chua quet QR (kem notScannedDays).',
         'Khi hoi "bao nhieu/co may cai" => intent "count". "top/nhieu nhat/xep hang" => intent "rank" + aggregate "top_broken". "tong gia tri" => aggregate "sum_value". "phan theo trang thai/co so" => breakdown_*.',
-        'Khi nguoi dung muon DIEU CHUYEN / chuyen / dieu may sang co so khac => intent "transfer_draft": dua TAT CA ma may/serial nhac den vao transfer.machineRefs (mang chuoi), co so dich vao transfer.toPlantName. Chi SOAN, KHONG tao lenh.',
+        'Khi nguoi dung muon DIEU CHUYEN / chuyen / dieu may / tao lenh dieu chuyen => intent "transfer_draft": dua TAT CA ma may/serial/seri/SN nhac den vao transfer.machineRefs (mang chuoi), ke ca serial TOAN SO nhu 0242889, 02115139; co so dich vao transfer.toPlantName neu co. Chi SOAN, KHONG tao lenh. Neu thieu co so dich van tra transfer_draft de tim may truoc va hoi them co so dich.',
         '',
         plantNames.length ? `Co so hien co: ${plantNames.join(', ')}.` : '',
         brandNames.length ? `Hang hien co: ${brandNames.join(', ')}.` : '',
@@ -491,26 +541,29 @@ export const runAssetAssistant = async (messages: AssistantMessage[]) => {
     // Auto-switch model theo độ phức tạp câu hỏi cuối -> tiết kiệm quota.
     const tier = classifyTier(lastUser);
     const planFeature = ASSET_SEARCH_TIERS[tier];
+    const forcedTransferPlan = inferTransferDraftPlan(lastUser);
 
-    let plan: Plan = { intent: 'list', filters: {} };
-    let provider = 'fallback';
+    let plan: Plan = forcedTransferPlan ?? { intent: 'list', filters: {} };
+    let provider = forcedTransferPlan ? 'rule' : 'fallback';
     let model: string | undefined;
-    try {
-        const aiResult = await aiProviderService.generateJson<Record<string, unknown>>({
-            feature: planFeature,
-            temperature: 0.1,
-            maxTokens: 600,
-            messages: [
-                { role: 'system', content: buildPlanSystemPrompt(plants.map((p) => p.name), brands.map((b) => b.name), areas) },
-                ...messages.map((m) => ({ role: m.role, content: m.content })),
-            ],
-        });
-        plan = planSchema.parse(aiResult.data);
-        provider = aiResult.provider;
-        model = aiResult.model;
-    } catch {
-        // AI lỗi -> plan rỗng, vẫn chạy list theo từ khoá câu hỏi cuối.
-        plan = { intent: 'list', filters: { search: lastUser.slice(0, 200) } } as Plan;
+    if (!forcedTransferPlan) {
+        try {
+            const aiResult = await aiProviderService.generateJson<Record<string, unknown>>({
+                feature: planFeature,
+                temperature: 0.1,
+                maxTokens: 600,
+                messages: [
+                    { role: 'system', content: buildPlanSystemPrompt(plants.map((p) => p.name), brands.map((b) => b.name), areas) },
+                    ...messages.map((m) => ({ role: m.role, content: m.content })),
+                ],
+            });
+            plan = planSchema.parse(aiResult.data);
+            provider = aiResult.provider;
+            model = aiResult.model;
+        } catch {
+            // AI lỗi -> plan rỗng, vẫn chạy list theo từ khoá câu hỏi cuối.
+            plan = { intent: 'list', filters: { search: lastUser.slice(0, 200) } } as Plan;
+        }
     }
 
     // Dò nhãn/cơ sở: ưu tiên plan, nếu trống thì quét chính câu hỏi (chống AI bỏ sót).

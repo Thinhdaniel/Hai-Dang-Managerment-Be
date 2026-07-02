@@ -534,6 +534,26 @@ const extractMachineCodes = (q: string): string[] => {
     return [...new Set(raw.filter((c) => /[A-Za-z]/.test(c) && /\d/.test(c) && c.length >= 5))];
 };
 
+// Serial thực tế hay là chuỗi số thuần ("0242889", "02115139"). Chỉ trích số thuần khi câu có tín hiệu serial
+// để tránh nhầm số lượng/ngày/tháng thành mã máy.
+const extractMachineRefs = (q: string): string[] => {
+    const refs = extractMachineCodes(q);
+    const n = normalize(q);
+    const hasSerialSignal =
+        n.includes('seri') ||
+        n.includes('serial') ||
+        /\bsn\b/.test(n) ||
+        n.includes('so serial') ||
+        n.includes('so seri');
+
+    if (hasSerialSignal) {
+        const numericSerials = q.match(/\b\d{5,}\b/g) || [];
+        refs.push(...numericSerials);
+    }
+
+    return [...new Set(refs.map((ref) => ref.trim()).filter(Boolean))];
+};
+
 // Lấy tên cơ sở ĐÍCH đứng sau "sang/tới/đến/về/qua ...".
 const extractTransferDest = (q: string): string | undefined => {
     const m = q.match(/\b(?:sang|tới|toi|đến|den|về|ve|qua)\s+(.+)$/i);
@@ -546,7 +566,7 @@ const extractTransferDest = (q: string): string | undefined => {
 // cần có mã máy cụ thể + động từ soạn hoặc cơ sở đích.
 const transferDraftRoute = (q: string): { tool: ToolName; args: any } | null => {
     const n = normalize(q);
-    const refs = extractMachineCodes(q);
+    const refs = extractMachineRefs(q);
     if (!refs.length) return null;
     const hasDest = / sang | toi | den | ve | qua /.test(` ${n} `);
     const draftVerb =
@@ -554,7 +574,10 @@ const transferDraftRoute = (q: string): { tool: ToolName; args: any } | null => 
         n.includes('tao lenh') ||
         n.includes('lap lenh') ||
         n.includes('lam lenh') ||
+        n.includes('mo lenh') ||
         n.includes('tao phieu dieu chuyen') ||
+        n.includes('tim va tao lenh') ||
+        n.includes('tao lenh dieu chuyen') ||
         /(dieu chuyen|chuyen)\s+(may|thiet bi|no|nay|con)/.test(n);
     if (!hasDest && !draftVerb) return null;
     return { tool: 'draft_transfer', args: { machineRefs: refs, toPlantName: extractTransferDest(q) } };
@@ -957,7 +980,7 @@ const SYSTEM_PROMPT = [
     '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke NHIEU may theo bo loc. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
     '- locate_asset(args:{query}): tra cuu 1 MAY CU THE theo MA may / SERIAL / TEN -> vi tri (co so quan ly + khu vuc + noi quet QR cuoi + co lech vi tri khong) + tinh trang + LENH DIEU CHUYEN lien quan. Dung khi hoi "may X dang o dau", "may serial ... co lenh dieu chuyen nao khong".',
     '- transfer_orders(args:{period?:today|week|month, status?:pending|approved|completed|rejected|cancelled, plantName?, limit?}): tra cuu LENH DIEU CHUYEN (kem danh sach may trong lenh). Dung khi hoi "lenh dieu chuyen hom nay/gan day", "lenh gan nhat gom may nao", "lenh nao dang cho duyet". Khong truyen period = gan day (2 tuan).',
-    '- draft_transfer(args:{machineRefs:[ma/serial may], toPlantName?}): SOAN NHAP lenh dieu chuyen (KHONG tao that) -> tra the "Mo form dieu chuyen" de nguoi dung chot. Dung khi nguoi dung MUON DIEU CHUYEN may cu the sang co so khac, vd "dieu chuyen may MCV-... sang Co So 2", "soan lenh chuyen 3 may nay ve Co So 1". machineRefs = cac MA MAY/serial trong cau; toPlantName = co so DICH.',
+    '- draft_transfer(args:{machineRefs:[ma/serial may], toPlantName?}): SOAN NHAP lenh dieu chuyen (KHONG tao that) -> tra the "Mo form dieu chuyen" de nguoi dung chot. Dung khi nguoi dung MUON DIEU CHUYEN may cu the sang co so khac, vd "dieu chuyen may MCV-... sang Co So 2", "soan lenh chuyen 3 may nay ve Co So 1", "tao lenh dieu chuyen 2 may co seri 0242889, 02115139". machineRefs = TAT CA ma may/serial/seri/SN trong cau, ke ca serial TOAN SO; toPlantName = co so DICH neu co. Neu thieu co so dich van goi draft_transfer de tim may truoc roi hoi them co so dich.',
     '- top_broken_assets(args:{plantName?,limit?}): may hong nhieu nhat.',
     '',
     'TOOL VAT TU & KHO:',
