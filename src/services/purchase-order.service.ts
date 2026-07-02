@@ -1097,6 +1097,35 @@ export const ignorePurchaseOrderItemInventory = async (req: Request, res: Respon
     );
 };
 
+/** Xuất Excel TỔNG HỢP đặt hàng theo khoảng thời gian (startDate/endDate) — 4 sheet. */
+export const exportRangePurchaseOrdersXlsx = async (req: Request, res: Response, next: NextFunction) => {
+    const filter = buildFilter(req.query, req);
+    // Mặc định loại đơn đã hủy khỏi báo cáo (trừ khi lọc đích danh)
+    if (!req.query.status) filter.status = { $ne: 'cancelled' };
+
+    const orders = await purchaseOrderRepository.findMany(filter, { sort: 'createdAt' });
+    if (!orders.length) throw new BadRequestError('Khong co don dat hang nao trong khoang thoi gian nay');
+
+    const plains = orders.map(serializePurchaseOrder);
+    const orderIds = orders.map((order: any) => String(order._id));
+    const shortages = await PurchaseShortage.find({
+        originalPurchaseOrderId: { $in: orderIds },
+        isDeleted: { $ne: true },
+    }).lean();
+
+    const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+    const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+    const label = startDate && endDate ? `${startDate} den ${endDate}` : startDate || endDate || 'Tat ca';
+
+    const { generateRangePurchaseOrdersXlsx } = await import('@/utils/generateRangePurchaseOrdersXlsx');
+    const buffer = await generateRangePurchaseOrdersXlsx(plains, shortages, label);
+
+    const filename = `dat-hang-${label.replace(/[/\s]+/g, '-')}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(StatusCodes.OK).send(Buffer.from(buffer as ArrayBuffer));
+};
+
 export const exportPurchaseOrderXlsx = async (req: Request, res: Response, next: NextFunction) => {
     const { generatePurchaseOrderXlsx } = await import('@/utils/generatePurchaseOrderXlsx');
     const order = await purchaseOrderRepository.findById(String(req.params.id));

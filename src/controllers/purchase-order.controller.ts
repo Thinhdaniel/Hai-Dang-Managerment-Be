@@ -48,3 +48,8 @@ export const deletePurchaseOrder = asyncHandler(async (req: Request, res: Respon
 export const exportPurchaseOrderXlsx = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.exportPurchaseOrderXlsx(req, res, next);
 });
+export const exportRangePurchaseOrdersXlsx = asyncHandler(
+    async (req: Request, res: Response, next: NextFunction) => {
+        return await purchaseOrderService.exportRangePurchaseOrdersXlsx(req, res, next);
+    }
+);

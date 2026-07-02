@@ -23,6 +23,7 @@ router.use(authenticate, requireProcurementManager);
 
 router.get('/', ctrl.getAllPurchaseOrders);
 router.get('/shortages', ctrl.getOutstandingPurchaseShortages);
+router.get('/export-range-xlsx', ctrl.exportRangePurchaseOrdersXlsx);
 router.post('/', validator(createPurchaseOrderSchema), ctrl.createPurchaseOrder);
 router.get('/:id/export-xlsx', validateObjectId, ctrl.exportPurchaseOrderXlsx);
 router.get('/:id/receipt-scans', validateObjectId, ctrl.getPurchaseReceiptScans);
