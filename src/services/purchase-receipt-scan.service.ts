@@ -87,9 +87,45 @@ const sameSupplier = (a?: string, b?: string) => {
     return similarity(a, b) >= 0.72;
 };
 
+/** ĐVT đồng nghĩa hay gặp: phiếu NCC ghi "Chiếc" nhưng danh mục lưu "cái"… — quy về 1 dạng chuẩn. */
+const UNIT_SYNONYMS: Record<string, string> = {
+    cai: 'cai',
+    chiec: 'cai',
+    pc: 'cai',
+    pcs: 'cai',
+    con: 'cai',
+    bo: 'bo',
+    set: 'bo',
+    doi: 'doi',
+    cap: 'doi',
+    pair: 'doi',
+    cuon: 'cuon',
+    roll: 'cuon',
+    m: 'm',
+    met: 'm',
+    md: 'm',
+    kg: 'kg',
+    ky: 'kg',
+    ki: 'kg',
+    hop: 'hop',
+    box: 'hop',
+    tui: 'tui',
+    goi: 'tui',
+    chai: 'chai',
+    lo: 'chai',
+    thung: 'thung',
+    cay: 'cay',
+    thanh: 'cay',
+};
+
+const canonicalUnit = (value: unknown) => {
+    const normalized = normalizeText(value).replace(/\s+/g, '');
+    return UNIT_SYNONYMS[normalized] || normalized;
+};
+
 const sameUnit = (a?: string, b?: string) => {
     if (!a || !b) return true;
-    return normalizeText(a) === normalizeText(b) || similarity(a, b) >= 0.78;
+    return canonicalUnit(a) === canonicalUnit(b) || similarity(a, b) >= 0.78;
 };
 
 /**
@@ -113,9 +149,21 @@ const numbersConflict = (a: unknown, b: unknown) => {
     return !(aInB || bInA);
 };
 
-/** Ngưỡng tự điền: dưới ngưỡng này AI chỉ được GỢI Ý, người dùng phải tự xác nhận. */
+/**
+ * Ngưỡng tự điền: dưới ngưỡng này AI chỉ được GỢI Ý, người dùng phải tự xác nhận.
+ * Ảnh đọc rất rõ (>=0.9, đã đối chiếu 2 lần) thì tên khớp >=0.85 là đủ tự điền —
+ * guard token-số + ĐVT vẫn chặn nhầm biến thể (9/65 ≠ 11/75).
+ */
 const AUTO_LINE_CONFIDENCE = 0.75;
 const AUTO_NAME_SIMILARITY = 0.9;
+const AUTO_NAME_SIMILARITY_CLEAR = 0.85;
+const CLEAR_LINE_CONFIDENCE = 0.9;
+
+const autoEligible = (lineConfidence: number, nameSim: number, unitOk: boolean) => {
+    if (!unitOk) return false;
+    if (lineConfidence >= CLEAR_LINE_CONFIDENCE && nameSim >= AUTO_NAME_SIMILARITY_CLEAR) return true;
+    return lineConfidence >= AUTO_LINE_CONFIDENCE && nameSim >= AUTO_NAME_SIMILARITY;
+};
 
 const roundQty = (value: number) => Number(value.toFixed(2));
 
@@ -370,30 +418,33 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
 
     for (const line of readableLines) {
         let remainingQty = Number(line.quantity ?? 0);
+        const lineConfidence = line.confidence ?? 0;
         const lineSupplier = line.supplierName || scan.header.supplierName;
         // Dòng đủ tin cậy mới được TỰ ĐIỀN: ảnh rõ + (nếu có đối chiếu) 2 lần đọc thống nhất
-        const lineConfident =
-            (line.confidence ?? 0) >= AUTO_LINE_CONFIDENCE && line.verify !== 'quantity_mismatch';
+        const lineConfident = lineConfidence >= AUTO_LINE_CONFIDENCE && line.verify !== 'quantity_mismatch';
 
-        // Guard cứng: token-số phải khớp (11/75 ≠ 8/60), có ĐVT 2 bên thì phải cùng ĐVT
-        const compatibleWith = (name?: string, unit?: string, supplierName?: string) =>
-            !numbersConflict(line.materialName, name) &&
-            (!line.unit || !unit || sameUnit(line.unit, unit)) &&
-            sameSupplier(lineSupplier, supplierName);
+        // Guard cứng: token-số phải khớp (11/75 ≠ 8/60). Lệch ĐVT KHÔNG loại ứng viên
+        // (phiếu "Chiếc" vs danh mục "cái" là chuyện thường) — chỉ chặn TỰ ĐIỀN, vẫn gợi ý.
+        const compatibleWith = (name?: string, supplierName?: string) =>
+            !numbersConflict(line.materialName, name) && sameSupplier(lineSupplier, supplierName);
 
         const candidates = orderItems
             .filter(
                 (item: any) =>
                     (currentRemaining.get(item.index) ?? 0) > 0 &&
-                    compatibleWith(item.materialName, item.unit, item.supplierName)
+                    compatibleWith(item.materialName, item.supplierName)
             )
-            .map((item: any) => ({ item, nameSim: similarity(line.materialName, item.materialName) }))
+            .map((item: any) => ({
+                item,
+                nameSim: similarity(line.materialName, item.materialName),
+                unitOk: sameUnit(line.unit, item.unit),
+            }))
             .filter((candidate: any) => candidate.nameSim >= 0.62)
-            .sort((a: any, b: any) => b.nameSim - a.nameSim);
+            .sort((a: any, b: any) => b.nameSim + (b.unitOk ? 0.05 : 0) - (a.nameSim + (a.unitOk ? 0.05 : 0)));
 
         for (const candidate of candidates) {
             if (remainingQty <= 0) break;
-            if (!lineConfident || candidate.nameSim < AUTO_NAME_SIMILARITY) break; // dưới ngưỡng -> chỉ gợi ý
+            if (!lineConfident || !autoEligible(lineConfidence, candidate.nameSim, candidate.unitOk)) break; // dưới ngưỡng -> chỉ gợi ý
             const available = currentRemaining.get(candidate.item.index) ?? 0;
             if (available <= 0) continue;
             const quantity = roundQty(Math.min(available, remainingQty));
@@ -406,7 +457,7 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                 materialName: candidate.item.materialName,
                 unit: candidate.item.unit,
                 quantity,
-                confidence: Math.min(1, Number(((line.confidence ?? 0.65) * candidate.nameSim).toFixed(2))),
+                confidence: Math.min(1, Number((lineConfidence * candidate.nameSim).toFixed(2))),
                 reason: 'Khớp dòng trong đơn hiện tại',
             });
         }
@@ -417,19 +468,23 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                       .filter(
                           (shortage: any) =>
                               (shortageRemaining.get(String(shortage._id)) ?? 0) > 0 &&
-                              compatibleWith(shortage.materialName, shortage.unit, shortage.supplierName)
+                              compatibleWith(shortage.materialName, shortage.supplierName)
                       )
                       .map((shortage: any) => ({
                           shortage,
                           nameSim: similarity(line.materialName, shortage.materialName),
+                          unitOk: sameUnit(line.unit, shortage.unit),
                       }))
                       .filter((candidate: any) => candidate.nameSim >= 0.62)
-                      .sort((a: any, b: any) => b.nameSim - a.nameSim)
+                      .sort(
+                          (a: any, b: any) =>
+                              b.nameSim + (b.unitOk ? 0.05 : 0) - (a.nameSim + (a.unitOk ? 0.05 : 0))
+                      )
                 : [];
 
         for (const candidate of shortageCandidates) {
             if (remainingQty <= 0) break;
-            if (!lineConfident || candidate.nameSim < AUTO_NAME_SIMILARITY) break;
+            if (!lineConfident || !autoEligible(lineConfidence, candidate.nameSim, candidate.unitOk)) break;
             const key = String(candidate.shortage._id);
             const available = shortageRemaining.get(key) ?? 0;
             if (available <= 0) continue;
@@ -444,7 +499,7 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                 materialName: candidate.shortage.materialName,
                 unit: candidate.shortage.unit,
                 quantity,
-                confidence: Math.min(1, Number(((line.confidence ?? 0.65) * candidate.nameSim).toFixed(2))),
+                confidence: Math.min(1, Number((lineConfidence * candidate.nameSim).toFixed(2))),
                 reason: 'Đề xuất bù nợ hàng NCC',
             });
         }
@@ -453,12 +508,13 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
             // Không tự điền — kèm GỢI Ý tốt nhất (nếu có) để người dùng tick xác nhận
             const bestItem = candidates[0];
             const bestShortage = shortageCandidates[0];
-            const suggestion = bestItem
+            let suggestion: any = bestItem
                 ? {
                       type: 'po_item',
                       poItemIndex: bestItem.item.index,
                       materialName: bestItem.item.materialName,
                       unit: bestItem.item.unit,
+                      unitMismatch: !bestItem.unitOk ? line.unit || '' : undefined,
                       quantity: roundQty(Math.min(currentRemaining.get(bestItem.item.index) ?? 0, remainingQty)),
                       nameSimilarity: Number(bestItem.nameSim.toFixed(2)),
                   }
@@ -469,12 +525,15 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                         originalPurchaseOrderCode: bestShortage.shortage.originalPurchaseOrderCode,
                         materialName: bestShortage.shortage.materialName,
                         unit: bestShortage.shortage.unit,
+                        unitMismatch: !bestShortage.unitOk ? line.unit || '' : undefined,
                         quantity: roundQty(
                             Math.min(shortageRemaining.get(String(bestShortage.shortage._id)) ?? 0, remainingQty)
                         ),
                         nameSimilarity: Number(bestShortage.nameSim.toFixed(2)),
                     }
                   : undefined;
+            if (suggestion && suggestion.quantity <= 0) suggestion = undefined;
+            const hadAuto = currentAllocations.some((a) => a.sourceLine === line);
             reviewLines.push({
                 sourceLine: line,
                 quantity: remainingQty,
@@ -482,13 +541,15 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                     line.verify === 'quantity_mismatch'
                         ? line.verifyNote
                         : !lineConfident
-                          ? `Ảnh đọc chưa chắc chắn (tin cậy ${Math.round((line.confidence ?? 0) * 100)}%)${line.verifyNote ? ` · ${line.verifyNote}` : ''}`
-                          : suggestion
-                            ? 'Tên gần giống nhưng chưa đủ chắc để tự điền — xác nhận trước khi nhận'
-                            : currentAllocations.some((a) => a.sourceLine === line)
-                              ? 'Số lượng giao dư chưa phân bổ hết'
-                              : 'Không khớp đơn hiện tại hoặc nợ cũ nào',
-                suggestion: suggestion && suggestion.quantity > 0 ? suggestion : undefined,
+                          ? `Ảnh đọc chưa chắc chắn (tin cậy ${Math.round(lineConfidence * 100)}%)${line.verifyNote ? ` · ${line.verifyNote}` : ''}`
+                          : suggestion?.unitMismatch
+                            ? `Lệch đơn vị tính: phiếu ghi "${line.unit || '?'}", hệ thống lưu "${suggestion.unit || '?'}" — xác nhận trước khi nhận`
+                            : suggestion
+                              ? 'Tên gần giống nhưng chưa đủ chắc để tự điền — xác nhận trước khi nhận'
+                              : hadAuto
+                                ? 'Số lượng giao dư so với phần còn chờ của đơn'
+                                : 'Không khớp đơn hiện tại hoặc nợ cũ nào',
+                suggestion,
             });
         }
     }
