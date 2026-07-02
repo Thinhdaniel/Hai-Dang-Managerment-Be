@@ -6,6 +6,7 @@ import {
 } from '@/middlewares/authenticationMiddleware';
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
+import { imageUpload } from '@/middlewares/multerMiddleware';
 import * as ctrl from '@/controllers/purchase-order.controller';
 import {
     createPurchaseOrderSchema,
@@ -24,7 +25,15 @@ router.get('/', ctrl.getAllPurchaseOrders);
 router.get('/shortages', ctrl.getOutstandingPurchaseShortages);
 router.post('/', validator(createPurchaseOrderSchema), ctrl.createPurchaseOrder);
 router.get('/:id/export-xlsx', validateObjectId, ctrl.exportPurchaseOrderXlsx);
+router.get('/:id/receipt-scans', validateObjectId, ctrl.getPurchaseReceiptScans);
 router.patch('/:id/confirm', requireProcurementDirector, validateObjectId, ctrl.confirmPurchaseOrder);
+router.post(
+    '/:id/receipt-scan/preview',
+    requireProcurementDirector,
+    validateObjectId,
+    imageUpload.array('images', 5),
+    ctrl.previewPurchaseReceiptScan
+);
 router.patch(
     '/:id/receive',
     requireProcurementDirector,

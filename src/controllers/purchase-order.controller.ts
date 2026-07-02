@@ -1,4 +1,8 @@
 import * as purchaseOrderService from '@/services/purchase-order.service';
+import {
+    getPurchaseReceiptScans as getPurchaseReceiptScansService,
+    previewPurchaseReceiptScan as previewPurchaseReceiptScanService,
+} from '@/services/purchase-receipt-scan.service';
 import asyncHandler from '@/utils/asyncHandler';
 import { NextFunction, Request, Response } from 'express';
 
@@ -22,6 +26,12 @@ export const confirmPurchaseOrder = asyncHandler(async (req: Request, res: Respo
 });
 export const receivePurchaseOrder = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.receivePurchaseOrder(req, res, next);
+});
+export const previewPurchaseReceiptScan = asyncHandler(async (req: Request, res: Response) => {
+    return await previewPurchaseReceiptScanService(req, res);
+});
+export const getPurchaseReceiptScans = asyncHandler(async (req: Request, res: Response) => {
+    return await getPurchaseReceiptScansService(req, res);
 });
 export const linkPurchaseOrderItemMaterial = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.linkPurchaseOrderItemMaterial(req, res, next);

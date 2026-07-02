@@ -1,9 +1,28 @@
 import mongoose from 'mongoose';
 
+const POSourceLineSchema = new mongoose.Schema(
+    {
+        purchaseRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseRequest' },
+        purchaseRequestCode: { type: String, trim: true },
+        requestItemIndex: { type: Number, min: 0 },
+        materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+        materialName: { type: String, trim: true },
+        unit: { type: String, trim: true },
+        plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant' },
+        plantName: { type: String, trim: true },
+        proposedBy: { type: String, trim: true },
+        purpose: { type: String, trim: true },
+        quantityRequested: { type: Number, min: 0, default: 0 },
+        quantityOrdered: { type: Number, min: 0, default: 0 },
+    },
+    { _id: false }
+);
+
 const POItemSchema = new mongoose.Schema(
     {
         purchaseRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseRequest' },
         purchaseRequestCode: { type: String, trim: true },
+        sourceLines: { type: [POSourceLineSchema], default: [] },
         materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
         materialName: { type: String, trim: true },
         unit: { type: String, trim: true },

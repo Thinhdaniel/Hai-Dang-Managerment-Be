@@ -186,6 +186,22 @@ const serializePurchaseOrderItem = (input: any) => {
     return {
         purchaseRequestId: toId(item?.purchaseRequestId),
         purchaseRequestCode: item?.purchaseRequestCode,
+        sourceLines: Array.isArray(item?.sourceLines)
+            ? item.sourceLines.map((source: any) => ({
+                  purchaseRequestId: toId(source?.purchaseRequestId),
+                  purchaseRequestCode: source?.purchaseRequestCode,
+                  requestItemIndex: source?.requestItemIndex,
+                  materialId: toId(source?.materialId),
+                  materialName: source?.materialName,
+                  unit: source?.unit,
+                  plantId: toId(source?.plantId),
+                  plantName: source?.plantName,
+                  proposedBy: source?.proposedBy,
+                  purpose: source?.purpose,
+                  quantityRequested: source?.quantityRequested ?? 0,
+                  quantityOrdered: source?.quantityOrdered ?? 0,
+              }))
+            : [],
         materialId: toId(item?.materialId),
         materialName: item?.materialName,
         unit: item?.unit,

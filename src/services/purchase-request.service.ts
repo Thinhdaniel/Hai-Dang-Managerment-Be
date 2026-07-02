@@ -549,11 +549,18 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
 
             const aggregatedItemsMap = new Map<
                 string,
-                { materialId: string; unit?: string; quantity: number; unitPrice?: number; note?: string }
+                {
+                    materialId: string;
+                    unit?: string;
+                    quantity: number;
+                    unitPrice?: number;
+                    note?: string;
+                    sourceLines?: any[];
+                }
             >();
 
             requests.forEach((request) => {
-                (request.items ?? []).forEach((item: any) => {
+                (request.items ?? []).forEach((item: any, itemIndex: number) => {
                     const itemSupplierId = toId(item.supplierId);
                     if (resolvedSupplierId && itemSupplierId && itemSupplierId !== resolvedSupplierId) {
                         throw new BadRequestError('Danh sach phieu de xuat chua vat tu cua nha cung cap khac');
@@ -565,9 +572,23 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
                     }
                     const currentEntry = aggregatedItemsMap.get(materialId);
                     const quantity = Number(item.quantityApproved ?? item.quantityRequested ?? 0);
+                    const sourceLine = {
+                        purchaseRequestId: (request as any)._id,
+                        purchaseRequestCode: (request as any).requestCode,
+                        requestItemIndex: itemIndex,
+                        materialId: item.materialId,
+                        materialName: item.materialName,
+                        unit: item.unit,
+                        plantId: item.plantId || (request as any).plantId,
+                        proposedBy: item.proposedBy,
+                        purpose: item.purpose,
+                        quantityRequested: Number(item.quantityRequested ?? 0),
+                        quantityOrdered: quantity,
+                    };
 
                     if (currentEntry) {
                         currentEntry.quantity += quantity;
+                        currentEntry.sourceLines = [...(currentEntry.sourceLines ?? []), sourceLine];
                         if (item.estimatedPrice != null) {
                             currentEntry.unitPrice = Number(item.estimatedPrice);
                         }
@@ -578,6 +599,7 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
                             quantity,
                             unitPrice: item.estimatedPrice != null ? Number(item.estimatedPrice) : undefined,
                             note: undefined,
+                            sourceLines: [sourceLine],
                         });
                     }
                 });

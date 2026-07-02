@@ -22,6 +22,7 @@ export const updatePurchaseOrderSchema = z.object({
 });
 
 export const receivePurchaseOrderSchema = z.object({
+    receiptScanId: zObjectId('Lan quet phieu nhan hang').optional(),
     items: z
         .array(
             z.object({

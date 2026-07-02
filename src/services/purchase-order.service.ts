@@ -2,6 +2,7 @@ import { BadRequestError, NotFoundError } from '@/errors/customError';
 import InventoryStock from '@/models/InventoryStock';
 import Material from '@/models/Material';
 import PurchaseOrder from '@/models/PurchaseOrder';
+import PurchaseReceiptScan from '@/models/PurchaseReceiptScan';
 import PurchaseRequest from '@/models/PurchaseRequest';
 import PurchaseShortage from '@/models/PurchaseShortage';
 import StockTransaction from '@/models/StockTransaction';
@@ -468,18 +469,36 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     for (const req_ of requests as any[]) {
         const prPlantId = String(req_.plantId?._id ?? req_.plantId ?? '');
         const prPlantName = plantNameMap.get(prPlantId) || '';
-        for (const item of req_.items ?? []) {
+        for (const [itemIndex, item] of (req_.items ?? []).entries()) {
             const itemPlantId = isValidId(item.plantId) ? String(item.plantId) : '';
             const itemPlantName = itemPlantId ? plantNameMap.get(itemPlantId) || prPlantName : prPlantName;
+            const quantityRequested = item.quantityRequested ?? 0;
+            const quantityOrdered = item.quantityOrdered ?? item.quantityRequested ?? 0;
             items.push(
                 calcItem({
                     purchaseRequestId: req_._id,
                     purchaseRequestCode: req_.requestCode,
+                    sourceLines: [
+                        {
+                            purchaseRequestId: req_._id,
+                            purchaseRequestCode: req_.requestCode,
+                            requestItemIndex: itemIndex,
+                            materialId: item.materialId || undefined,
+                            materialName: item.materialName || '',
+                            unit: item.unit || '',
+                            plantId: itemPlantId || prPlantId || undefined,
+                            plantName: itemPlantName,
+                            proposedBy: item.proposedBy || '',
+                            purpose: item.purpose || '',
+                            quantityRequested,
+                            quantityOrdered,
+                        },
+                    ],
                     materialId: item.materialId || undefined,
                     materialName: item.materialName || '',
                     unit: item.unit || '',
-                    quantityRequested: item.quantityRequested ?? 0,
-                    quantityOrdered: item.quantityOrdered ?? item.quantityRequested ?? 0,
+                    quantityRequested,
+                    quantityOrdered,
                     quantityReceived: item.quantityReceived ?? 0,
                     unitPrice: item.unitPrice ?? 0,
                     vatRate: item.vatRate != null ? (item.vatRate > 1 ? item.vatRate : item.vatRate * 100) : 0,
@@ -663,6 +682,7 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
     const receivingPlantId = getOrderPlantId(order);
     const receiptItems = Array.isArray(req.body.items) ? req.body.items : [];
     const shortageAllocations = Array.isArray(req.body.shortageAllocations) ? req.body.shortageAllocations : [];
+    const receiptScanId = req.body.receiptScanId;
 
     if (!receiptItems.length && !shortageAllocations.length) {
         throw new BadRequestError('Phai nhap it nhat mot dong nhan hang hoac hang bu');
@@ -785,6 +805,33 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
             },
             { session }
         );
+
+        if (receiptScanId) {
+            const scanUpdate = await PurchaseReceiptScan.updateOne(
+                {
+                    _id: receiptScanId,
+                    purchaseOrderId: (order as any)._id,
+                    status: { $in: ['preview', 'applied'] },
+                },
+                {
+                    $set: {
+                        status: 'applied',
+                        appliedBy: req.userId,
+                        appliedAt: req.body.receivedAt ? new Date(req.body.receivedAt) : new Date(),
+                        appliedPayload: {
+                            items: receiptItems,
+                            shortageAllocations,
+                            receivedAt: req.body.receivedAt,
+                            note: req.body.note,
+                        },
+                    },
+                },
+                { session }
+            );
+            if (!scanUpdate.matchedCount) {
+                throw new BadRequestError('Lan quet phieu nhan hang khong hop le');
+            }
+        }
 
         if (nextStatus === 'received') {
             await PurchaseRequest.updateMany(

@@ -125,6 +125,7 @@ export const buildPurchaseOrderItems = ({ items, materialsMap }: { items: any[];
             vatRate: 0,
             vatAmount: 0,
             totalWithVat: computeLineTotal(quantity, unitPrice),
+            sourceLines: Array.isArray(item.sourceLines) ? item.sourceLines : [],
             catalogStatus: 'matched',
             quantityInventoried: 0,
             inventoryStatus: 'pending',
