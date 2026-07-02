@@ -20,6 +20,7 @@ export const AI_FEATURES = {
     OCR_INVOICE: 'ocr-invoice', // OCR ảnh hóa đơn mua vật tư -> trích dòng (vision, JSON)
     OCR_SUPPLY_REQUEST: 'ocr-supply-request', // OCR ảnh phiếu đề xuất cấp vật tư -> trích dòng (vision, JSON)
     OCR_PURCHASE_RECEIPT: 'ocr-purchase-receipt', // OCR ảnh phiếu giao hàng/nhận hàng NCC -> đối soát đơn đặt (vision, JSON)
+    OCR_PURCHASE_RECEIPT_VERIFY: 'ocr-purchase-receipt-verify', // Lần đọc 2 độc lập (model khác dòng) để đối chiếu chéo
     APPROVAL_REVIEW: 'approval-review', // Rà soát phiếu mua trước khi duyệt (tóm tắt cảnh báo)
     ANALYTICS: 'analytics', // NL -> chart-spec cho AI Analytics Studio (JSON, cần ổn định)
     HELP: 'help', // Trợ lý hướng dẫn sử dụng
@@ -68,6 +69,8 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     'ocr-invoice': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
     'ocr-supply-request': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
     'ocr-purchase-receipt': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
+    // Lần đọc 2 dùng model KHÁC DÒNG với lần 1 để lỗi không tương quan (bake-off đã xác nhận bb/gpt-5.5 đọc ảnh tốt)
+    'ocr-purchase-receipt-verify': ['bb/gpt-5.5', 'gc/gemini-2.5-pro'],
     'approval-review': ['bb/gpt-5.4', 'kr/claude-haiku-4.5'],
     analytics: ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // chart-spec JSON từ danh mục cho sẵn
     help: ['bb/gpt-5.4', 'kr/claude-sonnet-4.5'],

@@ -92,6 +92,31 @@ const sameUnit = (a?: string, b?: string) => {
     return normalizeText(a) === normalizeText(b) || similarity(a, b) >= 0.78;
 };
 
+/**
+ * Token chứa chữ số (kích cỡ/mã: "11/75", "8/60", "30x60x1.4"…) phải khớp tuyệt đối.
+ * "Kim DBx1# 11/75" và "Kim DBx1# 8/60" giống nhau về chữ nhưng là 2 loại kim khác hẳn —
+ * nếu tập token-số của 2 bên xung đột thì CẤM khớp, kể cả tên tương đồng cao.
+ */
+const numericTokens = (value: unknown) =>
+    normalizeText(value)
+        .split(/\s+/)
+        .filter((token) => /\d/.test(token));
+
+const numbersConflict = (a: unknown, b: unknown) => {
+    const ta = numericTokens(a);
+    const tb = numericTokens(b);
+    if (!ta.length || !tb.length) return false;
+    const setA = new Set(ta);
+    const setB = new Set(tb);
+    const aInB = ta.every((token) => setB.has(token));
+    const bInA = tb.every((token) => setA.has(token));
+    return !(aInB || bInA);
+};
+
+/** Ngưỡng tự điền: dưới ngưỡng này AI chỉ được GỢI Ý, người dùng phải tự xác nhận. */
+const AUTO_LINE_CONFIDENCE = 0.75;
+const AUTO_NAME_SIMILARITY = 0.9;
+
 const roundQty = (value: number) => Number(value.toFixed(2));
 
 const ensureOrderScope = (req: Request, order: any) => {
@@ -107,14 +132,18 @@ const buildReceiptOcrPrompt = () =>
     [
         'Ban la tro ly OCR phieu giao hang/hoa don nhan hang vat tu cua cong ty may.',
         'Doc 1 hoac nhieu anh. Anh co the la phieu NCC in san, anh chup Excel, anh chup bang ke, hoac co chu viet tay.',
-        'Chi tra ve JSON hop le, khong markdown, khong giai thich ngoai JSON. Khong bia du lieu; truong khong doc duoc thi de null.',
+        'Chi tra ve JSON hop le, khong markdown, khong giai thich ngoai JSON.',
+        'QUY TAC SO 1 - TUYET DOI KHONG DOAN: ky tu/chu so nao mo, nhoe, bi che, khong doc chac chan thi KHONG duoc tu suy ra.',
+        '- So luong khong doc ro -> quantity: null (KHONG doan mot con so gan giong).',
+        '- Ten hang doc duoc mot phan -> ghi phan doc duoc, confidence thap.',
+        '- MOI dong deu phai co rawText: chep NGUYEN VAN ca dong nhin thay tren anh (ke ca ky tu la), de nguoi kiem tra lai.',
+        'confidence tu 0 den 1 cho tung dong, cham diem TRUNG THUC: in ro net moi cho >= 0.9; chu viet tay/mo/nghieng/thieu net -> 0.5-0.7; rat mo/doan mot phan -> < 0.5.',
         'Muc tieu la lay SO LUONG GIAO THUC TE/so luong nhan, khong lay so luong can neu co ca hai cot.',
         'Uu tien cac cot: Ten hang/Ten vat tu/Hang hoa, DVT/Don vi, SL giao/So luong/SL nhan, Don gia, VAT, Ghi chu.',
         'Neu co nhieu anh la nhieu trang cua cung mot phieu, gop cac dong theo thu tu anh va pageIndex bat dau tu 0.',
         'Bo qua dong tong cong, chiet khau, thanh toan, chu ky, tieu de bang.',
         'So luong va tien tra ve so thuan, khong dau phan cach nghin. Vi du "1.200" -> 1200, "12,5" -> 12.5.',
         'Ngay tra ISO YYYY-MM-DD neu doc duoc.',
-        'confidence tu 0 den 1 cho tung dong; chu viet tay/mo/khong chac thi confidence thap.',
         'Output schema:',
         '{"header":{"supplierName":null,"invoiceNo":null,"deliveryCode":null,"invoiceDate":null,"receivedDate":null},"lines":[{"pageIndex":0,"lineNo":1,"materialName":"","unit":null,"quantity":null,"unitPrice":null,"vatRate":null,"supplierName":null,"note":null,"rawText":null,"confidence":0.8}]}',
     ].join('\n');
@@ -134,7 +163,65 @@ const normalizeOcrLines = (raw: ReceiptOcrResult): ReceiptOcrLine[] =>
             rawText: cleanText(line.rawText),
             confidence: Math.min(1, Math.max(0, cleanNumber(line.confidence) ?? 0.65)),
         }))
-        .filter((line) => line.materialName && Number(line.quantity ?? 0) > 0);
+        // KHÔNG vứt dòng thiếu SL/tên — dòng đọc dở dang phải hiện cho người kiểm tra (unreadableLines)
+        .filter((line) => line.materialName || line.rawText);
+
+type VerifyStatus = 'agreed' | 'quantity_mismatch' | 'only_first' | 'only_second';
+type VerifiedLine = ReceiptOcrLine & { verify?: VerifyStatus; verifyNote?: string };
+
+/**
+ * Đối chiếu 2 lần đọc ĐỘC LẬP (2 model khác dòng). Cùng dòng + cùng SL/ĐVT -> nâng tin cậy;
+ * lệch số -> hạ tin cậy + ghi rõ 2 giá trị; dòng chỉ 1 bên thấy -> hạ tin cậy, bắt người rà.
+ */
+const reconcileScans = (first: ReceiptOcrLine[], second: ReceiptOcrLine[]): VerifiedLine[] => {
+    const used = new Set<number>();
+    const out: VerifiedLine[] = [];
+    for (const line of first) {
+        let bestIdx = -1;
+        let bestSim = 0;
+        second.forEach((cand, idx) => {
+            if (used.has(idx)) return;
+            if (numbersConflict(line.materialName, cand.materialName)) return;
+            const sim = similarity(line.materialName, cand.materialName);
+            if (sim > bestSim) {
+                bestSim = sim;
+                bestIdx = idx;
+            }
+        });
+        if (bestIdx >= 0 && bestSim >= 0.72) {
+            used.add(bestIdx);
+            const cand = second[bestIdx];
+            const sameQty = Number(cand.quantity ?? -1) === Number(line.quantity ?? -2);
+            if (sameQty && sameUnit(line.unit, cand.unit)) {
+                out.push({ ...line, confidence: Math.max(line.confidence ?? 0.65, 0.92), verify: 'agreed' });
+            } else {
+                out.push({
+                    ...line,
+                    confidence: Math.min(line.confidence ?? 0.65, 0.5),
+                    verify: 'quantity_mismatch',
+                    verifyNote: `2 lần đọc lệch nhau: lần 1 ${line.quantity ?? '?'} ${line.unit || ''} · lần 2 ${cand.quantity ?? '?'} ${cand.unit || ''}`,
+                });
+            }
+        } else {
+            out.push({
+                ...line,
+                confidence: Math.min(line.confidence ?? 0.65, 0.6),
+                verify: 'only_first',
+                verifyNote: 'Lần đọc 2 không thấy dòng này — cần đối chiếu ảnh gốc',
+            });
+        }
+    }
+    second.forEach((cand, idx) => {
+        if (used.has(idx)) return;
+        out.push({
+            ...cand,
+            confidence: Math.min(cand.confidence ?? 0.65, 0.6),
+            verify: 'only_second',
+            verifyNote: 'Chỉ lần đọc 2 thấy dòng này — cần đối chiếu ảnh gốc',
+        });
+    });
+    return out;
+};
 
 const getUploadedImages = (req: Request) => {
     const files = Array.isArray(req.files)
@@ -147,7 +234,7 @@ const getUploadedImages = (req: Request) => {
     return files as Express.Multer.File[];
 };
 
-const scanReceiptImages = async (files: Express.Multer.File[]) => {
+const runOcrPass = async (files: Express.Multer.File[], feature: string) => {
     const content = [
         { type: 'text' as const, text: buildReceiptOcrPrompt() },
         ...files.map((file) => ({
@@ -156,8 +243,8 @@ const scanReceiptImages = async (files: Express.Multer.File[]) => {
         })),
     ];
 
-    const aiResult = await aiProviderService.generateJson<ReceiptOcrResult>({
-        feature: AI_FEATURES.OCR_PURCHASE_RECEIPT,
+    return aiProviderService.generateJson<ReceiptOcrResult>({
+        feature,
         temperature: 0.05,
         reasoningEffort: 'low',
         maxTokens: 16000,
@@ -166,16 +253,42 @@ const scanReceiptImages = async (files: Express.Multer.File[]) => {
             {
                 role: 'system',
                 content:
-                    'Ban trich xuat du lieu co cau truc tu anh phieu giao hang/hoa don nhan hang. Chi tra JSON hop le.',
+                    'Ban trich xuat du lieu co cau truc tu anh phieu giao hang/hoa don nhan hang. Chi tra JSON hop le. Khong duoc doan ky tu khong doc ro.',
             },
             { role: 'user', content },
         ],
     });
+};
+
+/**
+ * Đọc 2 LẦN ĐỘC LẬP bằng 2 model khác dòng (gemini + gpt) chạy song song rồi đối chiếu.
+ * Ưu tiên độ chính xác hơn tốc độ: dòng nào 2 lần đọc không thống nhất sẽ KHÔNG được tự điền.
+ * Lần 2 lỗi (model bận/hết quota) thì vẫn chạy tiếp 1 lần đọc, nhưng đánh dấu chưa đối chiếu.
+ */
+const scanReceiptImages = async (files: Express.Multer.File[]) => {
+    const [primary, verifyResult] = await Promise.allSettled([
+        runOcrPass(files, AI_FEATURES.OCR_PURCHASE_RECEIPT),
+        runOcrPass(files, AI_FEATURES.OCR_PURCHASE_RECEIPT_VERIFY),
+    ]);
+    if (primary.status === 'rejected') throw primary.reason;
+    const aiResult = primary.value;
+    const firstLines = normalizeOcrLines(aiResult.data);
+
+    let lines: VerifiedLine[] = firstLines;
+    let verification: { status: 'verified' | 'skipped'; model?: string; note?: string } = {
+        status: 'skipped',
+        note: 'Không chạy được lần đọc 2 — kết quả CHƯA được đối chiếu chéo, hãy rà kỹ hơn',
+    };
+    if (verifyResult.status === 'fulfilled') {
+        lines = reconcileScans(firstLines, normalizeOcrLines(verifyResult.value.data));
+        verification = { status: 'verified', model: verifyResult.value.model };
+    }
 
     return {
         provider: aiResult.provider,
         model: aiResult.model,
         latencyMs: aiResult.latencyMs,
+        verification,
         header: {
             supplierName: cleanText(aiResult.data?.header?.supplierName),
             invoiceNo: cleanText(aiResult.data?.header?.invoiceNo),
@@ -183,7 +296,7 @@ const scanReceiptImages = async (files: Express.Multer.File[]) => {
             invoiceDate: cleanText(aiResult.data?.header?.invoiceDate),
             receivedDate: cleanText(aiResult.data?.header?.receivedDate),
         },
-        lines: normalizeOcrLines(aiResult.data),
+        lines,
     };
 };
 
@@ -238,27 +351,49 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
     const currentAllocations: Array<any> = [];
     const shortageAllocations: Array<any> = [];
     const reviewLines: Array<any> = [];
+    const unreadableLines: Array<any> = [];
 
-    for (const line of scan.lines) {
+    // Dòng đọc dở dang (thiếu tên/SL) KHÔNG âm thầm bỏ — trả riêng để người dùng đối chiếu ảnh gốc
+    const readableLines = (scan.lines as VerifiedLine[]).filter((line) => {
+        const ok = line.materialName && Number(line.quantity ?? 0) > 0;
+        if (!ok) {
+            unreadableLines.push({
+                sourceLine: line,
+                reason: !line.materialName
+                    ? 'AI không đọc được tên vật tư dòng này'
+                    : 'AI không đọc chắc chắn được số lượng',
+                note: line.verifyNote,
+            });
+        }
+        return ok;
+    });
+
+    for (const line of readableLines) {
         let remainingQty = Number(line.quantity ?? 0);
         const lineSupplier = line.supplierName || scan.header.supplierName;
+        // Dòng đủ tin cậy mới được TỰ ĐIỀN: ảnh rõ + (nếu có đối chiếu) 2 lần đọc thống nhất
+        const lineConfident =
+            (line.confidence ?? 0) >= AUTO_LINE_CONFIDENCE && line.verify !== 'quantity_mismatch';
+
+        // Guard cứng: token-số phải khớp (11/75 ≠ 8/60), có ĐVT 2 bên thì phải cùng ĐVT
+        const compatibleWith = (name?: string, unit?: string, supplierName?: string) =>
+            !numbersConflict(line.materialName, name) &&
+            (!line.unit || !unit || sameUnit(line.unit, unit)) &&
+            sameSupplier(lineSupplier, supplierName);
+
         const candidates = orderItems
-            .filter((item: any) => (currentRemaining.get(item.index) ?? 0) > 0)
-            .map((item: any) => ({
-                item,
-                score:
-                    (item.materialId && line.materialName && similarity(line.materialName, item.materialName) >= 0.55
-                        ? 0.1
-                        : 0) +
-                    similarity(line.materialName, item.materialName) +
-                    (sameUnit(line.unit, item.unit) ? 0.12 : -0.15) +
-                    (sameSupplier(lineSupplier, item.supplierName) ? 0.08 : -0.12),
-            }))
-            .filter((candidate: any) => candidate.score >= 0.68)
-            .sort((a: any, b: any) => b.score - a.score);
+            .filter(
+                (item: any) =>
+                    (currentRemaining.get(item.index) ?? 0) > 0 &&
+                    compatibleWith(item.materialName, item.unit, item.supplierName)
+            )
+            .map((item: any) => ({ item, nameSim: similarity(line.materialName, item.materialName) }))
+            .filter((candidate: any) => candidate.nameSim >= 0.62)
+            .sort((a: any, b: any) => b.nameSim - a.nameSim);
 
         for (const candidate of candidates) {
             if (remainingQty <= 0) break;
+            if (!lineConfident || candidate.nameSim < AUTO_NAME_SIMILARITY) break; // dưới ngưỡng -> chỉ gợi ý
             const available = currentRemaining.get(candidate.item.index) ?? 0;
             if (available <= 0) continue;
             const quantity = roundQty(Math.min(available, remainingQty));
@@ -271,51 +406,89 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                 materialName: candidate.item.materialName,
                 unit: candidate.item.unit,
                 quantity,
-                confidence: Math.min(1, Number(((line.confidence ?? 0.65) * Math.min(1, candidate.score)).toFixed(2))),
+                confidence: Math.min(1, Number(((line.confidence ?? 0.65) * candidate.nameSim).toFixed(2))),
                 reason: 'Khớp dòng trong đơn hiện tại',
             });
         }
 
-        if (remainingQty > 0) {
-            const shortageCandidates = shortageState
-                .filter((shortage: any) => (shortageRemaining.get(String(shortage._id)) ?? 0) > 0)
-                .map((shortage: any) => ({
-                    shortage,
-                    score:
-                        similarity(line.materialName, shortage.materialName) +
-                        (sameUnit(line.unit, shortage.unit) ? 0.12 : -0.15) +
-                        (sameSupplier(lineSupplier, shortage.supplierName) ? 0.1 : -0.12),
-                }))
-                .filter((candidate: any) => candidate.score >= 0.7)
-                .sort((a: any, b: any) => b.score - a.score);
+        const shortageCandidates =
+            remainingQty > 0
+                ? shortageState
+                      .filter(
+                          (shortage: any) =>
+                              (shortageRemaining.get(String(shortage._id)) ?? 0) > 0 &&
+                              compatibleWith(shortage.materialName, shortage.unit, shortage.supplierName)
+                      )
+                      .map((shortage: any) => ({
+                          shortage,
+                          nameSim: similarity(line.materialName, shortage.materialName),
+                      }))
+                      .filter((candidate: any) => candidate.nameSim >= 0.62)
+                      .sort((a: any, b: any) => b.nameSim - a.nameSim)
+                : [];
 
-            for (const candidate of shortageCandidates) {
-                if (remainingQty <= 0) break;
-                const key = String(candidate.shortage._id);
-                const available = shortageRemaining.get(key) ?? 0;
-                if (available <= 0) continue;
-                const quantity = roundQty(Math.min(available, remainingQty));
-                if (quantity <= 0) continue;
-                shortageRemaining.set(key, roundQty(available - quantity));
-                remainingQty = roundQty(remainingQty - quantity);
-                shortageAllocations.push({
-                    sourceLine: line,
-                    shortageId: key,
-                    originalPurchaseOrderCode: candidate.shortage.originalPurchaseOrderCode,
-                    materialName: candidate.shortage.materialName,
-                    unit: candidate.shortage.unit,
-                    quantity,
-                    confidence: Math.min(1, Number(((line.confidence ?? 0.65) * Math.min(1, candidate.score)).toFixed(2))),
-                    reason: 'Đề xuất bù nợ hàng NCC',
-                });
-            }
+        for (const candidate of shortageCandidates) {
+            if (remainingQty <= 0) break;
+            if (!lineConfident || candidate.nameSim < AUTO_NAME_SIMILARITY) break;
+            const key = String(candidate.shortage._id);
+            const available = shortageRemaining.get(key) ?? 0;
+            if (available <= 0) continue;
+            const quantity = roundQty(Math.min(available, remainingQty));
+            if (quantity <= 0) continue;
+            shortageRemaining.set(key, roundQty(available - quantity));
+            remainingQty = roundQty(remainingQty - quantity);
+            shortageAllocations.push({
+                sourceLine: line,
+                shortageId: key,
+                originalPurchaseOrderCode: candidate.shortage.originalPurchaseOrderCode,
+                materialName: candidate.shortage.materialName,
+                unit: candidate.shortage.unit,
+                quantity,
+                confidence: Math.min(1, Number(((line.confidence ?? 0.65) * candidate.nameSim).toFixed(2))),
+                reason: 'Đề xuất bù nợ hàng NCC',
+            });
         }
 
         if (remainingQty > 0) {
+            // Không tự điền — kèm GỢI Ý tốt nhất (nếu có) để người dùng tick xác nhận
+            const bestItem = candidates[0];
+            const bestShortage = shortageCandidates[0];
+            const suggestion = bestItem
+                ? {
+                      type: 'po_item',
+                      poItemIndex: bestItem.item.index,
+                      materialName: bestItem.item.materialName,
+                      unit: bestItem.item.unit,
+                      quantity: roundQty(Math.min(currentRemaining.get(bestItem.item.index) ?? 0, remainingQty)),
+                      nameSimilarity: Number(bestItem.nameSim.toFixed(2)),
+                  }
+                : bestShortage
+                  ? {
+                        type: 'shortage',
+                        shortageId: String(bestShortage.shortage._id),
+                        originalPurchaseOrderCode: bestShortage.shortage.originalPurchaseOrderCode,
+                        materialName: bestShortage.shortage.materialName,
+                        unit: bestShortage.shortage.unit,
+                        quantity: roundQty(
+                            Math.min(shortageRemaining.get(String(bestShortage.shortage._id)) ?? 0, remainingQty)
+                        ),
+                        nameSimilarity: Number(bestShortage.nameSim.toFixed(2)),
+                    }
+                  : undefined;
             reviewLines.push({
                 sourceLine: line,
                 quantity: remainingQty,
-                reason: candidates.length ? 'Số lượng giao dư chưa phân bổ hết' : 'Không khớp đơn hiện tại hoặc nợ cũ',
+                reason:
+                    line.verify === 'quantity_mismatch'
+                        ? line.verifyNote
+                        : !lineConfident
+                          ? `Ảnh đọc chưa chắc chắn (tin cậy ${Math.round((line.confidence ?? 0) * 100)}%)${line.verifyNote ? ` · ${line.verifyNote}` : ''}`
+                          : suggestion
+                            ? 'Tên gần giống nhưng chưa đủ chắc để tự điền — xác nhận trước khi nhận'
+                            : currentAllocations.some((a) => a.sourceLine === line)
+                              ? 'Số lượng giao dư chưa phân bổ hết'
+                              : 'Không khớp đơn hiện tại hoặc nợ cũ nào',
+                suggestion: suggestion && suggestion.quantity > 0 ? suggestion : undefined,
             });
         }
     }
@@ -363,7 +536,10 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
         shortageResolvedQuantity: roundQty(shortageAllocations.reduce((sum, row) => sum + row.quantity, 0)),
         reviewQuantity: roundQty(reviewLines.reduce((sum, row) => sum + row.quantity, 0)),
         reviewLineCount: reviewLines.length,
+        unreadableLineCount: unreadableLines.length,
         shortageMarkCount: shortageMarks.length,
+        verifiedLineCount: (scan.lines as VerifiedLine[]).filter((line) => line.verify === 'agreed').length,
+        verification: scan.verification,
     };
 
     const scanRecord = await PurchaseReceiptScan.create({
@@ -393,11 +569,13 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                 provider: scan.provider,
                 model: scan.model,
                 latencyMs: scan.latencyMs,
+                verification: scan.verification,
                 header: scan.header,
                 extractedLines: scan.lines,
                 currentAllocations,
                 shortageAllocations,
                 reviewLines,
+                unreadableLines,
                 shortageMarks,
                 openShortages: shortageState.map(serializePurchaseShortage),
                 proposedPayload,
