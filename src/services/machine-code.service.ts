@@ -3,7 +3,10 @@ import Brand from '@/models/Brand';
 import Counter from '@/models/Counter';
 import MachineTypeCode from '@/models/MachineTypeCode';
 import { BadRequestError } from '@/errors/customError';
+import { AI_FEATURES } from '@/constant/aiModels';
+import { aiProviderService } from '@/services/ai/ai-provider.service';
 import customResponse from '@/utils/response';
+import { z } from 'zod';
 import {
     ASSET_ORIGIN_CODE,
     DEFAULT_ORIGIN_CODE,
@@ -115,6 +118,148 @@ export const suggestAssetCode = async (req: Request, res: Response, next: NextFu
         customResponse({
             data: { code, typeCode, brandCode, originCode, seq, prefix, typeCodeIsNew: isNew },
             message: 'Goi y ma may thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+// ===== Bảng mã loại máy: xem / sửa tay / AI gợi ý =====
+
+type TypeCodeRow = {
+    typeKey: string;
+    label: string;
+    assetCount: number;
+    currentCode: string | null;
+    suggestedCode: string;
+};
+
+/** Gom loại máy đang dùng (theo typeKey) + mã đã lưu + gợi ý thuật toán. */
+const collectTypeCodeRows = async (): Promise<TypeCodeRow[]> => {
+    const grouped = await Asset.aggregate([
+        { $match: { isDeleted: { $ne: true } } },
+        { $group: { _id: '$type', count: { $sum: 1 } } },
+    ]);
+
+    // Nhiều biến thể gõ ("1k", "1K ") cùng typeKey -> gộp, giữ label xuất hiện nhiều nhất.
+    const byKey = new Map<string, { label: string; labelCount: number; count: number }>();
+    for (const row of grouped as { _id?: string; count: number }[]) {
+        const label = String(row._id ?? '').trim();
+        const typeKey = normalizeTypeKey(label);
+        if (!typeKey) continue;
+        const cur = byKey.get(typeKey);
+        if (!cur) {
+            byKey.set(typeKey, { label, labelCount: row.count, count: row.count });
+        } else {
+            cur.count += row.count;
+            if (row.count > cur.labelCount) {
+                cur.label = label;
+                cur.labelCount = row.count;
+            }
+        }
+    }
+
+    const saved = await MachineTypeCode.find({ typeKey: { $in: [...byKey.keys()] } }).lean();
+    const savedMap = new Map(saved.map((doc: any) => [doc.typeKey, doc.code as string]));
+
+    return [...byKey.entries()]
+        .map(([typeKey, info]) => ({
+            typeKey,
+            label: info.label,
+            assetCount: info.count,
+            currentCode: savedMap.get(typeKey) ?? null,
+            suggestedCode: suggestTypeCode(info.label),
+        }))
+        .sort((a, b) => b.assetCount - a.assetCount);
+};
+
+export const listMachineTypeCodes = async (req: Request, res: Response) => {
+    const rows = await collectTypeCodeRows();
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: { total: rows.length, rows },
+            message: 'Lay bang ma loai may thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+const saveTypeCodesSchema = z.object({
+    items: z.array(z.object({ label: z.string().min(1), code: z.string().min(1).max(12) })).min(1),
+});
+
+/** Lưu mã loại hàng loạt (ghi đè mã đã lưu — dùng sau khi người dùng rà/sửa). */
+export const saveMachineTypeCodes = async (req: Request, res: Response) => {
+    const body = saveTypeCodesSchema.parse(req.body);
+    for (const item of body.items) {
+        await ensureTypeCode(item.label, item.code, true);
+    }
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: { updated: body.items.length },
+            message: 'Da luu ma loai may',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+const aiTypeCodeRespSchema = z
+    .object({ items: z.array(z.object({ i: z.number(), code: z.string() })).default([]) })
+    .passthrough();
+
+/**
+ * AI gợi ý mã viết tắt cho toàn bộ loại máy (không lưu — chỉ đề xuất để người rà).
+ * Thuật toán per-word không phân biệt được "kansai" (tên riêng -> K) với "nhbl"
+ * (viết tắt phải giữ nguyên); AI hiểu ngữ nghĩa nên đặt mã chuẩn hơn và gom loại trùng nghĩa.
+ */
+export const aiSuggestMachineTypeCodes = async (req: Request, res: Response) => {
+    const rows = await collectTypeCodeRows();
+    if (!rows.length) {
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: { total: 0, rows: [] },
+                message: 'Khong co loai may nao',
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    }
+
+    const list = rows
+        .map((row, idx) => `${idx}. "${row.label}" (mã hiện tại: ${row.currentCode ?? 'chưa có'}, ${row.assetCount} máy)`)
+        .join('\n');
+    const system = [
+        'Bạn đặt MÃ VIẾT TẮT cho loại máy của công ty may. Quy tắc:',
+        '- Mã 1-6 ký tự, chỉ A-Z và 0-9, suy ra tự nhiên từ tên loại: "Máy 1 kim" -> 1K, "Máy vắt sổ 4 chỉ" -> VS4C, "Máy 2 kim cơ định" -> 2KCD, "Bàn ủi hơi công nghiệp" -> BUHCN, "Máy Kansai" -> K.',
+        '- Tên loại vốn đã là viết tắt (vs4c, nhbl, 1kxv, epn...) thì GIỮ NGUYÊN, chỉ viết hoa.',
+        '- Hai loại TRÙNG NGHĨA phải trả CÙNG một mã (vd "1k" và "Máy 1 kim" đều -> 1K; "vs4c" và "Máy vắt sổ 4 chỉ" đều -> VS4C).',
+        '- Mã hiện tại chỉ để tham khảo; nếu nó vô lý (mất chữ, cụt) hãy đề xuất mã đúng.',
+        'Trả về DUY NHẤT JSON: {"items":[{"i":number,"code":"MA"}]} đủ mọi dòng. Không giải thích, không markdown.',
+    ].join('\n');
+
+    const ai = await aiProviderService.generateJson<Record<string, unknown>>({
+        feature: AI_FEATURES.MACHINE_TYPE_CODE,
+        temperature: 0.1,
+        maxTokens: 1200,
+        messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: `Đặt mã cho ${rows.length} loại máy sau:\n${list}` },
+        ],
+    });
+    const parsed = aiTypeCodeRespSchema.parse(ai.data);
+    const byIndex = new Map<number, string>();
+    parsed.items.forEach((item) => {
+        const code = normalizeForCode(item.code).slice(0, 12);
+        if (code) byIndex.set(item.i, code);
+    });
+
+    const data = rows.map((row, idx) => ({ ...row, aiCode: byIndex.get(idx) ?? null }));
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: { total: data.length, rows: data, provider: ai.provider, model: ai.model },
+            message: 'AI da de xuat ma loai may',
             status: StatusCodes.OK,
             success: true,
         })

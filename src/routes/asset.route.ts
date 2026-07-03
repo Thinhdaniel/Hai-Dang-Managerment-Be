@@ -42,6 +42,14 @@ router.post(
     authorize(...ROLE_GROUPS.DIRECTOR_UP),
     assetController.confirmNormalizeAssetCodes
 );
+// Bảng mã loại máy: xem/sửa tay/AI gợi ý (đi cùng luồng chuẩn hoá nên cùng quyền Giám đốc trở lên).
+router.get('/code/type-codes', authorize(...ROLE_GROUPS.DIRECTOR_UP), assetController.listMachineTypeCodes);
+router.patch('/code/type-codes', authorize(...ROLE_GROUPS.DIRECTOR_UP), assetController.saveMachineTypeCodes);
+router.post(
+    '/code/type-codes/ai-suggest',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    assetController.aiSuggestMachineTypeCodes
+);
 
 router.get('/', assetController.getAllAssets);
 router.patch(

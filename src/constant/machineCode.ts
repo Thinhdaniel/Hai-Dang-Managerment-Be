@@ -52,9 +52,11 @@ export const suggestTypeCode = (type?: string) => {
 
     // Một token: nếu là dạng mã (có chữ số) hoặc viết tắt ngắn (<=3 ký tự) thì giữ nguyên cả token
     // (vd người dùng gõ thẳng "vs4c", "1k" -> VS4C, 1K); từ thường dài thì lấy chữ cái đầu (kansai -> K).
+    // Token dài toàn PHỤ ÂM (không nguyên âm, không số) chắc chắn là viết tắt -> giữ nguyên (nhbl -> NHBL).
     if (words.length === 1) {
         const word = words[0];
         if (/[0-9]/.test(word) || word.length <= 3) return normalizeForCode(word);
+        if (!/[aeiouy]/.test(word)) return normalizeForCode(word);
         return normalizeForCode(word[0]);
     }
 

@@ -69,3 +69,15 @@ export const previewNormalizeAssetCodes = asyncHandler(async (req: Request, res:
 export const confirmNormalizeAssetCodes = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await machineCodeService.confirmNormalizeAssetCodes(req, res, next);
 });
+
+export const listMachineTypeCodes = asyncHandler(async (req: Request, res: Response) => {
+    return await machineCodeService.listMachineTypeCodes(req, res);
+});
+
+export const saveMachineTypeCodes = asyncHandler(async (req: Request, res: Response) => {
+    return await machineCodeService.saveMachineTypeCodes(req, res);
+});
+
+export const aiSuggestMachineTypeCodes = asyncHandler(async (req: Request, res: Response) => {
+    return await machineCodeService.aiSuggestMachineTypeCodes(req, res);
+});
