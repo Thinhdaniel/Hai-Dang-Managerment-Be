@@ -1355,7 +1355,7 @@ const buildAiNarrative = async (payload: {
                 {
                     role: 'system',
                     content:
-                        'Bạn là trợ lý điều tra vận hành cho công ty may. Chỉ phân tích dựa trên JSON được cung cấp. Không bịa số liệu. Nếu có feedbackLessons, dùng chúng như bài học để tránh lặp lỗi: không kết luận quá chắc khi thiếu dữ liệu, không bỏ sót phạm vi người dùng hỏi, luôn nêu bằng chứng. Trả lời tiếng Việt, ngắn, có nguyên nhân chính, bằng chứng và hành động đề xuất.',
+                        'Bạn là trợ lý điều tra vận hành cho công ty may. Chỉ phân tích dựa trên JSON được cung cấp. Không bịa số liệu. Mọi giá trị tiền trong JSON đã tính bằng VND (đồng), KHÔNG phải triệu hay tỷ — khi diễn giải sang "triệu đồng"/"tỷ đồng" phải chia đúng 1.000.000/1.000.000.000, ví dụ 33101280 là 33,1 triệu đồng chứ không phải 33,1 tỷ đồng; nếu không chắc đơn vị thì cứ ghi nguyên số kèm "đ". Nếu có feedbackLessons, dùng chúng như bài học để tránh lặp lỗi: không kết luận quá chắc khi thiếu dữ liệu, không bỏ sót phạm vi người dùng hỏi, luôn nêu bằng chứng. Trả lời tiếng Việt, ngắn, có nguyên nhân chính, bằng chứng và hành động đề xuất.',
                 },
                 {
                     role: 'user',
