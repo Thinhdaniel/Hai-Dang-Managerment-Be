@@ -1,4 +1,5 @@
 import { USER_ROLE } from '@/constant/allowedRoles';
+import { CAPEX_COST_TYPES } from '@/constant/materialCostType';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import InventoryStock from '@/models/InventoryStock';
 import Material from '@/models/Material';
@@ -785,19 +786,50 @@ export const getMaterialCostByPeriodReport = async (req: Request, res: Response,
     // Map poId → totalRefundWithVat
     const refundMap = await getRefundByPurchaseOrder(ReturnRecord, filters, purchaseOrders, materialIds);
 
-    const groupedData = purchaseOrders.reduce((result: Record<string, number>, order: any) => {
-        const orderDate = getOrderEffectiveDate(order);
-        const key = getPeriodLabel(orderDate, filters.groupBy);
-        const items = getReportOrderItems(order, filters, materialIds);
+    // Tách OPEX/CAPEX theo Material.costType để chart mua không bị "độn" tiền mua máy/CCDC.
+    const capexTypeSet = new Set<string>(CAPEX_COST_TYPES);
+    const costTypeDocs = await Material.find({ isDeleted: { $ne: true } }).select('_id costType').lean();
+    const costTypeMap = new Map<string, string | undefined>(
+        costTypeDocs.map((m: any) => [String(m._id), m.costType || undefined])
+    );
 
-        const net = sumItemsAmount(items, 'totalWithVat') - (refundMap.get(String(order._id)) ?? 0);
-        result[key] = Number(((result[key] ?? 0) + Math.max(0, net)).toFixed(2));
-        return result;
-    }, {});
+    const groupedData = purchaseOrders.reduce(
+        (result: Record<string, { total: number; opex: number; capex: number }>, order: any) => {
+            const orderDate = getOrderEffectiveDate(order);
+            const key = getPeriodLabel(orderDate, filters.groupBy);
+            const items = getReportOrderItems(order, filters, materialIds);
+
+            const itemsTotal = sumItemsAmount(items, 'totalWithVat');
+            const capexTotal = items.reduce((sum: number, item: any) => {
+                const ct = costTypeMap.get(toId(item.materialId) ?? '');
+                if (!ct || !capexTypeSet.has(ct)) return sum;
+                return sum + Number(item.totalWithVat ?? item.totalPrice ?? 0);
+            }, 0);
+            const refund = refundMap.get(String(order._id)) ?? 0;
+            const net = Math.max(0, itemsTotal - refund);
+            // Hoàn trả trừ theo tỷ lệ vào từng nhóm để opex + capex luôn = net.
+            const refundRatio = itemsTotal > 0 ? net / itemsTotal : 0;
+            const capexNet = capexTotal * refundRatio;
+            const opexNet = net - capexNet;
+
+            const row = result[key] ?? { total: 0, opex: 0, capex: 0 };
+            row.total = Number((row.total + net).toFixed(2));
+            row.opex = Number((row.opex + opexNet).toFixed(2));
+            row.capex = Number((row.capex + capexNet).toFixed(2));
+            result[key] = row;
+            return result;
+        },
+        {}
+    );
 
     const data = Object.entries(groupedData)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([label, totalAmount]) => ({ period: label, totalAmount }));
+        .map(([label, row]) => ({
+            period: label,
+            totalAmount: row.total,
+            opexAmount: row.opex,
+            capexAmount: row.capex,
+        }));
 
     return res.status(StatusCodes.OK).json(
         customResponse({
