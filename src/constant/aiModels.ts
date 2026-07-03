@@ -48,36 +48,37 @@ export type AiFeature = (typeof AI_FEATURES)[keyof typeof AI_FEATURES];
  * Model MẶC ĐỊNH theo tác vụ — NHÚNG TRONG CODE. Mỗi tác vụ là 1 CHUỖI DỰ PHÒNG
  * (ưu tiên giảm dần): gọi model đầu, lỗi/không khả dụng thì tự rớt sang model sau.
  *
- * Chiến lược: ưu tiên các model `bb/` (mạnh, đang khả dụng) rồi rớt về `kr/` · `gc/`
- * (bền vững lâu dài) để khi `bb/` ngừng phục vụ trong tương lai hệ thống vẫn chạy.
- * env AI_FEATURE_MODELS vẫn ĐÈ LÊN bảng này (string hoặc mảng) nếu muốn tinh chỉnh.
+ * Chiến lược (đảo lại 2026-07-03: `bb/` gần như không còn khả dụng): ưu tiên
+ * `kr/` · `gc/` (bền vững lâu dài) làm chuỗi chính, `bb/` lùi xuống làm dự phòng
+ * cuối phòng khi `bb/` phục vụ trở lại. env AI_FEATURE_MODELS vẫn ĐÈ LÊN bảng
+ * này (string hoặc mảng) nếu muốn tinh chỉnh.
  *
  * Quy tắc: bước SUY LUẬN/LẬP KẾ HOẠCH dùng model mạnh; câu diễn giải/đơn giản dùng model nhanh-rẻ.
  */
 export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     // Trợ lý máy (tự xuất JSON, không dùng native tool-call nên model nào JSON tốt là được)
-    'asset-search-light': ['bb/gpt-5.4-nano', 'bb/deepseek-v4-flash', 'kr/claude-haiku-4.5-agentic'], // câu đơn giản — nhanh, rẻ
-    'asset-search': ['bb/claude-sonnet-4.6', 'kr/claude-sonnet-4.5-agentic'], // tiêu chuẩn: suy luận + JSON ổn định
-    'asset-search-heavy': ['bb/gpt-5.5', 'bb/gpt-5.4-pro', 'gc/gemini-2.5-pro'], // phân tích/so sánh/lập kế hoạch
-    'asset-answer': ['bb/deepseek-v4-flash', 'bb/gpt-5.4-nano', 'gc/gemini-2.5-flash'], // diễn giải kết quả: nhanh-rẻ
+    'asset-search-light': ['kr/claude-haiku-4.5-agentic', 'bb/gpt-5.4-nano', 'bb/deepseek-v4-flash'], // câu đơn giản — nhanh, rẻ
+    'asset-search': ['kr/claude-sonnet-4.5-agentic', 'bb/claude-sonnet-4.6'], // tiêu chuẩn: suy luận + JSON ổn định
+    'asset-search-heavy': ['gc/gemini-2.5-pro', 'bb/gpt-5.5', 'bb/gpt-5.4-pro'], // phân tích/so sánh/lập kế hoạch
+    'asset-answer': ['gc/gemini-2.5-flash', 'bb/deepseek-v4-flash', 'bb/gpt-5.4-nano'], // diễn giải kết quả: nhanh-rẻ
     // Các tác vụ khác
-    'material-match': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // khớp tên vật tư (JSON, cần ổn định)
-    'material-cost-type': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // phân loại chi phí (JSON ổn định)
-    'supply-request-draft': ['bb/gpt-5.4-nano', 'gc/gemini-2.5-flash'],
-    'chat-summary': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // JSON ổn định
+    'material-match': ['kr/claude-haiku-4.5', 'bb/claude-sonnet-4.6'], // khớp tên vật tư (JSON, cần ổn định)
+    'material-cost-type': ['kr/claude-haiku-4.5', 'bb/claude-sonnet-4.6'], // phân loại chi phí (JSON ổn định)
+    'supply-request-draft': ['gc/gemini-2.5-flash', 'bb/gpt-5.4-nano'],
+    'chat-summary': ['kr/claude-haiku-4.5', 'bb/claude-sonnet-4.6'], // JSON ổn định
     // OCR hóa đơn/phiếu: cần model VISION (đọc ảnh). Gemini đọc ảnh + tiếng Việt ổn định nhất ->
     // để ĐẦU chuỗi làm chỗ dựa; bb/gpt-5.4 chỉ là dự phòng nếu Gemini lỗi (cần test lại vision).
     'ocr-invoice': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
     'ocr-supply-request': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
     'ocr-purchase-receipt': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
     // Lần đọc 2 dùng model KHÁC DÒNG với lần 1 để lỗi không tương quan (bake-off đã xác nhận bb/gpt-5.5 đọc ảnh tốt)
-    'ocr-purchase-receipt-verify': ['bb/gpt-5.5', 'gc/gemini-2.5-pro'],
-    'approval-review': ['bb/gpt-5.4', 'kr/claude-haiku-4.5'],
-    analytics: ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5'], // chart-spec JSON từ danh mục cho sẵn
-    'incident-replay': ['bb/claude-sonnet-4.6', 'kr/claude-haiku-4.5', 'gc/gemini-2.5-flash'],
-    help: ['bb/gpt-5.4', 'kr/claude-sonnet-4.5'],
-    digest: ['bb/gpt-5.5', 'gc/gemini-2.5-pro'], // bản tin giám đốc: chất lượng cao, chạy ít
-    variance: ['bb/deepseek-v4-flash', 'kr/claude-haiku-4.5'],
+    'ocr-purchase-receipt-verify': ['gc/gemini-2.5-pro', 'bb/gpt-5.5'],
+    'approval-review': ['kr/claude-haiku-4.5', 'bb/gpt-5.4'],
+    analytics: ['kr/claude-haiku-4.5', 'bb/claude-sonnet-4.6'], // chart-spec JSON từ danh mục cho sẵn
+    'incident-replay': ['kr/claude-haiku-4.5', 'gc/gemini-2.5-flash', 'bb/claude-sonnet-4.6'],
+    help: ['kr/claude-sonnet-4.5', 'bb/gpt-5.4'],
+    digest: ['gc/gemini-2.5-pro', 'bb/gpt-5.5'], // bản tin giám đốc: chất lượng cao, chạy ít
+    variance: ['kr/claude-haiku-4.5', 'bb/deepseek-v4-flash'],
 };
 
 /** Model bền vững làm lưới cuối khi không resolve được gì theo tác vụ. */
