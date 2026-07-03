@@ -20,7 +20,14 @@ import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
 import { scanPurchaseInvoice, scanSupplyRequest } from '@/services/ai-ocr.service';
 import { reviewPurchaseRequest } from '@/services/ai-approval-review.service';
 import { runAnalyticsQuery, getAnalyticsCatalog } from '@/services/ai-analytics.service';
-import { runIncidentReplay } from '@/services/ai-incident-replay.service';
+import {
+    getIncidentReplayHistory,
+    getIncidentReplayHistoryById,
+    runIncidentReplay,
+    submitIncidentReplayFeedback,
+    updateIncidentReplayWorkflow,
+} from '@/services/ai-incident-replay.service';
+import { validateObjectId } from '@/middlewares/objectIdValidation';
 import { getQrFieldInsight } from '@/services/ai-qr-field.service';
 import { imageUpload } from '@/middlewares/multerMiddleware';
 
@@ -42,6 +49,10 @@ router.post('/ocr/supply-request', imageUpload.single('image'), asyncHandler(sca
 router.post('/purchase-request/:id/review', asyncHandler(reviewPurchaseRequest));
 router.get('/analytics/catalog', asyncHandler(getAnalyticsCatalog));
 router.post('/analytics/query', asyncHandler(runAnalyticsQuery));
+router.get('/incident-replay/history', asyncHandler(getIncidentReplayHistory));
+router.get('/incident-replay/history/:id', validateObjectId, asyncHandler(getIncidentReplayHistoryById));
+router.post('/incident-replay/history/:id/feedback', validateObjectId, asyncHandler(submitIncidentReplayFeedback));
+router.patch('/incident-replay/history/:id/workflow', validateObjectId, asyncHandler(updateIncidentReplayWorkflow));
 router.post('/incident-replay', asyncHandler(runIncidentReplay));
 
 export default router;
