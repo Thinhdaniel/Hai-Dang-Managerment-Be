@@ -4,8 +4,9 @@ import mongoose from 'mongoose';
 import { z } from 'zod';
 import Asset from '@/models/Asset';
 import FloorZone from '@/models/FloorZone';
+import Maintenance from '@/models/Maintenance';
 import { ASSET_STATUS } from '@/constant/assetStatus';
-import { BadRequestError } from '@/errors/customError';
+import { BadRequestError, NotFoundError } from '@/errors/customError';
 import customResponse from '@/utils/response';
 
 // Sơ đồ mặt bằng xưởng: khu vực (FloorZone) + vị trí máy (asset.floorPos), toạ độ % 0-100.
@@ -45,6 +46,28 @@ export const getFloorMap = async (req: Request, res: Response) => {
             .lean(),
     ]);
 
+    // Nhiệt sự cố: đếm số phiếu hỏng đột xuất (emergency) 6 tháng gần nhất theo máy
+    const since = new Date();
+    since.setMonth(since.getMonth() - 6);
+    const machineIds = machines.map((m) => m._id);
+    const incidentRows: { _id: mongoose.Types.ObjectId; count: number }[] = machineIds.length
+        ? await Maintenance.aggregate([
+              {
+                  $match: {
+                      isDeleted: { $ne: true },
+                      status: { $ne: 'cancelled' },
+                      type: 'emergency',
+                      startDate: { $gte: since },
+                      assetIds: { $in: machineIds },
+                  },
+              },
+              { $unwind: '$assetIds' },
+              { $match: { assetIds: { $in: machineIds } } },
+              { $group: { _id: '$assetIds', count: { $sum: 1 } } },
+          ])
+        : [];
+    const incidentMap = new Map(incidentRows.map((row) => [String(row._id), row.count]));
+
     return res.status(StatusCodes.OK).json(
         customResponse({
             data: {
@@ -55,6 +78,7 @@ export const getFloorMap = async (req: Request, res: Response) => {
                     machineCode: m.machineCode,
                     type: m.type,
                     status: m.status,
+                    incidents6m: incidentMap.get(String(m._id)) ?? 0,
                     floorPos:
                         m.floorPos && typeof m.floorPos.x === 'number' && typeof m.floorPos.y === 'number'
                             ? { x: m.floorPos.x, y: m.floorPos.y }
@@ -62,6 +86,81 @@ export const getFloorMap = async (req: Request, res: Response) => {
                 })),
             },
             message: 'Lay so do xuong thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+// Chi phí bảo trì theo phiếu — cùng công thức với report.service (cost ?? actualCost ?? tổng costItems)
+const getMaintenanceCost = (item: any) => {
+    const costItemsTotal = (item.externalRepair?.costItems ?? []).reduce(
+        (sum: number, costItem: any) => sum + Number(costItem.amount ?? 0),
+        0
+    );
+    return Number(item.cost ?? item.externalRepair?.actualCost ?? costItemsTotal ?? 0);
+};
+
+const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+// Thống kê 1 máy cho panel chi tiết trên sơ đồ: chi phí sửa 12 tháng theo tháng + lần hỏng 6 tháng
+export const getFloorMachineStats = async (req: Request, res: Response) => {
+    const assetId = String(req.params.id);
+    if (!mongoose.isValidObjectId(assetId)) throw new BadRequestError('Sai id may');
+
+    const asset = await Asset.findOne({ _id: assetId, isDeleted: { $ne: true } })
+        .select('_id lastMaintenanceDate')
+        .lean();
+    if (!asset) throw new NotFoundError('Khong tim thay may');
+
+    const since12m = new Date();
+    since12m.setMonth(since12m.getMonth() - 11);
+    since12m.setDate(1);
+    since12m.setHours(0, 0, 0, 0);
+    const since6m = new Date();
+    since6m.setMonth(since6m.getMonth() - 6);
+
+    const tickets = await Maintenance.find({
+        isDeleted: { $ne: true },
+        status: { $ne: 'cancelled' },
+        $or: [{ assetId: asset._id }, { assetIds: asset._id }],
+        startDate: { $gte: since12m },
+    })
+        .select('type startDate cost externalRepair.actualCost externalRepair.costItems assetIds')
+        .lean();
+
+    // Khung 12 tháng liên tục (kể cả tháng 0đ) để sparkline không bị đứt trục thời gian
+    const months: { ym: string; cost: number }[] = [];
+    const cursor = new Date(since12m);
+    for (let i = 0; i < 12; i++) {
+        months.push({ ym: monthKey(cursor), cost: 0 });
+        cursor.setMonth(cursor.getMonth() + 1);
+    }
+    const monthIndex = new Map(months.map((m, i) => [m.ym, i]));
+
+    let incidents6m = 0;
+    for (const ticket of tickets) {
+        const started = new Date(ticket.startDate);
+        // Phiếu nhiều máy: chia đều chi phí cho số máy trong phiếu
+        const shareCount = Math.max(ticket.assetIds?.length ?? 1, 1);
+        const idx = monthIndex.get(monthKey(started));
+        if (idx !== undefined) months[idx].cost += getMaintenanceCost(ticket) / shareCount;
+        if (ticket.type === 'emergency' && started >= since6m) incidents6m += 1;
+    }
+    months.forEach((m) => {
+        m.cost = Math.round(m.cost);
+    });
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: {
+                months,
+                total12m: months.reduce((sum, m) => sum + m.cost, 0),
+                incidents6m,
+                ticketCount12m: tickets.length,
+                lastMaintenanceAt: asset.lastMaintenanceDate ?? null,
+            },
+            message: 'Lay thong ke may thanh cong',
             status: StatusCodes.OK,
             success: true,
         })
