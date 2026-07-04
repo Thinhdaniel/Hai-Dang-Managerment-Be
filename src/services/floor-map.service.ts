@@ -41,7 +41,7 @@ export const getFloorMap = async (req: Request, res: Response) => {
             isDeleted: { $ne: true },
             status: { $nin: EXCLUDED_STATUSES },
         })
-            .select('name machineCode type status floorPos')
+            .select('name machineCode type status area floorPos')
             .sort({ machineCode: 1 })
             .lean(),
     ]);
@@ -78,6 +78,7 @@ export const getFloorMap = async (req: Request, res: Response) => {
                     machineCode: m.machineCode,
                     type: m.type,
                     status: m.status,
+                    area: m.area ?? '',
                     incidents6m: incidentMap.get(String(m._id)) ?? 0,
                     floorPos:
                         m.floorPos && typeof m.floorPos.x === 'number' && typeof m.floorPos.y === 'number'
