@@ -167,6 +167,10 @@ export const serializeAsset = (input: any) => {
         nextMaintenanceDate: toIso(asset?.nextMaintenanceDate),
         lastSeen,
         locationMismatch,
+        floorPos:
+            asset?.floorPos && typeof asset.floorPos.x === 'number' && typeof asset.floorPos.y === 'number'
+                ? { x: asset.floorPos.x, y: asset.floorPos.y }
+                : undefined,
         createdAt: toIso(asset?.createdAt),
         updatedAt: toIso(asset?.updatedAt),
     };

@@ -101,6 +101,11 @@ const AssetSchema = new mongoose.Schema(
             scannedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
             scannedAt: { type: Date },
         },
+        // Vị trí trên sơ đồ mặt bằng xưởng (%, 0-100 so với sàn của cơ sở). Không có = chưa xếp lên sơ đồ.
+        floorPos: {
+            x: { type: Number, min: 0, max: 100 },
+            y: { type: Number, min: 0, max: 100 },
+        },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',

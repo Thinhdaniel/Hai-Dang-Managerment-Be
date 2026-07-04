@@ -34,6 +34,7 @@ import digestRoutes from './digest.route';
 import telegramRoutes from './telegram.route';
 import internalRoutes from './internal.route';
 import stocktakeRoutes from './stocktake.route';
+import floorMapRoutes from './floor-map.route';
 
 const router = Router();
 
@@ -71,5 +72,6 @@ router.use('/digests', digestRoutes);
 router.use('/telegram', telegramRoutes);
 router.use('/internal', internalRoutes);
 router.use('/stocktakes', stocktakeRoutes);
+router.use('/floor-map', floorMapRoutes);
 
 export default router;
