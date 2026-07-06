@@ -69,6 +69,9 @@ export const vertexProviderService = {
                 temperature: options.temperature ?? 0.2,
                 maxOutputTokens: options.maxTokens ?? 4096,
                 json: Boolean(options.jsonMode),
+                // Chuyển tiếp mức suy luận để proxy tắt "thinking" của Gemini (thinkingBudget) —
+                // OCR truyền 'low'/'none' để tránh đốt token khiến JSON bị cắt cụt.
+                ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
             },
             {
                 timeout: options.timeoutMs ?? config.vertex.timeoutMs,
