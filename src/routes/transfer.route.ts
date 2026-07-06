@@ -36,9 +36,10 @@ router.patch(
     validator(completeTransferSchema),
     transferController.completeTransfer
 );
+// Hủy lệnh điều chuyển: chỉ Giám đốc trở lên (Super Admin + Giám đốc)
 router.patch(
     '/:id/cancel',
-    authorize(...ROLE_GROUPS.MANAGEMENT),
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
     validateObjectId,
     validator(cancelTransferSchema),
     transferController.cancelTransfer

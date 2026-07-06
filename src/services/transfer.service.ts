@@ -504,12 +504,10 @@ export const cancelTransfer = async (req: Request, res: Response, next: NextFunc
         throw new BadRequestError('Chi co the huy lenh dieu chuyen dang cho xu ly');
     }
 
-    // Chỉ người tạo hoặc admin/manager mới được hủy
-    const createdById = String((currentTransfer as any).createdBy);
-    const isCreator = createdById === req.userId;
-    const isManager = ['admin', 'manager', 'director'].includes((req as any).userRole || '');
-    if (!isCreator && !isManager) {
-        throw new BadRequestError('Ban khong co quyen huy lenh dieu chuyen nay');
+    // Chỉ Giám đốc trở lên (Super Admin + Giám đốc) mới được hủy lệnh điều chuyển
+    const isDirectorUp = ['admin', 'director'].includes(String(req.role ?? ''));
+    if (!isDirectorUp) {
+        throw new BadRequestError('Chi Giam doc tro len moi duoc huy lenh dieu chuyen');
     }
 
     const item = await transferRepository.updateById(transferId, {
