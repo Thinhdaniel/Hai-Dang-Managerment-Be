@@ -2,7 +2,9 @@ import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { BadRequestError } from '@/errors/customError';
 import { AI_FEATURES } from '@/constant/aiModels';
-import { aiProviderService } from '@/services/ai/ai-provider.service';
+import config from '@/config/env.config';
+import { aiProviderService, type AiGenerateTextOptions } from '@/services/ai/ai-provider.service';
+import { vertexProviderService } from '@/services/ai/vertex-provider.service';
 import customResponse from '@/utils/response';
 
 // OCR ảnh hóa đơn/phiếu mua vật tư -> trích dòng có cấu trúc để điền sẵn đơn mua.
@@ -31,6 +33,24 @@ const OCR_PRIMARY_VISION_MODEL = process.env.AI_OCR_MODEL || OCR_RELIABLE_VISION
 const OCR_FALLBACK_VISION_MODEL = process.env.AI_OCR_FALLBACK_MODEL || OCR_RELIABLE_VISION_MODEL;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const generateOcrJson = async <T>(
+    options: AiGenerateTextOptions,
+    vertexModel = config.vertex.visionModel
+) => {
+    if (vertexProviderService.isEnabled()) {
+        try {
+            return await vertexProviderService.generateJson<T>({
+                ...options,
+                model: vertexModel,
+                timeoutMs: Math.max(options.timeoutMs ?? 0, config.vertex.timeoutMs),
+            });
+        } catch (error) {
+            console.warn('[vertex-ocr] failed, fallback to 9router:', error instanceof Error ? error.message : error);
+        }
+    }
+    return aiProviderService.generateJson<T>(options);
+};
 
 /**
  * Chạy 1 lượt OCR (attempt) nhiều lần cho ỔN ĐỊNH:
@@ -174,7 +194,7 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
     const attempt = async (model?: string) => {
-        const aiResult = await aiProviderService.generateJson<any>({
+        const aiResult = await generateOcrJson<any>({
             feature: 'ocr-invoice',
             model,
             temperature: 0.05,
@@ -259,7 +279,7 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
     const attempt = async (model?: string) => {
-        const aiResult = await aiProviderService.generateJson<any>({
+        const aiResult = await generateOcrJson<any>({
             feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
             model,
             temperature: 0.04,

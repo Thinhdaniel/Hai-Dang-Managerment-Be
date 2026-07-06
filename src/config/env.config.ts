@@ -93,6 +93,17 @@ const envVarsSchema = z.object({
     OPENROUTER_MODEL_JSON: z.string().optional(),
     OPENROUTER_HTTP_REFERER: z.string().optional(),
     OPENROUTER_APP_TITLE: z.string().optional(),
+    // Vertex AI proxy (Google Cloud VM) — dùng cho OCR/vision ổn định, không thay 9router toàn cục.
+    VERTEX_ENABLED: z
+        .string()
+        .optional()
+        .transform((value) => value === 'true'),
+    VERTEX_PROXY_URL: z.string().optional(),
+    VERTEX_PROXY_KEY: z.string().optional(),
+    VERTEX_MODEL_FAST: z.string().default('gemini-2.5-flash-lite'),
+    VERTEX_MODEL_VISION: z.string().default('gemini-2.5-flash'),
+    VERTEX_MODEL_VERIFY: z.string().default('gemini-2.5-flash-lite'),
+    VERTEX_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
 });
 
 const result = envVarsSchema.safeParse(process.env);
@@ -226,6 +237,15 @@ const config = {
             httpReferer: envVars.OPENROUTER_HTTP_REFERER || envVars.CLIENT_URL,
             appTitle: envVars.OPENROUTER_APP_TITLE || 'Hai Dang Management',
         },
+    },
+    vertex: {
+        enabled: Boolean(envVars.VERTEX_ENABLED && envVars.VERTEX_PROXY_URL && envVars.VERTEX_PROXY_KEY),
+        proxyUrl: envVars.VERTEX_PROXY_URL?.replace(/\/+$/, ''),
+        proxyKey: envVars.VERTEX_PROXY_KEY,
+        fastModel: envVars.VERTEX_MODEL_FAST,
+        visionModel: envVars.VERTEX_MODEL_VISION,
+        verifyModel: envVars.VERTEX_MODEL_VERIFY,
+        timeoutMs: envVars.VERTEX_TIMEOUT_MS,
     },
 };
 

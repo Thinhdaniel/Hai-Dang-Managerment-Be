@@ -2,7 +2,7 @@ import axios from 'axios';
 import config from '@/config/env.config';
 import { STRONG_FALLBACK_MODEL } from '@/constant/aiModels';
 
-export type AiProviderName = 'ollama' | '9router' | 'openrouter' | 'fallback' | 'disabled';
+export type AiProviderName = 'ollama' | '9router' | 'openrouter' | 'vertex' | 'fallback' | 'disabled';
 
 // Nội dung tin nhắn: text thuần (đa số tác vụ) hoặc đa phương thức (text + ảnh) cho vision/OCR.
 // Dạng mảng theo chuẩn OpenAI-compatible: [{type:'text',text}, {type:'image_url',image_url:{url}}].

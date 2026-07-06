@@ -2,11 +2,13 @@ import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
 import { AI_FEATURES } from '@/constant/aiModels';
+import config from '@/config/env.config';
 import { BadRequestError, NotFoundError } from '@/errors/customError';
 import PurchaseOrder from '@/models/PurchaseOrder';
 import PurchaseReceiptScan from '@/models/PurchaseReceiptScan';
 import PurchaseShortage from '@/models/PurchaseShortage';
-import { aiProviderService } from '@/services/ai/ai-provider.service';
+import { aiProviderService, type AiGenerateTextOptions } from '@/services/ai/ai-provider.service';
+import { vertexProviderService } from '@/services/ai/vertex-provider.service';
 import { getUserPlantId, toId } from '@/services/material-workflow.helpers';
 import customResponse from '@/utils/response';
 import { serializePurchaseShortage } from '@/utils/materialSerializers';
@@ -303,6 +305,27 @@ const getUploadedImages = (req: Request) => {
     return files as Express.Multer.File[];
 };
 
+const generateReceiptOcrJson = async <T>(
+    options: AiGenerateTextOptions,
+    vertexModel: string
+) => {
+    if (vertexProviderService.isEnabled()) {
+        try {
+            return await vertexProviderService.generateJson<T>({
+                ...options,
+                model: vertexModel,
+                timeoutMs: Math.max(options.timeoutMs ?? 0, config.vertex.timeoutMs),
+            });
+        } catch (error) {
+            console.warn(
+                `[vertex-ocr] receipt ${options.feature || ''} failed, fallback to 9router:`,
+                error instanceof Error ? error.message : error
+            );
+        }
+    }
+    return aiProviderService.generateJson<T>(options);
+};
+
 const runOcrPass = async (files: Express.Multer.File[], feature: string) => {
     const content = [
         { type: 'text' as const, text: buildReceiptOcrPrompt() },
@@ -312,7 +335,11 @@ const runOcrPass = async (files: Express.Multer.File[], feature: string) => {
         })),
     ];
 
-    return aiProviderService.generateJson<ReceiptOcrResult>({
+    const vertexModel =
+        feature === AI_FEATURES.OCR_PURCHASE_RECEIPT_VERIFY ? config.vertex.verifyModel : config.vertex.visionModel;
+
+    return generateReceiptOcrJson<ReceiptOcrResult>(
+        {
         feature,
         temperature: 0.05,
         reasoningEffort: 'low',
@@ -326,7 +353,9 @@ const runOcrPass = async (files: Express.Multer.File[], feature: string) => {
             },
             { role: 'user', content },
         ],
-    });
+        },
+        vertexModel
+    );
 };
 
 /**
