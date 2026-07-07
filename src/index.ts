@@ -4,6 +4,7 @@ import connectDB from './config/database.config';
 import config from './config/env.config';
 import { checkAndNotifyOverdueMaintenance } from './services/notification.helper';
 import { startDigestSchedules } from './services/digest.service';
+import { startAuditSchedule } from './services/audit.service';
 import { initSocketServer } from './lib/socket';
 
 const PORT = config.port || 8080;
@@ -29,6 +30,9 @@ connectDB().then(async () => {
 
     // Lên lịch bản tin AI định kỳ (tuần/tháng) + đẩy thông báo cho giám đốc.
     startDigestSchedules();
+
+    // Kiểm toán đêm 03:30: rule-check + AI săn bất thường toàn hệ thống.
+    startAuditSchedule();
 });
 
 const exitHandler = () => {

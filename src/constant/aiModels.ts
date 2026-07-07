@@ -28,6 +28,7 @@ export const AI_FEATURES = {
     HELP: 'help', // Trợ lý hướng dẫn sử dụng
     DIGEST: 'digest', // Bản tin AI định kỳ cho giám đốc (chất lượng cao, chạy ít lần)
     VARIANCE: 'variance', // Giải thích biến động chỉ số (câu ngắn, theo nhu cầu)
+    AUDIT: 'audit', // Kiểm toán đêm: fallback khi Vertex lỗi (chạy 1 lần/ngày)
 } as const;
 
 /**
@@ -81,6 +82,7 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     help: ['kr/claude-sonnet-4.5', 'bb/gpt-5.4'],
     digest: ['gc/gemini-2.5-pro', 'bb/gpt-5.5'], // bản tin giám đốc: chất lượng cao, chạy ít
     variance: ['kr/claude-haiku-4.5', 'bb/deepseek-v4-flash'],
+    audit: ['gc/gemini-2.5-pro', 'kr/claude-sonnet-4.5-agentic'], // kiểm toán đêm: dự phòng khi Vertex lỗi
 };
 
 /** Model bền vững làm lưới cuối khi không resolve được gì theo tác vụ. */
