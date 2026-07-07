@@ -600,7 +600,17 @@ export const scanDisposalQr = async (req: Request, res: Response, _next: NextFun
         populate: ['brandId', 'plantId'],
     });
 
-    if (label?.assetId && typeof label.assetId === 'object') {
+    // Tem da bi thay the/thu hoi van con assetId cu -> tuyet doi khong resolve ve may,
+    // neu khong 2 tem khac nhau se bi tinh la cung 1 may (bug quet trung may)
+    if (label && label.status !== QR_LABEL_STATUS.ASSIGNED && label.status !== QR_LABEL_STATUS.UNUSED) {
+        throw new BadRequestError(
+            `Tem QR ${publicId} da bi thay the/thu hoi${
+                (label as any).retiredReason ? ` (${(label as any).retiredReason})` : ''
+            }. Kiem tra lai tem dang dan tren may`
+        );
+    }
+
+    if (label?.status === QR_LABEL_STATUS.ASSIGNED && label.assetId && typeof label.assetId === 'object') {
         const { item, duplicate } = await addAssetToBatch(label.assetId, batch, req, {
             ...req.body,
             publicId,

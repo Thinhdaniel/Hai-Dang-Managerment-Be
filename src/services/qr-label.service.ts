@@ -570,7 +570,12 @@ export const resolveInternalQr = async (req: Request, res: Response, next: NextF
                     type: label.type,
                     status: label.status,
                     label: serializeLabel(label),
-                    asset: label.assetId ? serializeAsset(label.assetId) : undefined,
+                    // Chi tra asset khi tem dang gan may; tem retired/lost van giu assetId cu
+                    // nhung khong duoc resolve ve may (tranh 2 tem cung tro 1 may khi quet)
+                    asset:
+                        label.status === QR_LABEL_STATUS.ASSIGNED && label.assetId
+                            ? serializeAsset(label.assetId)
+                            : undefined,
                     canActivate:
                         label.type === QR_LABEL_TYPE.MACHINE &&
                         label.status === QR_LABEL_STATUS.UNUSED &&
