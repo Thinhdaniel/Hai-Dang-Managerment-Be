@@ -148,6 +148,33 @@ const buildMaps = async (metric: Metric, r: ReturnType<typeof periodRange>) => {
     return { cur: mergeAdd(rcCur, dcCur), prev: mergeAdd(rcPrev, dcPrev) };
 };
 
+// Xếp hạng chi phí TUYỆT ĐỐI theo cơ sở trong kỳ (trả lời "cơ sở nào tốn nhất") —
+// khác computeVarianceData vốn xếp theo BIẾN ĐỘNG so kỳ trước.
+export const computeCostByPlant = async (metricInput: unknown, periodInput: unknown) => {
+    const metric = (VALID_METRICS.has(metricInput as Metric) ? metricInput : 'total_cost') as Metric;
+    const periodType = (String(periodInput) === 'week' ? 'week' : 'month') as PeriodType;
+    const isCost = metric !== 'maintenance_tickets';
+    const r = periodRange(periodType);
+
+    const { cur } = await buildMaps(metric, r);
+    const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean();
+    const plantName = new Map(plants.map((p: any) => [String(p._id), String(p.name)]));
+
+    const rows = [...cur.entries()]
+        .map(([id, value]) => ({ plantName: plantName.get(id) || 'Chưa gán cơ sở', value }))
+        .filter((row) => row.value > 0)
+        .sort((a, b) => b.value - a.value);
+
+    return {
+        metric,
+        metricLabel: METRIC_LABEL[metric],
+        periodLabel: r.label,
+        isCost,
+        total: rows.reduce((s, row) => s + row.value, 0),
+        rows,
+    };
+};
+
 export const computeVarianceData = async (metricInput: unknown, periodInput: unknown) => {
     const metric = (VALID_METRICS.has(metricInput as Metric) ? metricInput : 'total_cost') as Metric;
     const periodType = (String(periodInput) === 'week' ? 'week' : 'month') as PeriodType;

@@ -1,13 +1,19 @@
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import { subDays } from 'date-fns';
 import Material from '@/models/Material';
 import InventoryStock from '@/models/InventoryStock';
 import DistributionRecord from '@/models/DistributionRecord';
+import Maintenance from '@/models/Maintenance';
+import Borrowing from '@/models/Borrowing';
+import BorrowingBatch from '@/models/BorrowingBatch';
+import Asset from '@/models/Asset';
+import Plant from '@/models/Plant';
 import { dashboardRepository } from '@/repositories/dashboard.repository';
 import { aiProviderService, extractJsonObject } from '@/services/ai/ai-provider.service';
 import { ASSET_SEARCH_TIERS } from '@/constant/aiModels';
 import { assetQueryTool, buildTransferDraft, type AssistantMessage } from '@/services/ai-asset-assistant.service';
-import { computeVarianceData } from '@/services/variance.service';
+import { computeCostByPlant, computeVarianceData } from '@/services/variance.service';
 import {
     analyzePurchases,
     comparePurchaseVsIssue,
@@ -43,7 +49,9 @@ const LIGHT_SIGNALS = ['liet ke', 'danh sach', 'bao nhieu', 'dem ', 'co may nao'
 const tierFor = (q: string) => {
     const n = normalize(q);
     if (HEAVY_SIGNALS.some((k) => n.includes(k))) return ASSET_SEARCH_TIERS.heavy;
-    if (LIGHT_SIGNALS.some((k) => n.includes(k)) || n.length <= 28) return ASSET_SEARCH_TIERS.light;
+    // Chỉ xuống tầng nhẹ khi câu RÕ RÀNG là tra cứu đơn giản. Câu ngắn cụt lủn kiểu giám đốc
+    // ("chi phí tháng này?") cần suy ngữ cảnh nhiều hơn chứ không ít hơn -> giữ tầng chuẩn.
+    if (LIGHT_SIGNALS.some((k) => n.includes(k)) && n.length <= 60) return ASSET_SEARCH_TIERS.light;
     return ASSET_SEARCH_TIERS.standard;
 };
 const tierLabelOf = (feature: string): 'light' | 'standard' | 'heavy' =>
@@ -98,6 +106,120 @@ const searchMaterials = async (args: { search?: string; category?: string; limit
     return { count, items: docs.map((m: any) => materialItem(m._id, m, m.unit)) };
 };
 
+// ===== Tool: PHIẾU BẢO TRÌ (ticket-level — khác search_assets vốn đếm MÁY) =====
+const MAINTENANCE_STATUS_LABEL: Record<string, string> = {
+    pending: 'Chờ xử lý',
+    in_progress: 'Đang sửa',
+    completed: 'Hoàn tất',
+    overdue: 'Quá hạn',
+    cancelled: 'Đã hủy',
+};
+const OPEN_TICKET_STATUSES = ['pending', 'in_progress', 'overdue'];
+
+const maintenanceTickets = async (args: {
+    status?: string;
+    overdue?: boolean;
+    overdueDays?: number;
+    repairMode?: 'internal' | 'external';
+    approvalPending?: boolean;
+    plantName?: string;
+    machineRef?: string;
+    period?: 'week' | 'month' | 'all';
+    limit?: number;
+}) => {
+    const match: Record<string, any> = { isDeleted: { $ne: true } };
+
+    // "Quá hạn" khớp đúng định nghĩa Dashboard: phiếu còn mở quá N ngày (mặc định 7)
+    if (args.overdue) {
+        const days = Number(args.overdueDays) > 0 ? Number(args.overdueDays) : 7;
+        match.status = { $in: OPEN_TICKET_STATUSES };
+        match.createdAt = { $lt: subDays(new Date(), days) };
+    } else if (args.status && MAINTENANCE_STATUS_LABEL[args.status]) {
+        match.status = args.status;
+    } else if (args.status === 'open') {
+        match.status = { $in: OPEN_TICKET_STATUSES };
+    }
+    if (args.repairMode === 'internal' || args.repairMode === 'external') match.repairMode = args.repairMode;
+    if (args.approvalPending) match.approvalStatus = 'pending';
+    if (args.plantName) {
+        const plant = await Plant.findOne({
+            isDeleted: { $ne: true },
+            name: new RegExp(String(args.plantName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+        }).lean();
+        if (plant) match.plantId = plant._id;
+    }
+    if (args.machineRef) {
+        const exact = new RegExp(`^${String(args.machineRef).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+        const asset = await Asset.findOne({ isDeleted: { $ne: true }, $or: [{ machineCode: exact }, { serial: exact }] }).lean();
+        if (asset) match.$or = [{ assetId: asset._id }, { assetIds: asset._id }];
+        else return { count: 0, notFoundMachine: args.machineRef, tickets: [], byStatus: [] };
+    }
+    if (args.period === 'week') match.createdAt = { ...(match.createdAt || {}), $gte: subDays(new Date(), 7) };
+    else if (args.period === 'month') match.createdAt = { ...(match.createdAt || {}), $gte: subDays(new Date(), 30) };
+
+    const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 30);
+    const [count, byStatusRows, docs] = await Promise.all([
+        Maintenance.countDocuments(match),
+        Maintenance.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
+        Maintenance.find(match).sort({ createdAt: -1 }).limit(limit).populate('assetId', 'machineCode name').lean(),
+    ]);
+
+    const now = Date.now();
+    return {
+        count,
+        byStatus: byStatusRows.map((r: any) => ({ status: r._id, label: MAINTENANCE_STATUS_LABEL[r._id] || r._id, count: r.count })),
+        overdueDefinition: args.overdue ? `phiếu còn mở quá ${Number(args.overdueDays) > 0 ? args.overdueDays : 7} ngày` : undefined,
+        tickets: docs.map((t: any) => ({
+            machine: t.assetId?.machineCode || t.assetId?.name || '?',
+            machineCount: (t.assetIds || []).length || 1,
+            plant: t.plantName || '',
+            status: MAINTENANCE_STATUS_LABEL[t.status] || t.status,
+            repairMode: t.repairMode === 'external' ? 'sửa ngoài' : 'nội bộ',
+            approval: t.approvalStatus && t.approvalStatus !== 'none' ? t.approvalStatus : undefined,
+            daysOpen: OPEN_TICKET_STATUSES.includes(t.status) ? Math.floor((now - new Date(t.createdAt).getTime()) / 86400000) : undefined,
+            cost: t.cost || t.externalRepair?.actualCost || t.externalRepair?.estimateCost || undefined,
+            description: String(t.description || '').slice(0, 80),
+        })),
+    };
+};
+
+// ===== Tool: MÁY MƯỢN/THUÊ ĐỐI TÁC (đang giữ máy của ai, quá hạn trả chưa) =====
+const borrowedMachines = async () => {
+    const now = new Date();
+    const [byPartner, openBatches] = await Promise.all([
+        Borrowing.aggregate([
+            { $match: { isDeleted: { $ne: true }, status: 'active', type: { $in: ['external', 'rental'] } } },
+            {
+                $group: {
+                    _id: { $ifNull: ['$partnerName', 'Chưa xác định'] },
+                    machines: { $sum: 1 },
+                    nearestDue: { $min: '$expectedReturnTime' },
+                    overdue: { $sum: { $cond: [{ $and: [{ $ne: ['$expectedReturnTime', null] }, { $lt: ['$expectedReturnTime', now] }] }, 1, 0] } },
+                },
+            },
+            { $sort: { machines: -1 } },
+        ]),
+        BorrowingBatch.find({ isDeleted: { $ne: true }, status: { $in: ['draft', 'receiving', 'active', 'partially_returned'] } })
+            .select('code partnerName expectedReturnTime')
+            .lean(),
+    ]);
+    return {
+        totalMachines: byPartner.reduce((s: number, r: any) => s + r.machines, 0),
+        partners: byPartner.map((r: any) => ({
+            partner: r._id,
+            machines: r.machines,
+            nearestDue: r.nearestDue ?? null,
+            overdueMachines: r.overdue,
+        })),
+        overdueBatches: openBatches
+            .filter((b: any) => b.expectedReturnTime && new Date(b.expectedReturnTime) < now)
+            .map((b: any) => ({ code: b.code, partner: b.partnerName })),
+        needsInfoBatches: openBatches
+            .filter((b: any) => b.partnerName === 'Chưa xác định' || !b.expectedReturnTime)
+            .map((b: any) => b.code),
+    };
+};
+
 type ToolName =
     | 'search_assets'
     | 'locate_asset'
@@ -124,6 +246,9 @@ type ToolName =
     | 'cost_variance'
     | 'cost_overview'
     | 'compare_cost'
+    | 'cost_by_plant'
+    | 'maintenance_tickets'
+    | 'borrowed_machines'
     | 'summary_metrics';
 
 type ToolOutcome = {
@@ -201,6 +326,44 @@ const executeTool = async (name: ToolName, args: any): Promise<ToolOutcome> => {
             const top = await dashboardRepository.getTopBrokenAssets(Math.min(args?.limit || 5, 15));
             const topBroken = top.map((t: any) => ({ id: t.assetId, machineCode: t.machineCode, name: t.assetName, plantName: t.plantName, count: t.count }));
             return { ai: { topBroken }, render: { domain: 'asset', count: topBroken.length, items: [], aggregates: { topBroken } } };
+        }
+        case 'maintenance_tickets': {
+            const m = await maintenanceTickets(args || {});
+            return {
+                ai: {
+                    tongPhieu: m.count,
+                    theoTrangThai: m.byStatus,
+                    dinhNghiaQuaHan: m.overdueDefinition,
+                    khongThayMay: (m as any).notFoundMachine,
+                    phieu: m.tickets.slice(0, 10),
+                },
+                render: { domain: 'asset', count: m.count, items: [], aggregates: { maintenanceTickets: m } },
+            };
+        }
+        case 'borrowed_machines': {
+            const b = await borrowedMachines();
+            return {
+                ai: {
+                    tongMayNgoai: b.totalMachines,
+                    theoDoiTac: b.partners,
+                    loQuaHan: b.overdueBatches,
+                    loThieuThongTin: b.needsInfoBatches,
+                },
+                render: { domain: 'asset', count: b.totalMachines, items: [], aggregates: { borrowedMachines: b } },
+            };
+        }
+        case 'cost_by_plant': {
+            const c = await computeCostByPlant(args?.metric, args?.period);
+            return {
+                ai: {
+                    chiSo: c.metricLabel,
+                    ky: c.periodLabel,
+                    tong: c.total,
+                    theoCoSo: c.rows.slice(0, 10),
+                    luuY: c.metric === 'repair_cost' ? 'repair_cost chi tinh phieu sua NGOAI da hoan tat trong ky' : undefined,
+                },
+                render: { domain: 'cost', count: c.rows.length, items: [], aggregates: { costByPlant: c } },
+            };
         }
         case 'low_stock_materials': {
             const items = await lowStockMaterials(args?.limit);
@@ -933,6 +1096,40 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
             (top ? ` Chủ yếu ở ${top.label} (${top.delta >= 0 ? '+' : ''}${v.isCost ? fmtVnd(top.delta) : top.delta}).` : '')
         );
     }
+    if (a.maintenanceTickets) {
+        const m = a.maintenanceTickets;
+        if ((m as any).notFoundMachine) return `Không tìm thấy máy "${(m as any).notFoundMachine}" để tra phiếu bảo trì.`;
+        if (!m.count) return m.overdueDefinition ? `Không có phiếu bảo trì quá hạn (${m.overdueDefinition}).` : 'Không có phiếu bảo trì nào khớp.';
+        const head = m.overdueDefinition
+            ? `Có ${m.count} phiếu bảo trì quá hạn (${m.overdueDefinition}).`
+            : `Có ${m.count} phiếu bảo trì khớp${m.byStatus?.length > 1 ? ` (${m.byStatus.map((s: any) => `${s.label} ${s.count}`).join(', ')})` : ''}.`;
+        const top = m.tickets[0];
+        return top
+            ? `${head} Gần nhất: máy ${top.machine}${top.plant ? ` @ ${top.plant}` : ''} — ${top.status}${top.daysOpen != null ? `, mở ${top.daysOpen} ngày` : ''}${top.cost ? `, chi phí ${fmtVnd(top.cost)}` : ''}.`
+            : head;
+    }
+    if (a.borrowedMachines) {
+        const b = a.borrowedMachines;
+        if (!b.totalMachines) return 'Hiện không giữ máy mượn/thuê nào của đối tác.';
+        const parts = b.partners
+            .slice(0, 4)
+            .map((p: any) => `${p.partner} ${p.machines} máy${p.overdueMachines ? ` (⚠ ${p.overdueMachines} quá hạn)` : ''}`)
+            .join('; ');
+        let s = `Đang giữ ${b.totalMachines} máy mượn/thuê của ${b.partners.length} đối tác: ${parts}.`;
+        if (b.overdueBatches?.length) s += ` Lô quá hạn trả: ${b.overdueBatches.map((x: any) => `${x.code} (${x.partner})`).join(', ')}.`;
+        if (b.needsInfoBatches?.length) s += ` ${b.needsInfoBatches.length} lô còn thiếu thông tin đối tác/hạn trả.`;
+        return s;
+    }
+    if (a.costByPlant) {
+        const c = a.costByPlant;
+        if (!c.rows.length) return `${c.metricLabel} ${c.periodLabel}: chưa phát sinh ở cơ sở nào${c.metric === 'repair_cost' ? ' (chỉ tính phiếu sửa ngoài đã hoàn tất)' : ''}.`;
+        const fmt = (v: number) => (c.isCost ? fmtVnd(v) : `${v}`);
+        return (
+            `${c.metricLabel} ${c.periodLabel} theo cơ sở (tổng ${fmt(c.total)}): ` +
+            c.rows.slice(0, 5).map((r: any, i: number) => `${i + 1}. ${r.plantName} ${fmt(r.value)}`).join('; ') +
+            `.${c.metric === 'repair_cost' ? ' (Chỉ tính phiếu sửa ngoài đã hoàn tất — chưa gồm vật tư/sửa nội bộ.)' : ''}`
+        );
+    }
     if (a.topBroken?.length) {
         return `Top máy hỏng nhiều nhất: ` + a.topBroken.slice(0, 3).map((t: any, i: number) => `${i + 1}. ${t.machineCode || t.name} (${t.count} lần)`).join('; ') + '.';
     }
@@ -972,16 +1169,24 @@ const SYSTEM_PROMPT = [
     '- Cau hoi PHUC TAP (lap ke hoach, so sanh, "co nen", ghep nhieu mang): goi LAN LUOT nhieu tool roi TONG HOP. Vd "don can may 1 kim hikari, con may ranh khong?" -> goi search_assets{search:"1 kim", brandName:"hikari", status:["storage"]} roi ket luan co/khong + de xuat dieu chuyen.',
     '- Cau hoi DIEU HANH/TONG HOP rong (vd "bao cao tong hop may + bao tri + dieu chuyen + vat tu + chi phi", "tinh hinh chung thang nay"): TUYET DOI khong tra ve 1 mang duy nhat. Phai goi NHIEU tool (vd summary_metrics + cost_overview + top_broken_assets + transfer_orders + low_stock_materials) roi tong hop thanh bao cao co muc. Neu cau hoi liet ke nhieu khia canh, moi khia canh can it nhat 1 tool.',
     '- Cau hoi SO SANH 2 thu (vd "mua vs cap phat", "thang nay vs thang truoc") -> phai tra ca 2 ve + chenh lech, KHONG chi tra 1 ve.',
-    '- Cau hoi MO HO/thieu thong tin -> tra {"final":"cau hoi lai ngan gon"} de hoi ro (vd thieu ky, thieu ten vat tu).',
+    '- Cau hoi NGAN/CUT LUN kieu giam doc ("chi phi thang nay?", "may hong?", "kho sao roi?"): DUNG voi hoi lai ngay. Hay tu suy cach hieu PHO BIEN NHAT (chi phi -> cost_overview thang nay; may hong -> search_assets status broken + top_broken; kho -> low_stock_materials), goi tool va tra loi, MO DAU bang pham vi da gia dinh (vd "Tinh theo thang 07/2026:"). CHI hoi lai khi cau hoi that su khong the doan (thieu ten vat tu/ma may cu the).',
+    '- Cau hoi MO HO/thieu thong tin KHONG the doan -> tra {"final":"cau hoi lai ngan gon"} de hoi ro (vd thieu ky, thieu ten vat tu).',
     '- Luon TRICH NGUON trong cau tra loi (ten co so, ma don, ten NCC) de giam doc tin.',
     '- Khi du du lieu thi tra {"final":...} ngay, dung goi tool thua.',
     '',
     'TOOL MAY MOC:',
     '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke NHIEU may theo bo loc. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
+    '  ⚠ MAP TRANG THAI CHINH XAC: "dang hoat dong / dang chay / su dung binh thuong" = status:["active"] DUY NHAT — TUYET DOI khong gop broken/borrowing/maintenance vao. "hong" = ["broken"], "dang bao tri/dang sua" = ["maintenance"], "dang cho muon" = ["borrowing"], "ton kho/ranh" = ["storage"]. Cau hoi tong quat "bao nhieu may hoat dong" -> dung aggregate:"breakdown_by_status" de nguoi doc thay ro tung nhom, roi neu con so active.',
     '- locate_asset(args:{query}): tra cuu 1 MAY CU THE theo MA may / SERIAL / TEN -> vi tri (co so quan ly + khu vuc + noi quet QR cuoi + co lech vi tri khong) + tinh trang + LENH DIEU CHUYEN lien quan. Dung khi hoi "may X dang o dau", "may serial ... co lenh dieu chuyen nao khong".',
     '- transfer_orders(args:{period?:today|week|month, status?:pending|approved|completed|rejected|cancelled, plantName?, limit?}): tra cuu LENH DIEU CHUYEN (kem danh sach may trong lenh). Dung khi hoi "lenh dieu chuyen hom nay/gan day", "lenh gan nhat gom may nao", "lenh nao dang cho duyet". Khong truyen period = gan day (2 tuan).',
     '- draft_transfer(args:{machineRefs:[ma/serial may], toPlantName?}): SOAN NHAP lenh dieu chuyen (KHONG tao that) -> tra the "Mo form dieu chuyen" de nguoi dung chot. Dung khi nguoi dung MUON DIEU CHUYEN may cu the sang co so khac, vd "dieu chuyen may MCV-... sang Co So 2", "soan lenh chuyen 3 may nay ve Co So 1", "tao lenh dieu chuyen 2 may co seri 0242889, 02115139". machineRefs = TAT CA ma may/serial/seri/SN trong cau, ke ca serial TOAN SO; toPlantName = co so DICH neu co. Neu thieu co so dich van goi draft_transfer de tim may truoc roi hoi them co so dich.',
     '- top_broken_assets(args:{plantName?,limit?}): may hong nhieu nhat.',
+    '',
+    'TOOL BAO TRI (cap PHIEU — khac search_assets von dem MAY):',
+    '- maintenance_tickets(args:{status?:pending|in_progress|completed|overdue|cancelled|open, overdue?:boolean, overdueDays?, repairMode?:internal|external, approvalPending?:boolean, plantName?, machineRef?, period?:week|month|all, limit?}): tra cuu PHIEU bao tri/sua chua. "phieu qua han/ton dong" -> overdue:true (dinh nghia: phieu con mo qua 7 ngay, doi bang overdueDays). "phieu cho duyet sua ngoai" -> approvalPending:true. "lich su sua may X" -> machineRef:"ma may". "phieu dang mo" -> status:"open". Tra kem breakdown theo trang thai + danh sach phieu (may, co so, so ngay mo, chi phi).',
+    '',
+    'TOOL MAY MUON/THUE DOI TAC:',
+    '- borrowed_machines(): dang giu BAO NHIEU may cua doi tac nao, may/lo nao QUA HAN TRA, lo nao thieu thong tin. Dung khi hoi "dang muon may cua ai", "may thue den han tra chua", "may doi tac".',
     '',
     'TOOL VAT TU & KHO:',
     '- low_stock_materials(args:{limit?}): vat tu duoi dinh muc ton.',
@@ -1003,6 +1208,8 @@ const SYSTEM_PROMPT = [
     '',
     'TOOL CHI PHI MUA & DON HANG:',
     '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): current la TONG TOAN HE THONG (TAT CA co so) + bien dong vs ky truoc, kem top co so bien dong. KHONG LOC duoc 1 co so. ⚠ TUYET DOI KHONG dung cho cau hoi ve 1 co so cu the (vd "CS2 bao nhieu") — luc do dung distribution_analysis (cap phat) / purchase_analysis (mua) voi plantName. "mua"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost.',
+    '  ⚠ DINH NGHIA repair_cost: CHI tinh phieu sua NGOAI (thue ngoai) DA HOAN TAT trong ky — khong gom sua noi bo, khong gom vat tu. Khi dung phai NOI RO dinh nghia nay trong cau tra loi. Cau hoi "chi phi sua chua" chung chung ma khong noi ro sua ngoai -> uu tien cost_overview de tra du 3 loai, tranh gay hieu nham.',
+    '- cost_by_plant(args:{metric?:total_cost|purchase_cost|distribution_cost|repair_cost, period?:week|month}): XEP HANG chi phi TUYET DOI theo TUNG CO SO trong ky (cao -> thap). BAT BUOC dung khi hoi "co so nao ton/chi nhieu nhat", "chi phi cao nhat o dau", "so sanh chi phi cac co so". Mac dinh metric=total_cost neu cau hoi khong noi ro loai.',
     '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): chi phi MUA chi tiet ky nay vs ky truoc, phan ra theo VAT TU hoac NHA CUNG CAP.',
     '- purchase_analysis CHO 1 CO SO: truyen them plantName de loc chi phi mua cua RIENG co so do (loc o cap DONG vat tu). KHONG dung cost_variance(purchase_cost) cho 1 co so.',
     '- purchase_orders(args:{search?, orderCode?, supplierName?, plantName?, status?, period?:week|month, limit?}): tra cuu DON HANG. Truyen orderCode/search de SOI SAU 1 don (tung dong vat tu, SL dat/nhan).',
@@ -1043,6 +1250,9 @@ const VALID_TOOLS = new Set<ToolName>([
     'cost_variance',
     'cost_overview',
     'compare_cost',
+    'cost_by_plant',
+    'maintenance_tickets',
+    'borrowed_machines',
     'summary_metrics',
 ]);
 // Ngan sach suy luan: cau giam doc thuong can ghep nhieu nguon -> cho nhieu luot hon.
@@ -1076,6 +1286,9 @@ const TOOL_LABEL: Record<ToolName, string> = {
     cost_variance: 'Biến động chi phí',
     cost_overview: 'Tổng quan chi phí',
     compare_cost: 'Mua vs Cấp phát',
+    cost_by_plant: 'Chi phí theo cơ sở',
+    maintenance_tickets: 'Phiếu bảo trì',
+    borrowed_machines: 'Máy mượn đối tác',
     summary_metrics: 'Tổng quan hệ thống',
 };
 
