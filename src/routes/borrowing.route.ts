@@ -11,6 +11,7 @@ import {
     createBorrowingSchema,
     receiveBorrowingBatchByQrSchema,
     returnBorrowingSchema,
+    updateBorrowingBatchSchema,
 } from '@/validations/borrowing.validation';
 import { ROLE_GROUPS } from '@/constant/permissions';
 
@@ -30,6 +31,13 @@ router.get(
     authorize(...ROLE_GROUPS.MANAGEMENT),
     validateObjectId,
     borrowingController.getBorrowingBatchById
+);
+router.patch(
+    '/batches/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    validator(updateBorrowingBatchSchema),
+    borrowingController.updateBorrowingBatch
 );
 router.post(
     '/batches/:id/qr-batch',

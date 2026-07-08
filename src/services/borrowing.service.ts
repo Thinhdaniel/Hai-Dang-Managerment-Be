@@ -421,7 +421,8 @@ export const createBorrowingBatch = async (req: Request, res: Response, next: Ne
                     {
                         code,
                         type: req.body.type,
-                        partnerName: trimText(req.body.partnerName),
+                        // Ra soat thuc te co the chua biet may cua ai — ghi nhan truoc, bo sung sau
+                        partnerName: trimText(req.body.partnerName) || 'Chưa xác định',
                         contractNo: trimText(req.body.contractNo),
                         plantId: req.body.plantId,
                         area: trimText(req.body.area),
@@ -481,6 +482,35 @@ export const getBorrowingBatchById = async (req: Request, res: Response, next: N
     );
 };
 
+// Bo sung / sua thong tin lo sau khi ra soat (doi tac chua ro, han tra, so hop dong...)
+export const updateBorrowingBatch = async (req: Request, res: Response, next: NextFunction) => {
+    const batchId = getParamValue(req.params.id);
+    const userId = getUserId(req);
+
+    const batch = await BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } });
+    if (!batch) throw new NotFoundError('Khong tim thay lo muon / thue');
+    if (batch.status === 'returned' || batch.status === 'cancelled') {
+        throw new BadRequestError('Lo da dong, khong the sua thong tin');
+    }
+
+    const nextPartnerName = trimText(req.body.partnerName);
+    if (nextPartnerName) batch.partnerName = nextPartnerName;
+    if (req.body.contractNo !== undefined) batch.contractNo = trimText(req.body.contractNo);
+    if (req.body.area !== undefined) batch.area = trimText(req.body.area);
+    if (req.body.expectedReturnTime !== undefined) {
+        batch.expectedReturnTime = req.body.expectedReturnTime ? new Date(req.body.expectedReturnTime) : undefined;
+    }
+    if (req.body.note !== undefined) batch.note = trimText(req.body.note);
+    batch.set('updatedBy', userId);
+    await batch.save();
+
+    const [enriched] = await enrichBorrowingBatches([
+        await applyPopulate(BorrowingBatch.findById(batchId), WORKFLOW_POPULATE.borrowingBatch),
+    ]);
+
+    return sendSerializedItem(res, enriched, serializeBorrowingBatch, 'Da cap nhat thong tin lo muon / thue');
+};
+
 export const createBorrowingBatchQr = async (req: Request, res: Response, next: NextFunction) => {
     const batchId = getParamValue(req.params.id);
     const userId = getUserId(req);
@@ -512,7 +542,9 @@ export const createBorrowingBatchQr = async (req: Request, res: Response, next: 
 export const receiveBorrowingBatchByQr = async (req: Request, res: Response, next: NextFunction) => {
     const batchId = getParamValue(req.params.id);
     const userId = getUserId(req);
-    const publicId = normalizePublicId(req.body.publicId);
+    // Khong co publicId = nhan may KHONG dan tem (may khach khong duoc dan/danh dau) —
+    // may van vao lo day du, nhan dien bang serial/ma may doi tac thay vi quet
+    const publicId = trimText(req.body.publicId) ? normalizePublicId(req.body.publicId) : undefined;
     const session = await mongoose.startSession();
     let createdBorrowingId = '';
 
@@ -520,19 +552,22 @@ export const receiveBorrowingBatchByQr = async (req: Request, res: Response, nex
         await session.withTransaction(async () => {
             const batch = await BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } }).session(session);
             if (!batch) throw new NotFoundError('Khong tim thay lo muon / thue');
-            if (!batch.qrBatchId) throw new BadRequestError('Lo nay chua co lo tem QR tam');
+            if (publicId && !batch.qrBatchId) throw new BadRequestError('Lo nay chua co lo tem QR tam');
             if (batch.status === 'returned' || batch.status === 'cancelled') {
                 throw new BadRequestError('Lo muon / thue nay da dong, khong the nhan them may');
             }
 
-            const label = await QrLabel.findOne({ publicId, isDeleted: { $ne: true } }).session(session);
-            if (!label) throw new NotFoundError('Khong tim thay tem QR');
-            if (label.type !== QR_LABEL_TYPE.MACHINE) throw new BadRequestError('Tem QR nay khong phai tem may');
-            if (String(label.batchId || '') !== String(batch.qrBatchId)) {
-                throw new BadRequestError('Tem QR nay khong thuoc lo muon / thue dang thao tac');
-            }
-            if (label.status !== QR_LABEL_STATUS.UNUSED || label.assetId) {
-                throw new BadRequestError('Tem QR nay da duoc kich hoat hoac khong con kha dung');
+            let label = null;
+            if (publicId) {
+                label = await QrLabel.findOne({ publicId, isDeleted: { $ne: true } }).session(session);
+                if (!label) throw new NotFoundError('Khong tim thay tem QR');
+                if (label.type !== QR_LABEL_TYPE.MACHINE) throw new BadRequestError('Tem QR nay khong phai tem may');
+                if (String(label.batchId || '') !== String(batch.qrBatchId)) {
+                    throw new BadRequestError('Tem QR nay khong thuoc lo muon / thue dang thao tac');
+                }
+                if (label.status !== QR_LABEL_STATUS.UNUSED || label.assetId) {
+                    throw new BadRequestError('Tem QR nay da duoc kich hoat hoac khong con kha dung');
+                }
             }
 
             const assetPayload = req.body.asset;
@@ -569,24 +604,26 @@ export const receiveBorrowingBatchByQr = async (req: Request, res: Response, nex
                 { session }
             );
 
-            await QrLabel.updateOne(
-                { _id: label._id, status: QR_LABEL_STATUS.UNUSED, isDeleted: { $ne: true } },
-                {
-                    status: QR_LABEL_STATUS.ASSIGNED,
-                    assetId: asset._id,
-                    activatedAt: new Date(),
-                    activatedBy: userId,
-                    updatedBy: userId,
-                },
-                { session }
-            );
+            if (label) {
+                await QrLabel.updateOne(
+                    { _id: label._id, status: QR_LABEL_STATUS.UNUSED, isDeleted: { $ne: true } },
+                    {
+                        status: QR_LABEL_STATUS.ASSIGNED,
+                        assetId: asset._id,
+                        activatedAt: new Date(),
+                        activatedBy: userId,
+                        updatedBy: userId,
+                    },
+                    { session }
+                );
+            }
 
             const [borrowing] = await Borrowing.create(
                 [
                     {
                         assetId: asset._id,
                         batchId: batch._id,
-                        qrLabelId: label._id,
+                        qrLabelId: label?._id,
                         type: batch.type,
                         partnerName: batch.partnerName,
                         partnerMachineCode: trimText(req.body.partnerMachineCode),
@@ -614,7 +651,13 @@ export const receiveBorrowingBatchByQr = async (req: Request, res: Response, nex
     const item = await borrowingRepository.findById(createdBorrowingId);
     if (!item) throw new NotFoundError('Khong tim thay giao dich vua tao');
 
-    return sendSerializedItem(res, item, serializeBorrowing, 'Da nhan may vao lo bang QR', StatusCodes.CREATED);
+    return sendSerializedItem(
+        res,
+        item,
+        serializeBorrowing,
+        publicId ? 'Da nhan may vao lo bang QR' : 'Da nhan may khong tem vao lo',
+        StatusCodes.CREATED
+    );
 };
 
 export const bulkReturnBorrowingBatch = async (req: Request, res: Response, next: NextFunction) => {
@@ -623,7 +666,7 @@ export const bulkReturnBorrowingBatch = async (req: Request, res: Response, next
     const returnTime = req.body.returnTime;
     const items = req.body.items as Array<{
         borrowingId: string;
-        qrReturnAction: string;
+        qrReturnAction?: string;
         returnCondition?: string;
         returnNote?: string;
         qrReturnNote?: string;
@@ -654,8 +697,12 @@ export const bulkReturnBorrowingBatch = async (req: Request, res: Response, next
                 const payload = itemById.get(String(borrowing._id));
                 if (!payload) continue;
 
-                const qrStatus = getQrRetiredStatus(payload.qrReturnAction);
-                const qrRemoved = payload.qrReturnAction === 'removed';
+                // May nhan khong tem thi khong co QR de xu ly — bo qua toan bo buoc tem
+                const hasLabel = Boolean(borrowing.qrLabelId);
+                if (hasLabel && !payload.qrReturnAction) {
+                    throw new BadRequestError('May co tem QR tam can chon trang thai xu ly tem khi tra');
+                }
+                const qrRemoved = hasLabel && payload.qrReturnAction === 'removed';
 
                 await Borrowing.updateOne(
                     { _id: borrowing._id, status: 'active', isDeleted: { $ne: true } },
@@ -666,8 +713,8 @@ export const bulkReturnBorrowingBatch = async (req: Request, res: Response, next
                         returnedBy: userId,
                         returnedInBatchAt: new Date(),
                         returnCondition: trimText(payload.returnCondition),
-                        qrReturnAction: payload.qrReturnAction,
-                        qrReturnNote: trimText(payload.qrReturnNote),
+                        qrReturnAction: hasLabel ? payload.qrReturnAction : undefined,
+                        qrReturnNote: hasLabel ? trimText(payload.qrReturnNote) : undefined,
                         qrRemovedAt: qrRemoved ? new Date() : undefined,
                         qrRemovedBy: qrRemoved ? userId : undefined,
                     },
@@ -690,11 +737,11 @@ export const bulkReturnBorrowingBatch = async (req: Request, res: Response, next
                     { session }
                 );
 
-                if (borrowing.qrLabelId) {
+                if (borrowing.qrLabelId && payload.qrReturnAction) {
                     await QrLabel.updateOne(
                         { _id: borrowing.qrLabelId, isDeleted: { $ne: true } },
                         {
-                            status: qrStatus,
+                            status: getQrRetiredStatus(payload.qrReturnAction),
                             retiredAt: new Date(),
                             retiredBy: userId,
                             retiredReason: buildQrRetiredReason(

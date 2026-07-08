@@ -30,6 +30,10 @@ export const getBorrowingBatchById = asyncHandler(async (req: Request, res: Resp
     return await borrowingService.getBorrowingBatchById(req, res, next);
 });
 
+export const updateBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.updateBorrowingBatch(req, res, next);
+});
+
 export const createBorrowingBatchQr = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await borrowingService.createBorrowingBatchQr(req, res, next);
 });

@@ -86,7 +86,8 @@ export const returnBorrowingSchema = z.object({
 
 export const createBorrowingBatchSchema = z.object({
     type: externalTransactionTypeSchema,
-    partnerName: zRequiredString('Doi tac'),
+    // Optional de ho tro ra soat thuc te: chua biet may cua ai van ghi nhan duoc, bo sung sau
+    partnerName: zOptionalString(),
     contractNo: zOptionalString(),
     plantId: zObjectId('Co so'),
     area: zOptionalString(),
@@ -97,12 +98,22 @@ export const createBorrowingBatchSchema = z.object({
     createQrBatch: z.boolean().optional(),
 });
 
+// Bo sung thong tin lo sau khi ra soat (doi tac, hop dong, han tra...)
+export const updateBorrowingBatchSchema = z.object({
+    partnerName: zOptionalString(),
+    contractNo: zOptionalString(),
+    area: zOptionalString(),
+    expectedReturnTime: zOptionalString(),
+    note: zOptionalString(),
+});
+
 export const createBorrowingBatchQrSchema = z.object({
     quantity: zRequiredNumber('So luong tem', 1, 3000).int().optional(),
 });
 
 export const receiveBorrowingBatchByQrSchema = z.object({
-    publicId: zRequiredString('Ma QR'),
+    // Bo trong = nhan may KHONG dan tem (khong duoc dan/danh dau len may khach)
+    publicId: zOptionalString(),
     asset: borrowingBatchAssetSchema,
     partnerMachineCode: zOptionalString(),
     receiveCondition: zOptionalString(),
@@ -116,7 +127,8 @@ export const bulkReturnBorrowingBatchSchema = z.object({
         .array(
             z.object({
                 borrowingId: zObjectId('Giao dich'),
-                qrReturnAction: qrReturnActionSchema,
+                // Optional vi may nhan khong tem thi khong co QR de xu ly; service van bat buoc khi may co tem
+                qrReturnAction: qrReturnActionSchema.optional(),
                 returnCondition: zOptionalString(),
                 returnNote: zOptionalString(),
                 qrReturnNote: zOptionalString(),
