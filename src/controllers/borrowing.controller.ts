@@ -34,6 +34,14 @@ export const updateBorrowingBatch = asyncHandler(async (req: Request, res: Respo
     return await borrowingService.updateBorrowingBatch(req, res, next);
 });
 
+export const getBorrowingBatchStats = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.getBorrowingBatchStats(req, res, next);
+});
+
+export const exportBorrowingBatchHandover = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.exportBorrowingBatchHandover(req, res, next);
+});
+
 export const createBorrowingBatchQr = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await borrowingService.createBorrowingBatchQr(req, res, next);
 });

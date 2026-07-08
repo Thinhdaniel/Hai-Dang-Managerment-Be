@@ -10,6 +10,7 @@ import QrLabel from '@/models/QrLabel';
 import QrLabelBatch from '@/models/QrLabelBatch';
 import Transfer from '@/models/Transfer';
 import { borrowingRepository } from '@/repositories/borrowing.repository';
+import { generateBorrowingHandoverXlsx } from '@/utils/generateBorrowingHandoverXlsx';
 import { getPagination } from '@/utils/pagination';
 import { serializeBorrowing, serializeBorrowingBatch } from '@/utils/serializers';
 import {
@@ -480,6 +481,92 @@ export const getBorrowingBatchById = async (req: Request, res: Response, next: N
         },
         'Lay chi tiet lo muon / thue thanh cong'
     );
+};
+
+const OPEN_BATCH_STATUSES = ['draft', 'receiving', 'active', 'partially_returned'];
+
+// Tong quan may muon/thue: dem may dang giu theo doi tac + tinh trang lo (qua han, thieu thong tin)
+export const getBorrowingBatchStats = async (req: Request, res: Response, next: NextFunction) => {
+    const now = new Date();
+    const [openBatches, byPartner] = await Promise.all([
+        BorrowingBatch.find({ isDeleted: { $ne: true }, status: { $in: OPEN_BATCH_STATUSES } })
+            .select('code partnerName expectedReturnTime status')
+            .lean(),
+        // Gom ca giao dich le lan giao dich trong lo — mien la may ngoai dang active
+        Borrowing.aggregate([
+            { $match: { isDeleted: { $ne: true }, status: 'active', type: { $in: ['external', 'rental'] } } },
+            {
+                $group: {
+                    _id: { $ifNull: ['$partnerName', 'Chưa xác định'] },
+                    machines: { $sum: 1 },
+                    nearestDue: { $min: '$expectedReturnTime' },
+                    overdue: {
+                        $sum: {
+                            $cond: [
+                                {
+                                    $and: [
+                                        { $ne: ['$expectedReturnTime', null] },
+                                        { $lt: ['$expectedReturnTime', now] },
+                                    ],
+                                },
+                                1,
+                                0,
+                            ],
+                        },
+                    },
+                },
+            },
+            { $sort: { machines: -1 } },
+        ]),
+    ]);
+
+    const overdueBatches = openBatches.filter(
+        (batch) => batch.expectedReturnTime && new Date(batch.expectedReturnTime) < now
+    );
+    const needsInfoBatches = openBatches.filter(
+        (batch) => batch.partnerName === 'Chưa xác định' || !batch.expectedReturnTime
+    );
+
+    return sendSuccess(
+        res,
+        {
+            activeMachines: byPartner.reduce((sum, row) => sum + row.machines, 0),
+            partnerCount: byPartner.length,
+            openBatches: openBatches.length,
+            overdueBatches: overdueBatches.length,
+            needsInfoBatches: needsInfoBatches.length,
+            byPartner: byPartner.map((row) => ({
+                partnerName: row._id,
+                machines: row.machines,
+                nearestDue: row.nearestDue ?? null,
+                overdue: row.overdue,
+            })),
+        },
+        'Lay tong quan may muon / thue thanh cong'
+    );
+};
+
+// Xuat bien ban ban giao may muon/thue de in ky 2 ben
+export const exportBorrowingBatchHandover = async (req: Request, res: Response, next: NextFunction) => {
+    const batchId = getParamValue(req.params.id);
+    const batch = await applyPopulate(
+        BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } }),
+        WORKFLOW_POPULATE.borrowingBatch
+    );
+    if (!batch) throw new NotFoundError('Khong tim thay lo muon / thue');
+
+    const [enrichedBatch] = await enrichBorrowingBatches([batch]);
+    const items = await borrowingRepository.findByBatchId(batchId);
+
+    const buffer = await generateBorrowingHandoverXlsx({
+        batch: serializeBorrowingBatch(enrichedBatch),
+        items: items.map(serializeBorrowing),
+    });
+
+    const filename = `BienBan-${String(enrichedBatch?.code || batchId).replace(/[^A-Za-z0-9-]/g, '')}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(StatusCodes.OK).send(buffer);
 };
 
 // Bo sung / sua thong tin lo sau khi ra soat (doi tac chua ro, han tra, so hop dong...)

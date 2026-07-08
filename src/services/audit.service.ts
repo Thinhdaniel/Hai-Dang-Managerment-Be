@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { CronJob } from 'cron';
-import { format, subDays } from 'date-fns';
+import { addDays, differenceInCalendarDays, format, subDays } from 'date-fns';
 import { z } from 'zod';
 import Asset from '@/models/Asset';
+import BorrowingBatch from '@/models/BorrowingBatch';
 import QrLabel from '@/models/QrLabel';
 import Transfer from '@/models/Transfer';
 import AssetDisposalItem from '@/models/AssetDisposalItem';
@@ -100,6 +101,57 @@ const checkDuplicateIdentity = async (): Promise<AuditFinding[]> => {
                 title: `${row.count} máy trùng ${label} "${row._id}"`,
                 detail: `Các máy ${row.codes.filter(Boolean).join(', ')} đang dùng chung ${label} — dễ tra cứu/quét nhầm hồ sơ.`,
                 refs: row.codes.filter(Boolean),
+            });
+        }
+    }
+    return findings;
+};
+
+// Máy mượn/thuê của đối tác: quá hạn trả, sắp đến hạn, hoặc lô còn nợ thông tin sau rà soát.
+const checkBorrowingDues = async (): Promise<AuditFinding[]> => {
+    const findings: AuditFinding[] = [];
+    const now = new Date();
+    const openBatches = await BorrowingBatch.find({
+        isDeleted: { $ne: true },
+        status: { $in: ['draft', 'receiving', 'active', 'partially_returned'] },
+    })
+        .select('code partnerName expectedReturnTime')
+        .limit(100)
+        .lean();
+
+    for (const batch of openBatches) {
+        const partner = batch.partnerName || 'Chưa xác định';
+        const due = batch.expectedReturnTime ? new Date(batch.expectedReturnTime) : null;
+
+        if (due && due < now) {
+            const daysOver = differenceInCalendarDays(now, due);
+            findings.push({
+                code: 'borrowing_overdue',
+                source: 'rule',
+                severity: daysOver > 30 ? 'critical' : 'warning',
+                title: `Lô mượn/thuê ${batch.code} (${partner}) quá hạn trả ${daysOver} ngày`,
+                detail: `Hạn trả ${format(due, 'dd/MM/yyyy')} đã qua mà lô chưa đóng. Liên hệ đối tác gia hạn hoặc trả máy, rồi cập nhật hạn mới vào lô.`,
+                refs: [batch.code],
+            });
+        } else if (due && due < addDays(now, 7)) {
+            findings.push({
+                code: 'borrowing_due_soon',
+                source: 'rule',
+                severity: 'info',
+                title: `Lô mượn/thuê ${batch.code} (${partner}) đến hạn trả trong ${Math.max(differenceInCalendarDays(due, now), 0)} ngày`,
+                detail: `Hạn trả ${format(due, 'dd/MM/yyyy')} — chuẩn bị trả máy hoặc đàm phán gia hạn trước hạn.`,
+                refs: [batch.code],
+            });
+        }
+
+        if (partner === 'Chưa xác định' || !due) {
+            findings.push({
+                code: 'borrowing_missing_info',
+                source: 'rule',
+                severity: 'info',
+                title: `Lô mượn/thuê ${batch.code} còn thiếu thông tin`,
+                detail: `${partner === 'Chưa xác định' ? 'Chưa rõ đối tác. ' : ''}${!due ? 'Chưa có hạn trả dự kiến. ' : ''}Vào lô → "Sửa thông tin lô" để bổ sung.`,
+                refs: [batch.code],
             });
         }
     }
@@ -317,6 +369,7 @@ export const runAudit = async (trigger: 'cron' | 'manual', generatedBy?: string)
     const checks = await Promise.all([
         checkMultiLabelAssets(),
         checkDuplicateIdentity(),
+        checkBorrowingDues(),
         checkStaleTransfers(),
         checkDisposalMismatch(),
         checkNegativeStock(),

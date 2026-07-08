@@ -20,6 +20,14 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/batches', authorize(...ROLE_GROUPS.MANAGEMENT), borrowingController.getAllBorrowingBatches);
+// Dat truoc '/batches/:id' de 'stats' khong bi validateObjectId chan
+router.get('/batches/stats', authorize(...ROLE_GROUPS.MANAGEMENT), borrowingController.getBorrowingBatchStats);
+router.get(
+    '/batches/:id/export-xlsx',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    borrowingController.exportBorrowingBatchHandover
+);
 router.post(
     '/batches',
     authorize(...ROLE_GROUPS.MANAGEMENT),
