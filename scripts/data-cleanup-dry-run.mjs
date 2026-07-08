@@ -303,8 +303,12 @@ Trả JSON: {"groups":[[i,i,...],...]} — mỗi group là mảng chỉ số i c
             if (tb !== ta) return tb - ta;
             return new Date(materials[a].createdAt || 0) - new Date(materials[b].createdAt || 0);
         });
+        const keepMat = materials[sorted[0]];
         for (const [rank, i] of sorted.entries()) {
             const m = materials[i];
+            // Chỉ tự tick x khi tên chuẩn hóa GIỐNG HỆT bản giữ (trùng thuần do gõ hoa/thường/dấu).
+            // AI hay gộp ẩu kim khác cỡ / model khác nhau — mấy ca đó bắt buộc người duyệt tay.
+            const safeDup = normName(m.name) === normName(keepMat.name);
             materialRows.push({
                 group: groupNo,
                 action: rank === 0 ? 'GIỮ' : 'GỘP',
@@ -314,7 +318,7 @@ Trả JSON: {"groups":[[i,i,...],...]} — mỗi group là mảng chỉ số i c
                 unit: m.unit,
                 stock: stockOf.get(String(m._id)) || 0,
                 tx: txOf.get(String(m._id)) || 0,
-                approve: rank === 0 ? '' : 'x',
+                approve: rank === 0 ? '' : safeDup ? 'x' : '',
             });
         }
     }
