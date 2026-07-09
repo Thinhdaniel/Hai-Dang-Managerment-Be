@@ -36,6 +36,7 @@ import telegramRoutes from './telegram.route';
 import internalRoutes from './internal.route';
 import stocktakeRoutes from './stocktake.route';
 import floorMapRoutes from './floor-map.route';
+import luckyWheelRoutes from './lucky-wheel.route';
 
 const router = Router();
 
@@ -75,5 +76,6 @@ router.use('/telegram', telegramRoutes);
 router.use('/internal', internalRoutes);
 router.use('/stocktakes', stocktakeRoutes);
 router.use('/floor-map', floorMapRoutes);
+router.use('/lucky-wheel', luckyWheelRoutes);
 
 export default router;
