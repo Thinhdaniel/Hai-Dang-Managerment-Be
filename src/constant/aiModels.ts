@@ -80,7 +80,7 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     analytics: ['kr/claude-haiku-4.5', 'bb/claude-sonnet-4.6'], // chart-spec JSON từ danh mục cho sẵn
     'incident-replay': ['kr/claude-haiku-4.5', 'gc/gemini-2.5-flash', 'bb/claude-sonnet-4.6'],
     help: ['kr/claude-sonnet-4.5', 'bb/gpt-5.4'],
-    digest: ['gc/gemini-2.5-pro', 'bb/gpt-5.5'], // bản tin giám đốc: chất lượng cao, chạy ít
+    digest: ['gc/gemini-2.5-pro', 'kr/claude-sonnet-4.5-agentic', 'bb/gpt-5.5'], // bản tin giám đốc: chất lượng cao, chạy ít
     variance: ['kr/claude-haiku-4.5', 'bb/deepseek-v4-flash'],
     audit: ['gc/gemini-2.5-pro', 'kr/claude-sonnet-4.5-agentic'], // kiểm toán đêm: dự phòng khi Vertex lỗi
 };

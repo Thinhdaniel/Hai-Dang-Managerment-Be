@@ -180,7 +180,10 @@ export const generateDigest = async (type: PeriodType, generatedBy?: string) => 
         const ai = await aiProviderService.generateJson<unknown>({
             feature: AI_FEATURES.DIGEST,
             temperature: 0.3,
-            maxTokens: 1000,
+            // gemini-2.5-pro là model thinking: reasoning trừ vào max_tokens (effort low vẫn ~600-900
+            // token) — budget nhỏ sẽ cắt cụt JSON và rơi về fallback (xem ai-ocr.service).
+            reasoningEffort: 'low',
+            maxTokens: 4000,
             messages: [
                 { role: 'system', content: DIGEST_SYSTEM },
                 { role: 'user', content: JSON.stringify(snapshot) },
@@ -193,8 +196,9 @@ export const generateDigest = async (type: PeriodType, generatedBy?: string) => 
         recommendations = parsed.recommendations;
         provider = ai.provider;
         model = ai.model;
-    } catch {
+    } catch (error) {
         // AI lỗi -> giữ narrative fallback từ số liệu thật.
+        console.warn('[Digest] AI lỗi, dùng fallback số liệu:', error instanceof Error ? error.message : error);
     }
 
     const { periodKey, periodLabel, rangeStart, rangeEnd, ...metrics } = snapshot;
