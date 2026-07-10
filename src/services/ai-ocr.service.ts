@@ -1,11 +1,16 @@
 import { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import { v2 as cloudinary, type UploadApiResponse } from 'cloudinary';
+import streamifier from 'streamifier';
+import cloudinaryConfig from '@/config/cloudinary.config';
 import { BadRequestError } from '@/errors/customError';
 import { AI_FEATURES } from '@/constant/aiModels';
 import config from '@/config/env.config';
 import { aiProviderService, type AiGenerateTextOptions } from '@/services/ai/ai-provider.service';
 import { vertexProviderService } from '@/services/ai/vertex-provider.service';
 import customResponse from '@/utils/response';
+
+cloudinary.config(cloudinaryConfig);
 
 // OCR ảnh hóa đơn/phiếu mua vật tư -> trích dòng có cấu trúc để điền sẵn đơn mua.
 // Dùng model VISION (gc/gemini-2.5-flash) qua 9router. Ảnh nằm trong RAM (multer memory),
@@ -352,4 +357,115 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
             })
         );
     }
+};
+
+// ===== OCR tem thông số máy (nameplate) =====
+// Chụp 2-3 ảnh tem/nhãn trên thân máy -> trích nhãn hiệu, model, serial (+ gợi ý tên) để điền
+// sẵn form nhận máy mượn/thêm máy. Ảnh đồng thời được upload Cloudinary để user chọn 1 ảnh
+// lưu vào hồ sơ máy — vì vậy khác các OCR trên, ảnh ở đây CÓ lưu trữ.
+
+const uploadMachineImage = (file: Express.Multer.File): Promise<{ url: string }> =>
+    new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+            {
+                folder: 'hai-dang/assets/machines',
+                resource_type: 'image',
+                tags: ['machine-label'],
+            },
+            (error, result?: UploadApiResponse) => {
+                if (error || !result) {
+                    reject(error || new Error('Upload anh may that bai'));
+                    return;
+                }
+                resolve({ url: result.secure_url });
+            }
+        );
+        streamifier.createReadStream(file.buffer).pipe(uploadStream);
+    });
+
+const buildMachineLabelPrompt = () =>
+    [
+        'Cac anh sau chup TEM THONG SO (nameplate) va than mot may may cong nghiep (hoac may moc nha xuong).',
+        'Trich thong tin dinh danh may. Cac nhan hieu pho bien: JUKI, BROTHER, PEGASUS, SIRUBA, KANSAI, YAMATO, KINGTEX, SUNSTAR, ZOJE, JACK, TYPICAL, HIKARI, MAQI, KWANGSUNG...',
+        'Quy tac:',
+        '- brand: ten nhan hieu in lon nhat tren tem/than may. Chi ten hang, khong kem model.',
+        '- model: ma model (thuong ghi MODEL/TYPE/STYLE tren tem, vd DDL-8100e, M700, W500).',
+        '- serial: so serial (thuong ghi SERIAL NO / SER.NO / S/N / NO.). Doc CHINH XAC tung ky tu, khong doan.',
+        '- name: goi y ten may tieng Viet ngan gon theo chuc nang neu nhan ra duoc (vd "May 1 kim", "May vat so 4 chi", "May tran de"). Khong chac thi de null.',
+        '- Khong thay ro truong nao thi de null, TUYET DOI khong bia.',
+        'Tra ve DUY NHAT JSON: {"brand": string|null, "model": string|null, "serial": string|null, "name": string|null}',
+    ].join('\n');
+
+export const scanMachineLabel = async (req: Request, res: Response) => {
+    const files = (req.files as Express.Multer.File[]) || [];
+    if (!files.length || !files.every((file) => file.buffer?.length)) {
+        throw new BadRequestError('Chưa có ảnh máy để đọc');
+    }
+
+    // Upload ảnh song song với việc gọi AI — ảnh luôn được lưu kể cả khi AI đọc lỗi,
+    // để user vẫn chọn được ảnh đại diện và tự điền tay.
+    const uploadPromise = Promise.all(files.map((file) => uploadMachineImage(file)));
+
+    const imageContents = files.map((file) => ({
+        type: 'image_url' as const,
+        image_url: { url: `data:${file.mimetype};base64,${file.buffer.toString('base64')}` },
+    }));
+
+    const attempt = async (model?: string) => {
+        const aiResult = await generateOcrJson<any>({
+            feature: AI_FEATURES.OCR_MACHINE_LABEL,
+            model,
+            temperature: 0.05,
+            // reasoning 'low' + maxTokens dư: tránh bẫy thinking cắt cụt JSON (xem scanPurchaseInvoice).
+            reasoningEffort: 'low',
+            maxTokens: 8000,
+            timeoutMs: 75000,
+            messages: [
+                {
+                    role: 'system',
+                    content:
+                        'Ban doc tem thong so may moc tu anh va trich JSON. Uu tien chinh xac, khong bia du lieu. Chi tra JSON.',
+                },
+                {
+                    role: 'user',
+                    content: [{ type: 'text', text: buildMachineLabelPrompt() }, ...imageContents],
+                },
+            ],
+        });
+        const fields = {
+            brand: cleanText(aiResult.data?.brand),
+            model: cleanText(aiResult.data?.model),
+            serial: cleanText(aiResult.data?.serial),
+            name: cleanText(aiResult.data?.name),
+        };
+        if (!fields.brand && !fields.model && !fields.serial) throw new Error('OCR returned no machine fields');
+        return { aiResult, fields };
+    };
+
+    let ocr: Awaited<ReturnType<typeof attempt>> | null = null;
+    try {
+        ocr = await runOcrWithRetry(attempt, OCR_PRIMARY_VISION_MODEL);
+    } catch (error) {
+        console.warn('[ai-ocr] machine label OCR fallback:', error instanceof Error ? error.message : error);
+    }
+
+    const images = await uploadPromise;
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: {
+                fields: ocr?.fields ?? {},
+                images,
+                available: Boolean(ocr),
+                provider: ocr?.aiResult.provider,
+                model: ocr?.aiResult.model,
+                latencyMs: ocr?.aiResult.latencyMs,
+            },
+            message: ocr
+                ? 'Đã đọc thông tin máy từ ảnh'
+                : 'Chưa đọc được tem máy — ảnh đã lưu, bạn điền tay giúp nhé. Chụp sát tem, đủ sáng rồi thử lại.',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
 };
