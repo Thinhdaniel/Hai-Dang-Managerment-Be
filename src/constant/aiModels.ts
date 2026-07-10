@@ -25,6 +25,7 @@ export const AI_FEATURES = {
     OCR_PURCHASE_RECEIPT: 'ocr-purchase-receipt', // OCR ảnh phiếu giao hàng/nhận hàng NCC -> đối soát đơn đặt (vision, JSON)
     OCR_PURCHASE_RECEIPT_VERIFY: 'ocr-purchase-receipt-verify', // Lần đọc 2 độc lập (model khác dòng) để đối chiếu chéo
     OCR_MACHINE_LABEL: 'ocr-machine-label', // OCR ảnh tem thông số máy -> nhãn hiệu/model/serial (vision, JSON)
+    PURCHASE_QUOTE_TEXT: 'purchase-quote-text', // Dán tin nhắn báo giá NCC (text) -> trích dòng vật tư
     APPROVAL_REVIEW: 'approval-review', // Rà soát phiếu mua trước khi duyệt (tóm tắt cảnh báo)
     ANALYTICS: 'analytics', // NL -> chart-spec cho AI Analytics Studio (JSON, cần ổn định)
     INCIDENT_REPLAY: 'incident-replay', // Điều tra bất thường vận hành từ timeline/sự kiện thật
@@ -82,6 +83,7 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     // Lần đọc 2 dùng model KHÁC DÒNG với lần 1 để lỗi không tương quan (bake-off đã xác nhận bb/gpt-5.5 đọc ảnh tốt)
     'ocr-purchase-receipt-verify': ['gc/gemini-2.5-pro', 'bb/gpt-5.5'],
     'ocr-machine-label': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
+    'purchase-quote-text': ['kr/claude-haiku-4.5', 'gc/gemini-2.5-flash'], // text thuần, không cần vision
     'approval-review': ['kr/claude-haiku-4.5', 'bb/gpt-5.4'],
     analytics: ['kr/claude-haiku-4.5', 'bb/claude-sonnet-4.6'], // chart-spec JSON từ danh mục cho sẵn
     'incident-replay': ['kr/claude-haiku-4.5', 'gc/gemini-2.5-flash', 'bb/claude-sonnet-4.6'],

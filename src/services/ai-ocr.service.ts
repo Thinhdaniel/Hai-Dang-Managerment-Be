@@ -244,9 +244,14 @@ const buildPrompt = () =>
         'Cot 4 "Nguoi de xuat" la TEN NGUOI (vd "A Tuan CK","Quyen","Nhung","Long") — dung nham voi ten co so/NCC.',
         'PHAN BIET 2 cot so luong: cot 5 "So luong can" -> quantityRequested; cot 7 "So luong (mua)" (gan don gia, khop thanh tien) -> quantity.',
         'vatRate = phan tram thue (vd 8, 10), KHONG phai tien thue. Neu o VAT TRONG hoac gach "-" (hang khong chiu thue) thi vatRate = 0 (KHONG de null).',
-        'Neu anh KHONG theo mau tren (hoa don NCC ngoai, layout khac) thi map theo TIEU DE COT / y nghia tung cot.',
-        'So tien/so luong tra ve SO thuan, KHONG dau phan cach nghin (vd "2.559.600" -> 2559600, "12,5" -> 12.5). Ngay tra ISO YYYY-MM-DD (vd 23/6/2026 -> 2026-06-23).',
-        'materialName giu nguyen ten hang nhu tren phieu. Bo qua dong tong cong/thanh tien tong/chu ky.',
+        'NEU anh la BAO GIA / HOA DON / PHIEU GIAO HANG do NHA CUNG CAP phat hanh (thuong co logo + ten cong ty + dia chi/Tel/MST o DAU TRANG, tieu de "BAO GIA"/"HOA DON"/"PHIEU GIAO HANG", bang don gian STT/Ten hang/DVT/So luong/Don gia/Thanh tien):',
+        '  - header.supplierName = TEN CONG TY PHAT HANH o dau trang (letterhead). Vd "CONG TY TNHH PHON THINH - TAE GWANG" -> supplierName "Phon Thinh - Tae Gwang".',
+        '  - Dong "KINH GUI: ..." la BEN MUA (cong ty minh: Hai Dang / May Phu Son...) — TUYET DOI KHONG dien vao supplierName.',
+        '  - Cot "So luong" duy nhat -> quantity (khop don gia x thanh tien). Ap dung supplierName cua header cho moi dong.',
+        'Neu anh layout khac nua thi map theo TIEU DE COT / y nghia tung cot.',
+        'So tien/so luong tra ve SO thuan, KHONG dau phan cach nghin (vd "2.559.600" -> 2559600, "12,5" -> 12.5; "100,00" -> 100). Ngay tra ISO YYYY-MM-DD (vd 23/6/2026 -> 2026-06-23).',
+        'TIENG VIET PHAI DU DAU: moi text tra ve (ten hang, ten cong ty, ghi chu) viet tieng Viet CO DAU day du. Neu chu tren anh mo/mat dau, KHOI PHUC dau theo tu vung nganh may thong dung (vd "ong nhua"->"ống nhựa", "mo duoi vat so"->"mỏ dưới vắt sổ", "chi"->"chỉ", "dau may"->"dầu máy"). CON SO thi nguoc lai: mo/khong ro -> de null, KHONG doan.',
+        'materialName giu nguyen ten hang nhu tren phieu (kem quy cach kich thuoc neu ghi lien). Bo qua dong tong cong/tien thue/tong cong TT/chu ky/loi chao.',
         'Output schema (chi JSON):',
         '{"header":{"supplierName":null,"invoiceNo":null,"invoiceDate":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"quantity":null,"unitPrice":null,"vatRate":null,"plantName":null,"proposedBy":null,"supplierName":null,"purpose":null,"note":null,"orderDate":null,"receivedDate":null}]}',
     ].join('\n');
@@ -646,4 +651,83 @@ export const scanMachineLabel = async (req: Request, res: Response) => {
             success: true,
         })
     );
+};
+
+// ===== Dán tin nhắn báo giá (text thuần, không ảnh) =====
+// NCC nhiều khi chỉ nhắn Zalo/tin nhắn báo giá chứ không có phiếu để chụp — dán nguyên
+// tin nhắn vào, AI trích dòng vật tư theo cùng schema với OCR ảnh để FE đổ vào form y hệt.
+
+const buildQuoteTextPrompt = () =>
+    [
+        'Ban trich thong tin MUA VAT TU tu tin nhan bao gia (Zalo/SMS) cua nha cung cap gui cho cong ty may.',
+        'Tin nhan la van xuoi tu do: ten hang + quy cach + gia, co the viet tat, thieu dau, xuong dong tuy y.',
+        'Chi tra ve JSON hop le, khong markdown. TUYET DOI khong bia: truong nao khong co thi de null.',
+        'Quy tac doc gia tien viet tat: "6.5k"/"6k5" -> 6500; "35k" -> 35000; "1tr2"/"1.2tr" -> 1200000; "65 nghin" -> 65000. Gia thuong la DON GIA 1 don vi.',
+        'So luong: "100m" -> quantity 100 unit "Mét"; "20 chiec"/"20c" -> 20 "Chiếc"; "5 cuon" -> 5 "Cuộn". Khong ghi so luong thi quantity null.',
+        'Neu tin nhan co ten cong ty/nguoi ban -> header.supplierName. Cong ty MINH (Hai Dang, May Phu Son...) KHONG phai supplier.',
+        'TIENG VIET PHAI DU DAU: ten hang tra ve viet day du dau (vd "ong nhua pu" -> "Ống nhựa PU", "mo duoi vat so" -> "Mỏ dưới vắt sổ").',
+        'Bo qua loi chao hoi, cam on, thong tin giao hang chung chung.',
+        'Output schema (chi JSON):',
+        '{"header":{"supplierName":null,"invoiceNo":null,"invoiceDate":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"quantity":null,"unitPrice":null,"vatRate":null,"supplierName":null,"purpose":null,"note":null}]}',
+    ].join('\n');
+
+export const parsePurchaseQuoteText = async (req: Request, res: Response) => {
+    const text = String(req.body?.text ?? '').trim();
+    if (text.length < 10) {
+        throw new BadRequestError('Dan noi dung tin nhan bao gia (it nhat vai dong) roi thu lai');
+    }
+
+    try {
+        const aiResult = await aiProviderService.generateJson<any>({
+            feature: AI_FEATURES.PURCHASE_QUOTE_TEXT,
+            temperature: 0.05,
+            reasoningEffort: 'low',
+            maxTokens: 8000,
+            timeoutMs: 60000,
+            messages: [
+                {
+                    role: 'system',
+                    content:
+                        'Ban trich du lieu mua vat tu tu tin nhan bao gia thanh JSON. Uu tien chinh xac, khong bia so lieu. Chi tra JSON.',
+                },
+                { role: 'user', content: `${buildQuoteTextPrompt()}\n\n----- TIN NHAN -----\n${text.slice(0, 8000)}` },
+            ],
+        });
+
+        const items = normalizeItems(aiResult.data);
+        const header = {
+            supplierName: cleanText(aiResult.data?.header?.supplierName),
+            invoiceNo: cleanText(aiResult.data?.header?.invoiceNo),
+            invoiceDate: cleanText(aiResult.data?.header?.invoiceDate),
+        };
+
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: {
+                    header,
+                    items,
+                    count: items.length,
+                    available: true,
+                    usedFallback: false,
+                    // Nguồn là text gõ tay nên không có khái niệm "đọc lệch" — không chạy lần 2.
+                    provider: aiResult.provider,
+                    model: aiResult.model,
+                    latencyMs: aiResult.latencyMs,
+                },
+                message: `Đã đọc ${items.length} dòng vật tư từ tin nhắn`,
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    } catch (error) {
+        console.warn('[ai-ocr] quote text parse fallback:', error instanceof Error ? error.message : error);
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: { header: {}, items: [], count: 0, available: false, usedFallback: true },
+                message: 'Chưa đọc được tin nhắn báo giá. Kiểm tra nội dung có tên hàng + giá rồi thử lại.',
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    }
 };
