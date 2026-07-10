@@ -5,6 +5,7 @@ import { QR_LABEL_BATCH_STATUS, QR_LABEL_STATUS, QR_LABEL_TYPE } from '@/constan
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
 import Borrowing from '@/models/Borrowing';
+import Brand from '@/models/Brand';
 import BorrowingBatch from '@/models/BorrowingBatch';
 import QrLabel from '@/models/QrLabel';
 import QrLabelBatch from '@/models/QrLabelBatch';
@@ -743,6 +744,117 @@ export const receiveBorrowingBatchByQr = async (req: Request, res: Response, nex
         item,
         serializeBorrowing,
         publicId ? 'Da nhan may vao lo bang QR' : 'Da nhan may khong tem vao lo',
+        StatusCodes.CREATED
+    );
+};
+
+const UNKNOWN_BRAND_NAME = 'Không rõ nhãn hiệu';
+const normalizeBrandNameLocal = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
+
+// May muon doi tac nhan nhanh hang loat thuong khong ro nhan hieu — dung 1 brand dung chung
+// thay vi bat nguoi dung chon tung dong, tranh chan luong nhap lieu hang tram may.
+const getOrCreateUnknownBrandId = async (session?: mongoose.ClientSession) => {
+    const normalizedName = normalizeBrandNameLocal(UNKNOWN_BRAND_NAME);
+    const existing = await Brand.findOne({ normalizedName, isDeleted: { $ne: true } }).session(session ?? null);
+    if (existing) return String(existing._id);
+
+    const [created] = await Brand.create([{ name: UNKNOWN_BRAND_NAME, normalizedName }], { session });
+    return String(created._id);
+};
+
+// Nhan nhanh nhieu may chua tung co tren he thong (vd: sap tra hang loat cho doi tac) — moi dong
+// chi can ten may, khong bat brand/type/model rieng de khong chan luong nhap hang chuc-hang tram dong.
+export const receiveBorrowingBatchBulk = async (req: Request, res: Response, next: NextFunction) => {
+    const batchId = getParamValue(req.params.id);
+    const userId = getUserId(req);
+    const rows: Array<{ name: string; model?: string; serial?: string; partnerMachineCode?: string; note?: string }> =
+        req.body.rows;
+    const receiveCondition = trimText(req.body.receiveCondition);
+    const receiveNote = trimText(req.body.receiveNote);
+
+    const session = await mongoose.startSession();
+
+    try {
+        await session.withTransaction(async () => {
+            const batch = await BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } }).session(session);
+            if (!batch) throw new NotFoundError('Khong tim thay lo muon / thue');
+            if (batch.status === 'returned' || batch.status === 'cancelled') {
+                throw new BadRequestError('Lo muon / thue nay da dong, khong the nhan them may');
+            }
+
+            const brandId = await getOrCreateUnknownBrandId(session);
+            const ownershipType =
+                batch.type === 'rental' ? ASSET_OWNERSHIP_TYPE.RENTAL : ASSET_OWNERSHIP_TYPE.PARTNER_BORROWED;
+
+            // Tuan tu tung dong (khong Promise.all) de tranh sinh trung ma may tam khi tao hang loat
+            // trong cung 1 giao dich.
+            for (const row of rows) {
+                const machineCode = await createUniquePartnerMachineCode(batch.type, session);
+
+                const [asset] = await Asset.create(
+                    [
+                        {
+                            name: row.name,
+                            machineCode,
+                            serial: row.serial,
+                            type: 'Máy mượn đối tác',
+                            model: row.model || undefined,
+                            brandId,
+                            plantId: batch.plantId,
+                            area: batch.area,
+                            note: row.note,
+                            status: ASSET_STATUS.BORROWING,
+                            ownershipType,
+                            createdBy: userId,
+                            updatedBy: userId,
+                        },
+                    ],
+                    { session }
+                );
+
+                await Borrowing.create(
+                    [
+                        {
+                            assetId: asset._id,
+                            batchId: batch._id,
+                            type: batch.type,
+                            partnerName: batch.partnerName,
+                            partnerMachineCode: row.partnerMachineCode,
+                            borrowTime: batch.borrowTime,
+                            expectedReturnTime: batch.expectedReturnTime,
+                            location: batch.area,
+                            purpose: batch.contractNo,
+                            note: trimText(batch.note),
+                            receiveCondition,
+                            receiveNote,
+                            assetStatusBefore: ASSET_STATUS.ACTIVE,
+                            createdBy: userId,
+                        },
+                    ],
+                    { session }
+                );
+            }
+
+            await refreshBorrowingBatchStatus(String(batch._id), session);
+        });
+    } finally {
+        await session.endSession();
+    }
+
+    const populatedBatch = await applyPopulate(
+        BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } }),
+        WORKFLOW_POPULATE.borrowingBatch
+    );
+    const [enrichedBatch] = await enrichBorrowingBatches([populatedBatch]);
+    const items = await borrowingRepository.findByBatchId(batchId);
+
+    return sendSuccess(
+        res,
+        {
+            batch: serializeBorrowingBatch(enrichedBatch),
+            items: items.map(serializeBorrowing),
+        },
+        `Da nhan nhanh ${rows.length} may vao lo`,
         StatusCodes.CREATED
     );
 };

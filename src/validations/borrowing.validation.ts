@@ -120,6 +120,25 @@ export const receiveBorrowingBatchByQrSchema = z.object({
     receiveNote: zOptionalString(),
 });
 
+// Nhan nhanh nhieu may chua tung co tren he thong (sap tra ngay) - moi dong toi thieu ten may,
+// khong bat brand/type/model de khong can biet du thong tin truoc khi tra.
+export const receiveBorrowingBatchBulkSchema = z.object({
+    rows: z
+        .array(
+            z.object({
+                name: zRequiredString('Ten may'),
+                model: zOptionalString(),
+                serial: zOptionalString(),
+                partnerMachineCode: zOptionalString(),
+                note: zOptionalString(),
+            })
+        )
+        .min(1, { message: 'Can nhap it nhat mot may' })
+        .max(500, { message: 'Toi da 500 may moi lan nhan nhanh' }),
+    receiveCondition: zOptionalString(),
+    receiveNote: zOptionalString(),
+});
+
 export const bulkReturnBorrowingBatchSchema = z.object({
     returnTime: zRequiredString('Thoi gian tra'),
     note: zOptionalString(),

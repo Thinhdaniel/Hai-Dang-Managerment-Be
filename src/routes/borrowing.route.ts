@@ -10,6 +10,7 @@ import {
     createBorrowingBatchSchema,
     createBorrowingSchema,
     receiveBorrowingBatchByQrSchema,
+    receiveBorrowingBatchBulkSchema,
     returnBorrowingSchema,
     updateBorrowingBatchSchema,
 } from '@/validations/borrowing.validation';
@@ -60,6 +61,13 @@ router.post(
     validateObjectId,
     validator(receiveBorrowingBatchByQrSchema),
     borrowingController.receiveBorrowingBatchByQr
+);
+router.post(
+    '/batches/:id/receive-bulk',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    validator(receiveBorrowingBatchBulkSchema),
+    borrowingController.receiveBorrowingBatchBulk
 );
 router.post(
     '/batches/:id/bulk-return',

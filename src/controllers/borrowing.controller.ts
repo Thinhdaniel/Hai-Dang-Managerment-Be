@@ -50,6 +50,10 @@ export const receiveBorrowingBatchByQr = asyncHandler(async (req: Request, res: 
     return await borrowingService.receiveBorrowingBatchByQr(req, res, next);
 });
 
+export const receiveBorrowingBatchBulk = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.receiveBorrowingBatchBulk(req, res, next);
+});
+
 export const bulkReturnBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await borrowingService.bulkReturnBorrowingBatch(req, res, next);
 });
