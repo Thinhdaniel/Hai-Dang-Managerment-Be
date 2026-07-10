@@ -121,6 +121,119 @@ const cleanText = (value: unknown): string | undefined => {
     return text && text.toLowerCase() !== 'null' ? text : undefined;
 };
 
+// ===== Đọc 2 lần đối chiếu chéo (hóa đơn + phiếu đề xuất) =====
+// Cùng triết lý với purchase-receipt-scan: 2 lần đọc ĐỘC LẬP bằng 2 model khác dòng chạy
+// song song; dòng nào 2 bên thống nhất mới coi là chắc, lệch số thì gắn cảnh báo bắt người rà.
+
+type VerifyStatus = 'agreed' | 'mismatch' | 'only_first' | 'only_second';
+type VerifyMark = { verify?: VerifyStatus; verifyNote?: string };
+
+const normalizeCmpText = (value: unknown) =>
+    String(value ?? '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/[^a-z0-9\s/.x#-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+const tokenSimilarity = (a: string, b: string) => {
+    const ta = new Set(a.split(' ').filter(Boolean));
+    const tb = new Set(b.split(' ').filter(Boolean));
+    if (!ta.size || !tb.size) return 0;
+    let common = 0;
+    ta.forEach((token) => {
+        if (tb.has(token)) common += 1;
+    });
+    return common / Math.max(ta.size, tb.size);
+};
+
+// Token chứa chữ số (kích cỡ/mã "11/75", "8/60"...) phải khớp — xung đột thì CẤM ghép cặp,
+// vì "Kim 11/75" và "Kim 8/60" là 2 vật tư khác hẳn dù tên tương đồng.
+const ocrNumericTokens = (value: unknown) =>
+    normalizeCmpText(value)
+        .split(/\s+/)
+        .filter((token) => /\d/.test(token));
+
+const ocrNumbersConflict = (a: unknown, b: unknown) => {
+    const ta = ocrNumericTokens(a);
+    const tb = ocrNumericTokens(b);
+    if (!ta.length || !tb.length) return false;
+    const setA = new Set(ta);
+    const setB = new Set(tb);
+    return !(ta.every((token) => setB.has(token)) || tb.every((token) => setA.has(token)));
+};
+
+// Ghép dòng lần 1 với lần 2 theo tên (kèm guard token-số) rồi so số liệu bằng hàm compare.
+const reconcileOcrItems = <T extends { materialName: string }>(
+    first: T[],
+    second: T[],
+    compare: (a: T, b: T) => string | null
+): Array<T & VerifyMark> => {
+    const used = new Set<number>();
+    const out: Array<T & VerifyMark> = [];
+
+    for (const item of first) {
+        let bestIdx = -1;
+        let bestSim = 0;
+        second.forEach((cand, idx) => {
+            if (used.has(idx)) return;
+            if (ocrNumbersConflict(item.materialName, cand.materialName)) return;
+            const sim = tokenSimilarity(normalizeCmpText(item.materialName), normalizeCmpText(cand.materialName));
+            if (sim > bestSim) {
+                bestSim = sim;
+                bestIdx = idx;
+            }
+        });
+
+        if (bestIdx >= 0 && bestSim >= 0.6) {
+            used.add(bestIdx);
+            const diff = compare(item, second[bestIdx]);
+            out.push(diff ? { ...item, verify: 'mismatch', verifyNote: diff } : { ...item, verify: 'agreed' });
+        } else {
+            out.push({
+                ...item,
+                verify: 'only_first',
+                verifyNote: 'Lần đọc 2 không thấy dòng này — đối chiếu lại ảnh gốc',
+            });
+        }
+    }
+
+    second.forEach((cand, idx) => {
+        if (used.has(idx)) return;
+        out.push({
+            ...cand,
+            verify: 'only_second',
+            verifyNote: 'Chỉ lần đọc 2 thấy dòng này — đối chiếu lại ảnh gốc',
+        });
+    });
+
+    return out;
+};
+
+const fmtNumForNote = (value?: number) => (value == null ? '?' : Number(value).toLocaleString('vi-VN'));
+
+type OcrVerification = {
+    status: 'verified' | 'skipped';
+    model?: string;
+    agreed?: number;
+    flagged?: number;
+    note?: string;
+};
+
+const buildVerification = (items: VerifyMark[], model?: string): OcrVerification => ({
+    status: 'verified',
+    model,
+    agreed: items.filter((item) => item.verify === 'agreed').length,
+    flagged: items.filter((item) => item.verify && item.verify !== 'agreed').length,
+});
+
+const SKIPPED_VERIFICATION: OcrVerification = {
+    status: 'skipped',
+    note: 'Không chạy được lần đọc 2 — kết quả CHƯA được đối chiếu chéo, hãy rà kỹ số lượng/đơn giá',
+};
+
 const buildPrompt = () =>
     [
         'Ban la tro ly OCR phieu/hoa don MUA VAT TU cua cong ty may (tieng Viet). Doc anh va trich CHINH XAC tung dong + thong tin chung.',
@@ -198,9 +311,10 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
 
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
-    const attempt = async (model?: string) => {
-        const aiResult = await generateOcrJson<any>({
-            feature: 'ocr-invoice',
+    const attempt = (feature: string, vertexModel?: string) => async (model?: string) => {
+        const aiResult = await generateOcrJson<any>(
+            {
+            feature,
             model,
             temperature: 0.05,
             // reasoning 'low': ĐỦ suy luận để MAP CỘT chuẩn (phân biệt Cơ sở vs NCC, VAT trống=0, SL cần vs
@@ -224,7 +338,9 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
                     ],
                 },
             ],
-        });
+            },
+            vertexModel
+        );
         const items = normalizeItems(aiResult.data);
         if (!items.length) throw new Error('OCR returned no items');
         const header = {
@@ -235,9 +351,41 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
         return { aiResult, items, header };
     };
 
+    // Dòng ghép cặp được coi là lệch khi SL hoặc đơn giá 2 lần đọc khác nhau.
+    const invoiceDiff = (a: OcrItem, b: OcrItem): string | null => {
+        const qtyA = a.quantity ?? a.quantityRequested;
+        const qtyB = b.quantity ?? b.quantityRequested;
+        const diffs: string[] = [];
+        if (qtyA != null && qtyB != null && Number(qtyA) !== Number(qtyB)) {
+            diffs.push(`SL ${fmtNumForNote(qtyA)} vs ${fmtNumForNote(qtyB)}`);
+        }
+        if (a.unitPrice != null && b.unitPrice != null && Number(a.unitPrice) !== Number(b.unitPrice)) {
+            diffs.push(`đơn giá ${fmtNumForNote(a.unitPrice)} vs ${fmtNumForNote(b.unitPrice)}`);
+        }
+        return diffs.length ? `2 lần đọc lệch nhau: ${diffs.join(' · ')}` : null;
+    };
+
     try {
-        // Thử lại nhiều lần (model chính x2 + model dự phòng): gemini đôi khi trả JSON bẩn/cắt cụt/rỗng.
-        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_PRIMARY_VISION_MODEL);
+        // Đọc 2 LẦN ĐỘC LẬP song song: lần 1 (flash, retry 3 lần) + lần 2 (model khác dòng, 1 phát).
+        // Lần 2 lỗi thì vẫn trả kết quả lần 1 nhưng đánh dấu CHƯA đối chiếu.
+        const [primaryResult, verifyResult] = await Promise.allSettled([
+            runOcrWithRetry(attempt(AI_FEATURES.OCR_INVOICE), OCR_PRIMARY_VISION_MODEL),
+            attempt(AI_FEATURES.OCR_INVOICE_VERIFY, config.vertex.verifyModel)(),
+        ]);
+        if (primaryResult.status === 'rejected') throw primaryResult.reason;
+        const { aiResult, items: firstItems, header } = primaryResult.value;
+
+        let items: Array<OcrItem & VerifyMark> = firstItems;
+        let verification = SKIPPED_VERIFICATION;
+        if (verifyResult.status === 'fulfilled') {
+            items = reconcileOcrItems(firstItems, verifyResult.value.items, invoiceDiff);
+            verification = buildVerification(items, verifyResult.value.aiResult.model);
+        } else {
+            console.warn(
+                '[ai-ocr] invoice verify pass failed:',
+                verifyResult.reason instanceof Error ? verifyResult.reason.message : verifyResult.reason
+            );
+        }
 
         return res.status(StatusCodes.OK).json(
             customResponse({
@@ -247,6 +395,7 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
                     count: items.length,
                     available: true,
                     usedFallback: false,
+                    verification,
                     provider: aiResult.provider,
                     model: aiResult.model,
                     latencyMs: aiResult.latencyMs,
@@ -283,9 +432,10 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
 
     const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 
-    const attempt = async (model?: string) => {
-        const aiResult = await generateOcrJson<any>({
-            feature: AI_FEATURES.OCR_SUPPLY_REQUEST,
+    const attempt = (feature: string, vertexModel?: string) => async (model?: string) => {
+        const aiResult = await generateOcrJson<any>(
+            {
+            feature,
             model,
             temperature: 0.04,
             // reasoning 'low' + dư maxTokens (xem giải thích ở scanPurchaseInvoice): map cột chuẩn mà không cắt cụt.
@@ -306,7 +456,9 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
                     ],
                 },
             ],
-        });
+            },
+            vertexModel
+        );
         const items = normalizeSupplyItems(aiResult.data);
         if (!items.length) throw new Error('OCR returned no supply items');
         const header = {
@@ -319,9 +471,34 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
         return { aiResult, items, header };
     };
 
+    // Phiếu đề xuất cấp chỉ có số lượng cần — lệch SL giữa 2 lần đọc là phải rà.
+    const supplyDiff = (a: SupplyOcrItem, b: SupplyOcrItem): string | null =>
+        a.quantityRequested != null &&
+        b.quantityRequested != null &&
+        Number(a.quantityRequested) !== Number(b.quantityRequested)
+            ? `2 lần đọc lệch nhau: SL ${fmtNumForNote(a.quantityRequested)} vs ${fmtNumForNote(b.quantityRequested)}`
+            : null;
+
     try {
-        // Thử lại nhiều lần (model chính x2 + model dự phòng) cho ổn định khi gemini trả rỗng/chập chờn.
-        const { aiResult, items, header } = await runOcrWithRetry(attempt, OCR_PRIMARY_VISION_MODEL);
+        // Đọc 2 LẦN ĐỘC LẬP song song (xem giải thích ở scanPurchaseInvoice).
+        const [primaryResult, verifyResult] = await Promise.allSettled([
+            runOcrWithRetry(attempt(AI_FEATURES.OCR_SUPPLY_REQUEST), OCR_PRIMARY_VISION_MODEL),
+            attempt(AI_FEATURES.OCR_SUPPLY_REQUEST_VERIFY, config.vertex.verifyModel)(),
+        ]);
+        if (primaryResult.status === 'rejected') throw primaryResult.reason;
+        const { aiResult, items: firstItems, header } = primaryResult.value;
+
+        let items: Array<SupplyOcrItem & VerifyMark> = firstItems;
+        let verification = SKIPPED_VERIFICATION;
+        if (verifyResult.status === 'fulfilled') {
+            items = reconcileOcrItems(firstItems, verifyResult.value.items, supplyDiff);
+            verification = buildVerification(items, verifyResult.value.aiResult.model);
+        } else {
+            console.warn(
+                '[ai-ocr] supply verify pass failed:',
+                verifyResult.reason instanceof Error ? verifyResult.reason.message : verifyResult.reason
+            );
+        }
 
         return res.status(StatusCodes.OK).json(
             customResponse({
@@ -331,6 +508,7 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
                     count: items.length,
                     available: true,
                     usedFallback: false,
+                    verification,
                     provider: aiResult.provider,
                     model: aiResult.model,
                     latencyMs: aiResult.latencyMs,
