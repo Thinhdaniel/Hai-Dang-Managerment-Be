@@ -249,11 +249,12 @@ const buildPrompt = () =>
         '  - Dong "KINH GUI: ..." la BEN MUA (cong ty minh: Hai Dang / May Phu Son...) — TUYET DOI KHONG dien vao supplierName.',
         '  - Cot "So luong" duy nhat -> quantity (khop don gia x thanh tien). Ap dung supplierName cua header cho moi dong.',
         'Neu anh layout khac nua thi map theo TIEU DE COT / y nghia tung cot.',
+        'DONG TONG KET cuoi bang (neu co): "Cong tien hang" -> header.subtotal; "Cong tien thue"/"Tien thue"/"Thue GTGT" -> header.taxTotal; "Tong cong"/"Tong cong TT"/"Tong thanh toan" -> header.grandTotal (so thuan). Cac dong nay KHONG dua vao items.',
         'So tien/so luong tra ve SO thuan, KHONG dau phan cach nghin (vd "2.559.600" -> 2559600, "12,5" -> 12.5; "100,00" -> 100). Ngay tra ISO YYYY-MM-DD (vd 23/6/2026 -> 2026-06-23).',
         'TIENG VIET PHAI DU DAU: moi text tra ve (ten hang, ten cong ty, ghi chu) viet tieng Viet CO DAU day du. Neu chu tren anh mo/mat dau, KHOI PHUC dau theo tu vung nganh may thong dung (vd "ong nhua"->"ống nhựa", "mo duoi vat so"->"mỏ dưới vắt sổ", "chi"->"chỉ", "dau may"->"dầu máy"). CON SO thi nguoc lai: mo/khong ro -> de null, KHONG doan.',
         'materialName giu nguyen ten hang nhu tren phieu (kem quy cach kich thuoc neu ghi lien). Bo qua dong tong cong/tien thue/tong cong TT/chu ky/loi chao.',
         'Output schema (chi JSON):',
-        '{"header":{"supplierName":null,"invoiceNo":null,"invoiceDate":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"quantity":null,"unitPrice":null,"vatRate":null,"plantName":null,"proposedBy":null,"supplierName":null,"purpose":null,"note":null,"orderDate":null,"receivedDate":null}]}',
+        '{"header":{"supplierName":null,"invoiceNo":null,"invoiceDate":null,"subtotal":null,"taxTotal":null,"grandTotal":null},"items":[{"materialName":"","unit":null,"quantityRequested":null,"quantity":null,"unitPrice":null,"vatRate":null,"plantName":null,"proposedBy":null,"supplierName":null,"purpose":null,"note":null,"orderDate":null,"receivedDate":null}]}',
     ].join('\n');
 
 const buildSupplyPrompt = () =>
@@ -352,6 +353,9 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
             supplierName: cleanText(aiResult.data?.header?.supplierName),
             invoiceNo: cleanText(aiResult.data?.header?.invoiceNo),
             invoiceDate: cleanText(aiResult.data?.header?.invoiceDate),
+            subtotal: cleanNumber(aiResult.data?.header?.subtotal),
+            taxTotal: cleanNumber(aiResult.data?.header?.taxTotal),
+            grandTotal: cleanNumber(aiResult.data?.header?.grandTotal),
         };
         return { aiResult, items, header };
     };
@@ -392,6 +396,35 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
             );
         }
 
+        // Phiếu không có cột VAT nhưng có dòng tổng -> tự tính %VAT bằng toán (thuế/tiền hàng),
+        // bám các mức thuế chuẩn VN. Chỉ áp khi KHÔNG dòng nào có VAT riêng, tránh đè số đọc được.
+        let derivedVatRate: number | undefined;
+        if (items.every((item) => !item.vatRate) && header.subtotal && header.taxTotal != null) {
+            const rawRate = (header.taxTotal / header.subtotal) * 100;
+            derivedVatRate = [0, 5, 8, 10].find((rate) => Math.abs(rawRate - rate) <= 1.5);
+            if (derivedVatRate != null) {
+                // Kể cả 0%: phiếu ghi rõ tiền thuế 0 thì VAT các dòng là 0, không để FE mặc định 8.
+                items = items.map((item) => ({ ...item, vatRate: derivedVatRate }));
+            }
+        }
+
+        // Đối chiếu chéo bằng toán: tổng (SL x đơn giá) các dòng phải khớp "Cộng tiền hàng" trên
+        // phiếu — lệch >1% nghĩa là có dòng đọc sai SL/giá hoặc sót dòng.
+        const computedSubtotal = Math.round(
+            items.reduce(
+                (sum, item) =>
+                    sum + Number(item.quantity ?? item.quantityRequested ?? 0) * Number(item.unitPrice ?? 0),
+                0
+            )
+        );
+        const totals = header.subtotal
+            ? {
+                  stated: header.subtotal,
+                  computed: computedSubtotal,
+                  mismatch: Math.abs(computedSubtotal - header.subtotal) > header.subtotal * 0.01,
+              }
+            : undefined;
+
         return res.status(StatusCodes.OK).json(
             customResponse({
                 data: {
@@ -401,6 +434,8 @@ export const scanPurchaseInvoice = async (req: Request, res: Response) => {
                     available: true,
                     usedFallback: false,
                     verification,
+                    derivedVatRate,
+                    totals,
                     provider: aiResult.provider,
                     model: aiResult.model,
                     latencyMs: aiResult.latencyMs,
