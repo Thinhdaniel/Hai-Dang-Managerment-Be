@@ -6,6 +6,7 @@ import { checkAndNotifyOverdueMaintenance } from './services/notification.helper
 import { startDigestSchedules } from './services/digest.service';
 import { startAuditSchedule } from './services/audit.service';
 import { initSocketServer } from './lib/socket';
+import { startRealityOperationsSchedule } from './services/reality-operations.service';
 
 const PORT = config.port || 8080;
 const HOSTNAME = config.hostname;
@@ -21,9 +22,12 @@ connectDB().then(async () => {
     });
 
     // Check overdue maintenance every hour
-    setInterval(async () => {
-        await checkAndNotifyOverdueMaintenance();
-    }, 60 * 60 * 1000); // 1 hour
+    setInterval(
+        async () => {
+            await checkAndNotifyOverdueMaintenance();
+        },
+        60 * 60 * 1000
+    ); // 1 hour
 
     // Also run immediately on startup
     await checkAndNotifyOverdueMaintenance();
@@ -33,6 +37,9 @@ connectDB().then(async () => {
 
     // Kiểm toán đêm 03:30: rule-check + AI săn bất thường toàn hệ thống.
     startAuditSchedule();
+
+    // Snapshot + cảnh báo Reality Health mỗi ngày; production sleep dùng thêm internal route/UptimeRobot.
+    startRealityOperationsSchedule();
 });
 
 const exitHandler = () => {

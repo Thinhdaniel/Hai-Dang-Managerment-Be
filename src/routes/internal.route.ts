@@ -4,6 +4,7 @@ import { checkAndNotifyOverdueMaintenance } from '@/services/notification.helper
 import asyncHandler from '@/utils/asyncHandler';
 import customResponse from '@/utils/response';
 import { StatusCodes } from 'http-status-codes';
+import { evaluateAllRealityOperations } from '@/services/reality-operations.service';
 
 const router = Router();
 
@@ -30,6 +31,31 @@ router.post(
             customResponse({
                 data: result,
                 message: 'Da chay kiem tra bao tri qua han',
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    })
+);
+
+router.post(
+    '/reality-operations',
+    asyncHandler(async (req, res) => {
+        if (!assertInternalSecret(req.headers['x-internal-cron-secret'])) {
+            return res.status(StatusCodes.UNAUTHORIZED).json(
+                customResponse({
+                    data: null,
+                    message: 'Internal cron secret khong hop le',
+                    status: StatusCodes.UNAUTHORIZED,
+                    success: false,
+                })
+            );
+        }
+        const result = await evaluateAllRealityOperations({ notify: true });
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: result,
+                message: 'Da danh gia Reality Operations',
                 status: StatusCodes.OK,
                 success: true,
             })

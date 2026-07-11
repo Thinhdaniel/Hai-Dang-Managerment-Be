@@ -14,6 +14,7 @@ export type NotificationActionType =
     | 'distribution'
     | 'chat'
     | 'digest'
+    | 'floor_map'
     | 'system';
 
 export interface INotification {
@@ -59,6 +60,7 @@ const NotificationSchema = new mongoose.Schema<INotification>(
                 'distribution',
                 'chat',
                 'digest',
+                'floor_map',
                 'system',
             ],
             default: 'system',

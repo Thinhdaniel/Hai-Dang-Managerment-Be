@@ -56,6 +56,9 @@ export const buildActionUrl = (notification: Pick<INotification, 'actionType' | 
     if (actionType === 'purchase_order') return '/materials/purchase-orders';
     if (actionType === 'distribution') return '/materials/distributions';
     if (actionType === 'chat') return `/chat${actionId ? `?conversation=${encodeURIComponent(actionId)}` : ''}`;
+    if (actionType === 'floor_map') {
+        return `/assets/floor-map?reality=1${actionId ? `&plantId=${encodeURIComponent(actionId)}` : ''}`;
+    }
 
     return '/dashboard';
 };
