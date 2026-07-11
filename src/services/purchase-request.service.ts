@@ -78,14 +78,100 @@ const buildFreeFormItems = async (rawItems: any[]) => {
             estimatedPrice: item.estimatedPrice != null ? Number(item.estimatedPrice) : undefined,
             estimatedTotal: item.estimatedTotal != null ? Number(item.estimatedTotal) : undefined,
             note: item.note?.trim() || undefined,
+            sourceTechnicalRequestId: item.sourceTechnicalRequestId || undefined,
+            sourceTechnicalItemIndex:
+                item.sourceTechnicalItemIndex != null ? Number(item.sourceTechnicalItemIndex) : undefined,
         };
     });
+};
+
+// ── Rổ vật tư kỹ thuật: dòng DX lấy nguồn từ phiếu KT đã duyệt ──────────────
+// Trước khi tạo DX: xác thực dòng KT còn "trống" (chưa vào DX khác) + điền mã KT vào dòng DX.
+const validateTechnicalSources = async (items: any[]) => {
+    const refs = items
+        .map((item, index) => ({
+            index,
+            requestId: item.sourceTechnicalRequestId ? String(item.sourceTechnicalRequestId) : '',
+            itemIndex: item.sourceTechnicalItemIndex,
+        }))
+        .filter((ref) => ref.requestId && ref.itemIndex != null);
+    if (!refs.length) return items;
+
+    const ktDocs = await PurchaseRequest.find({
+        _id: { $in: [...new Set(refs.map((ref) => ref.requestId))] },
+        requestType: 'technical_purchase',
+        isDeleted: { $ne: true },
+    }).lean();
+    const ktById = new Map(ktDocs.map((doc: any) => [String(doc._id), doc]));
+
+    for (const ref of refs) {
+        const kt: any = ktById.get(ref.requestId);
+        if (!kt) throw new BadRequestError('Phieu ky thuat nguon khong ton tai');
+        if (!['approved', 'in_progress'].includes(kt.status)) {
+            throw new BadRequestError(`Phieu ${kt.requestCode} chua duoc duyet, khong the dua vao de xuat mua`);
+        }
+        const ktItem = kt.items?.[ref.itemIndex];
+        if (!ktItem) throw new BadRequestError(`Dong vat tu nguon cua phieu ${kt.requestCode} khong ton tai`);
+        if (ktItem.consumedByRequestId) {
+            throw new BadRequestError(
+                `"${ktItem.materialName}" cua phieu ${kt.requestCode} da nam trong de xuat ${ktItem.consumedByRequestCode || 'khac'}`
+            );
+        }
+        items[ref.index].sourceTechnicalRequestCode = kt.requestCode;
+    }
+    return items;
+};
+
+// Sau khi tạo DX: đánh dấu dòng KT đã tiêu thụ, phiếu KT đủ dòng thì sang "đang xử lý mua",
+// báo cho người kỹ thuật biết vật tư của mình đã được đưa vào đề xuất.
+const consumeTechnicalSources = async (createdRequest: any, items: any[]) => {
+    const refs = items
+        .map((item) => ({
+            requestId: item.sourceTechnicalRequestId ? String(item.sourceTechnicalRequestId) : '',
+            itemIndex: item.sourceTechnicalItemIndex,
+        }))
+        .filter((ref) => ref.requestId && ref.itemIndex != null);
+    if (!refs.length) return;
+
+    const byRequest = new Map<string, number[]>();
+    refs.forEach((ref) => byRequest.set(ref.requestId, [...(byRequest.get(ref.requestId) ?? []), ref.itemIndex]));
+
+    for (const [ktId, itemIndexes] of byRequest) {
+        const kt: any = await PurchaseRequest.findOne({
+            _id: ktId,
+            requestType: 'technical_purchase',
+            isDeleted: { $ne: true },
+        });
+        if (!kt) continue;
+        let changed = false;
+        itemIndexes.forEach((itemIndex) => {
+            const item = kt.items?.[itemIndex];
+            if (item && !item.consumedByRequestId) {
+                item.consumedByRequestId = createdRequest._id;
+                item.consumedByRequestCode = createdRequest.requestCode;
+                changed = true;
+            }
+        });
+        if (!changed) continue;
+        if (kt.status === 'approved' && (kt.items ?? []).every((item: any) => item.consumedByRequestId)) {
+            kt.status = 'in_progress';
+        }
+        await kt.save();
+        void notifyUser(String(kt.requestedBy), 'notify:new', {
+            type: 'info',
+            actionType: 'technical_purchase',
+            actionId: String(kt._id),
+            title: 'Vật tư đã vào đề xuất mua',
+            message: `Vật tư trong phiếu ${kt.requestCode} đã được đưa vào đề xuất ${createdRequest.requestCode || ''}`,
+        });
+    }
 };
 
 const buildPurchaseRequestFilter = (query: Request['query'], req: Request) => {
     const filter: Record<string, any> = {
         isDeleted: { $ne: true },
-        requestType: { $ne: 'supply_request' },
+        // KT (kỹ thuật) đi đường riêng: duyệt xong vào rổ chờ, kéo vào DX qua form tạo — không hiện ở đây
+        requestType: { $nin: ['supply_request', 'technical_purchase'] },
     };
 
     const regex = buildSearchRegex(query.search, { flexibleWhitespace: true });
@@ -258,7 +344,7 @@ export const createPurchaseRequest = async (req: Request, res: Response, next: N
     const requestMonth = req.body.requestMonth ?? now.getMonth() + 1;
     const requestYear = req.body.requestYear ?? now.getFullYear();
 
-    const items = await buildFreeFormItems(req.body.items);
+    const items = await validateTechnicalSources(await buildFreeFormItems(req.body.items));
     const totalWithVat = items.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0);
     const totalEstimated = items.reduce((s: number, i: any) => s + (i.totalPrice ?? i.estimatedTotal ?? 0), 0);
 
@@ -277,6 +363,12 @@ export const createPurchaseRequest = async (req: Request, res: Response, next: N
     });
 
     const createdRequest = await purchaseRequestRepository.findById(String(request._id));
+
+    // Đánh dấu các dòng kéo từ rổ kỹ thuật + báo người đề nghị
+    await consumeTechnicalSources(
+        { _id: request._id, requestCode: (createdRequest as any)?.requestCode },
+        items
+    );
 
     const actorName = await getActorName(req.userId);
     await notifyAdmins(
@@ -507,6 +599,13 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
 
             if (requests.length !== req.body.requestIds.length) {
                 throw new NotFoundError('Khong tim thay mot hoac nhieu phieu de xuat');
+            }
+
+            const technicalRequests = requests.filter(
+                (request) => (request as any).requestType === 'technical_purchase'
+            );
+            if (technicalRequests.length) {
+                throw new BadRequestError('Phieu ky thuat khong len don truc tiep — hay keo vao de xuat mua truoc');
             }
 
             const invalidRequests = requests.filter((request) => request.status !== 'approved');

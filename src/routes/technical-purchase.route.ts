@@ -30,6 +30,9 @@ router.post(
 // Gợi ý tên vật tư (autocomplete) — phải đứng TRƯỚC '/:id' kẻo bị nuốt route
 router.get('/material-suggestions', technicalPurchaseController.getTechnicalMaterialSuggestions);
 
+// Rổ vật tư kỹ thuật đã duyệt chờ kéo vào đề xuất mua — cũng phải đứng TRƯỚC '/:id'
+router.get('/pool', technicalPurchaseController.getTechnicalPurchasePool);
+
 router.get('/:id/export-xlsx', validateObjectId, technicalPurchaseController.exportTechnicalPurchaseRequestXlsx);
 router.get('/:id', validateObjectId, technicalPurchaseController.getTechnicalPurchaseRequestById);
 

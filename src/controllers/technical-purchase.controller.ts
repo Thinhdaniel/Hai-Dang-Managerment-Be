@@ -34,3 +34,7 @@ export const getTechnicalMaterialSuggestions = asyncHandler(
     async (req: Request, res: Response, next: NextFunction) =>
         technicalPurchaseService.getTechnicalMaterialSuggestions(req, res, next)
 );
+export const getTechnicalPurchasePool = asyncHandler(
+    async (req: Request, res: Response, next: NextFunction) =>
+        technicalPurchaseService.getTechnicalPurchasePool(req, res, next)
+);

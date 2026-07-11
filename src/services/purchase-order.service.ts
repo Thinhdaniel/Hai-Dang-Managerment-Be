@@ -8,7 +8,7 @@ import PurchaseShortage from '@/models/PurchaseShortage';
 import StockTransaction from '@/models/StockTransaction';
 import { purchaseOrderRepository } from '@/repositories/purchase-order.repository';
 import { ensurePlantExists, generateDocumentCode, getUserPlantId, toId } from '@/services/material-workflow.helpers';
-import { notifyAdmins, getActorName } from '@/services/notification.helper';
+import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -311,6 +311,43 @@ const syncOriginalOrderAfterShortageResolution = async ({
     }
 };
 
+// Vòng đời phiếu kỹ thuật: khi MỌI đề xuất mua (DX) chứa dòng của phiếu KT đã nhận đủ hàng
+// thì phiếu KT sang 'received' + báo người kỹ thuật "vật tư đã về". Đi từ KT in_progress nên rẻ.
+const propagateReceivedToTechnicalRequests = async () => {
+    try {
+        const ktDocs = await PurchaseRequest.find({
+            requestType: 'technical_purchase',
+            status: 'in_progress',
+            isDeleted: { $ne: true },
+        });
+        for (const kt of ktDocs as any[]) {
+            const dxIds = [
+                ...new Set(
+                    (kt.items ?? [])
+                        .map((item: any) => (item.consumedByRequestId ? String(item.consumedByRequestId) : ''))
+                        .filter(Boolean)
+                ),
+            ];
+            if (!dxIds.length) continue;
+            const dxDocs = await PurchaseRequest.find({ _id: { $in: dxIds } })
+                .select('status')
+                .lean();
+            if (!dxDocs.length || !dxDocs.every((dx: any) => dx.status === 'received')) continue;
+            kt.status = 'received';
+            await kt.save();
+            void notifyUser(String(kt.requestedBy), 'notify:new', {
+                type: 'success',
+                actionType: 'technical_purchase',
+                actionId: String(kt._id),
+                title: 'Vật tư đề nghị đã về',
+                message: `Vật tư trong phiếu ${kt.requestCode} đã được nhận đủ hàng`,
+            });
+        }
+    } catch (error) {
+        console.error('[TechnicalPurchase] propagate received failed:', error);
+    }
+};
+
 const buildFilter = (query: Request['query'], req: Request) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
     const andConditions: Record<string, any>[] = [];
@@ -419,6 +456,13 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
 
     if (requests.length !== purchaseRequestIds.length) {
         throw new BadRequestError('Mot so phieu de xuat khong ton tai');
+    }
+
+    const technicalRequests = requests.filter((r: any) => r.requestType === 'technical_purchase');
+    if (technicalRequests.length) {
+        throw new BadRequestError(
+            `Phieu ky thuat khong len don truc tiep — hay keo vat tu vao phieu de xuat mua truoc: ${technicalRequests.map((r: any) => r.requestCode).join(', ')}`
+        );
     }
 
     const invalidRequests = requests.filter((r: any) => r.status !== 'approved');
@@ -855,6 +899,9 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
     } finally {
         await session.endSession();
     }
+
+    // Sau nhận hàng: đẩy tiến độ về các phiếu kỹ thuật nguồn (nếu có), chạy nền
+    void propagateReceivedToTechnicalRequests();
 
     const updated = await purchaseOrderRepository.findById(String(req.params.id));
 

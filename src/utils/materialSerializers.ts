@@ -129,6 +129,11 @@ const serializePurchaseRequestItem = (input: any) => {
         assetCode: item?.assetCode,
         assetName: item?.assetName,
         imageUrls: Array.isArray(item?.imageUrls) && item.imageUrls.length ? item.imageUrls : undefined,
+        consumedByRequestId: toId(item?.consumedByRequestId),
+        consumedByRequestCode: item?.consumedByRequestCode,
+        sourceTechnicalRequestId: toId(item?.sourceTechnicalRequestId),
+        sourceTechnicalRequestCode: item?.sourceTechnicalRequestCode,
+        sourceTechnicalItemIndex: item?.sourceTechnicalItemIndex,
     };
 };
 

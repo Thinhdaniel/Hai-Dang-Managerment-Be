@@ -23,6 +23,9 @@ const requestItemSchema = z.object({
     supplierNote: zOptionalString(),
     catalogStatus: z.enum(['matched', 'unmatched', 'ignored']).optional(),
     note: zOptionalString(),
+    // Dòng lấy từ rổ vật tư kỹ thuật (phiếu KT- đã duyệt)
+    sourceTechnicalRequestId: zObjectId('Phieu ky thuat').optional(),
+    sourceTechnicalItemIndex: z.number().int().min(0).optional(),
 });
 
 const approvalItemSchema = z.object({

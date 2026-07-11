@@ -40,6 +40,13 @@ const PurchaseRequestItemSchema = new mongoose.Schema(
         assetCode: { type: String, trim: true },
         assetName: { type: String, trim: true },
         imageUrls: { type: [String], default: undefined },
+        // Dòng KT đã được kéo vào phiếu đề xuất mua (DX) nào — KT không lên PO trực tiếp
+        consumedByRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseRequest' },
+        consumedByRequestCode: { type: String, trim: true },
+        // Ngược lại: dòng DX này lấy nguồn từ phiếu KT nào (tag truy vết)
+        sourceTechnicalRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseRequest' },
+        sourceTechnicalRequestCode: { type: String, trim: true },
+        sourceTechnicalItemIndex: { type: Number, min: 0 },
     },
     { _id: false }
 );

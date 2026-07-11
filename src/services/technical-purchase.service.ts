@@ -40,6 +40,51 @@ const buildTechnicalItems = async (rawItems: any[]) => {
     });
 };
 
+// Rổ vật tư kỹ thuật chờ mua: dòng của phiếu KT đã duyệt mà CHƯA được kéo vào đề xuất mua nào.
+// Người tạo đề xuất mua (DX) tick từ rổ này để gom vào phiếu đang soạn.
+export const getTechnicalPurchasePool = async (req: Request, res: Response, _next: NextFunction) => {
+    const filter: Record<string, any> = {
+        requestType: REQUEST_TYPE,
+        isDeleted: { $ne: true },
+        status: { $in: ['approved', 'in_progress'] },
+    };
+    if (req.query.plantId) filter.plantId = req.query.plantId;
+
+    const requests = await PurchaseRequest.find(filter).sort('-approvedAt').limit(100).lean();
+    const rows = (requests as any[]).flatMap((request) =>
+        (request.items ?? []).flatMap((item: any, itemIndex: number) =>
+            item.consumedByRequestId
+                ? []
+                : [
+                      {
+                          requestId: String(request._id),
+                          requestCode: request.requestCode,
+                          requesterName: request.requesterName,
+                          plantId: String(request.plantId),
+                          approvedAt: request.approvedAt?.toISOString?.() ?? request.approvedAt,
+                          itemIndex,
+                          materialName: item.materialName,
+                          unit: item.unit,
+                          quantity: item.quantityApproved ?? item.quantityRequested ?? 0,
+                          note: item.note,
+                          assetCode: item.assetCode,
+                          assetName: item.assetName,
+                          imageUrls: item.imageUrls ?? [],
+                      },
+                  ]
+        )
+    );
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: rows,
+            message: 'Lay ro vat tu ky thuat cho mua thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
 // Gợi ý tên vật tư: ưu tiên đồ đã mua trong các phiếu KT (đúng thói quen gọi tên
 // của kỹ thuật), bổ sung từ danh mục vật tư. Không ép khớp — chỉ là autocomplete.
 export const getTechnicalMaterialSuggestions = async (req: Request, res: Response, _next: NextFunction) => {
@@ -313,6 +358,19 @@ export const approveTechnicalPurchaseRequest = async (req: Request, res: Respons
         title: 'Giấy đề nghị mua vật tư được duyệt',
         message: `${actorName} đã duyệt phiếu ${(request as any).requestCode || ''}`,
     });
+
+    // Nhắc người phụ trách mua: phiếu đã duyệt, chờ kéo vào đề xuất mua
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'info',
+            actionType: 'technical_purchase',
+            actionId: String(req.params.id),
+            title: 'Vật tư kỹ thuật chờ đưa vào đề xuất mua',
+            message: `Phiếu ${(request as any).requestCode || ''} đã duyệt — kéo vào phiếu đề xuất mua để đặt hàng`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
 
     void appendWorkflowSystemMessage(
         'technical_purchase',
