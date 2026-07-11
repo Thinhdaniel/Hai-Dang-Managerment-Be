@@ -35,6 +35,11 @@ const PurchaseRequestItemSchema = new mongoose.Schema(
             default: 'unmatched',
         },
         note: { type: String, trim: true },
+        // ── Phiếu kỹ thuật (KT-): vật tư mua cho máy nào + ảnh linh kiện ──
+        assetId: { type: mongoose.Schema.Types.ObjectId, ref: 'Asset' },
+        assetCode: { type: String, trim: true },
+        assetName: { type: String, trim: true },
+        imageUrls: { type: [String], default: undefined },
     },
     { _id: false }
 );

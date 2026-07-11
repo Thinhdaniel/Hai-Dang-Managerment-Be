@@ -30,3 +30,7 @@ export const exportTechnicalPurchaseRequestXlsx = asyncHandler(
     async (req: Request, res: Response, next: NextFunction) =>
         technicalPurchaseService.exportTechnicalPurchaseRequestXlsx(req, res, next)
 );
+export const getTechnicalMaterialSuggestions = asyncHandler(
+    async (req: Request, res: Response, next: NextFunction) =>
+        technicalPurchaseService.getTechnicalMaterialSuggestions(req, res, next)
+);

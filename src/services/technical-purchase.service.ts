@@ -14,6 +14,92 @@ import { StatusCodes } from 'http-status-codes';
 const REQUEST_TYPE = 'technical_purchase';
 const DEFAULT_DEPARTMENT = 'Kỹ thuật';
 
+// Chuẩn hoá items + snapshot mã/tên máy tại thời điểm tạo (máy đổi tên sau này phiếu vẫn đúng)
+const buildTechnicalItems = async (rawItems: any[]) => {
+    const Asset = (await import('@/models/Asset')).default;
+    const assetIds = [...new Set(rawItems.map((item) => item.assetId).filter(Boolean).map(String))];
+    const assets = assetIds.length
+        ? await Asset.find({ _id: { $in: assetIds }, isDeleted: { $ne: true } })
+              .select('machineCode name')
+              .lean()
+        : [];
+    const assetById = new Map(assets.map((asset: any) => [String(asset._id), asset]));
+
+    return rawItems.map((item: any) => {
+        const asset: any = item.assetId ? assetById.get(String(item.assetId)) : undefined;
+        return {
+            materialName: item.materialName?.trim(),
+            unit: item.unit?.trim(),
+            quantityRequested: Number(item.quantityRequested),
+            note: item.note?.trim() || undefined,
+            assetId: asset?._id,
+            assetCode: asset?.machineCode,
+            assetName: asset?.name,
+            imageUrls: item.imageUrls?.length ? item.imageUrls : undefined,
+        };
+    });
+};
+
+// Gợi ý tên vật tư: ưu tiên đồ đã mua trong các phiếu KT (đúng thói quen gọi tên
+// của kỹ thuật), bổ sung từ danh mục vật tư. Không ép khớp — chỉ là autocomplete.
+export const getTechnicalMaterialSuggestions = async (req: Request, res: Response, _next: NextFunction) => {
+    const regex = buildSearchRegex(req.query.search, { flexibleWhitespace: true });
+    const Material = (await import('@/models/Material')).default;
+
+    const [historyRows, catalogRows] = await Promise.all([
+        PurchaseRequest.aggregate([
+            { $match: { requestType: REQUEST_TYPE, isDeleted: { $ne: true } } },
+            { $unwind: '$items' },
+            { $match: { 'items.materialName': regex ?? { $type: 'string', $ne: '' } } },
+            { $sort: { createdAt: 1 } },
+            {
+                $group: {
+                    _id: { $toLower: { $trim: { input: '$items.materialName' } } },
+                    name: { $last: '$items.materialName' },
+                    unit: { $last: '$items.unit' },
+                    count: { $sum: 1 },
+                    lastUsedAt: { $max: '$createdAt' },
+                },
+            },
+            { $sort: { lastUsedAt: -1 } },
+            { $limit: 8 },
+        ]),
+        Material.find({
+            isDeleted: { $ne: true },
+            isActive: { $ne: false },
+            ...(regex ? { name: regex } : {}),
+        })
+            .select('name unit')
+            .sort('name')
+            .limit(8)
+            .lean(),
+    ]);
+
+    const seen = new Set<string>();
+    const suggestions: Array<{ name: string; unit?: string; source: 'history' | 'catalog'; count?: number }> = [];
+    for (const row of historyRows as any[]) {
+        const key = String(row._id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        suggestions.push({ name: row.name, unit: row.unit || undefined, source: 'history', count: row.count });
+    }
+    for (const row of catalogRows as any[]) {
+        const key = String(row.name ?? '').trim().toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        suggestions.push({ name: row.name, unit: row.unit || undefined, source: 'catalog' });
+    }
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: suggestions.slice(0, 12),
+            message: 'Lay goi y vat tu thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
 const buildFilter = (query: Request['query'], req: Request) => {
     const filter: Record<string, any> = {
         isDeleted: { $ne: true },
@@ -102,12 +188,7 @@ export const createTechnicalPurchaseRequest = async (req: Request, res: Response
         prefix: 'KT',
     });
 
-    const items = req.body.items.map((item: any) => ({
-        materialName: item.materialName.trim(),
-        unit: item.unit.trim(),
-        quantityRequested: Number(item.quantityRequested),
-        note: item.note?.trim() || undefined,
-    }));
+    const items = await buildTechnicalItems(req.body.items);
 
     const request = await purchaseRequestRepository.create({
         requestCode,
@@ -173,12 +254,7 @@ export const updateTechnicalPurchaseRequest = async (req: Request, res: Response
 
     let nextItems = request.items;
     if (req.body.items) {
-        nextItems = req.body.items.map((item: any) => ({
-            materialName: item.materialName?.trim(),
-            unit: item.unit?.trim(),
-            quantityRequested: Number(item.quantityRequested),
-            note: item.note?.trim() || undefined,
-        })) as any;
+        nextItems = (await buildTechnicalItems(req.body.items)) as any;
     }
 
     const update: Record<string, unknown> = {

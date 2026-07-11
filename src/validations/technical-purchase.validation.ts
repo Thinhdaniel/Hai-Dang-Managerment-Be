@@ -1,4 +1,4 @@
-import { zOptionalString } from '@/lib/validation';
+import { zObjectId, zOptionalString } from '@/lib/validation';
 import { z } from 'zod';
 
 const technicalPurchaseItemSchema = z.object({
@@ -6,6 +6,8 @@ const technicalPurchaseItemSchema = z.object({
     unit: z.string().trim().min(1, { message: 'Don vi tinh khong duoc de trong' }),
     quantityRequested: z.number().gt(0, { message: 'So luong phai lon hon 0' }),
     note: zOptionalString(),
+    assetId: zObjectId('May lien quan').optional(),
+    imageUrls: z.array(z.string().trim().url({ message: 'Link anh khong hop le' })).max(3).optional(),
 });
 
 export const createTechnicalPurchaseSchema = z.object({

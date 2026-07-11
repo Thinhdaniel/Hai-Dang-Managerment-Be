@@ -125,6 +125,10 @@ const serializePurchaseRequestItem = (input: any) => {
         supplier,
         catalogStatus: item?.catalogStatus ?? (item?.materialId ? 'matched' : 'unmatched'),
         note: item?.note,
+        assetId: toId(item?.assetId),
+        assetCode: item?.assetCode,
+        assetName: item?.assetName,
+        imageUrls: Array.isArray(item?.imageUrls) && item.imageUrls.length ? item.imageUrls : undefined,
     };
 };
 

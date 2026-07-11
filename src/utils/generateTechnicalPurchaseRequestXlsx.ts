@@ -126,7 +126,10 @@ export async function generateTechnicalPurchaseRequestXlsx(pr: any): Promise<Buf
         put(`F${row}`, item?.unit ?? '', tnr(12), AL.center);
         const qty = item ? item.quantityApproved ?? item.quantityRequested ?? '' : '';
         put(`G${row}`, qty, tnr(12), AL.center);
-        put(`I${row}`, item?.note ?? '', tnr(12), AL.leftTop);
+        // Ghi chú kèm máy liên quan (nếu dòng vật tư gắn máy)
+        const assetLabel = item?.assetCode ? `Máy: ${item.assetCode}${item?.assetName ? ` (${item.assetName})` : ''}` : '';
+        const noteText = [item?.note, assetLabel].filter(Boolean).join(' — ');
+        put(`I${row}`, noteText, tnr(12), AL.leftTop);
 
         ws.getRow(row).height = 26;
         borderRow(row);

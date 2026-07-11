@@ -27,6 +27,9 @@ router.post(
     technicalPurchaseController.createTechnicalPurchaseRequest
 );
 
+// Gợi ý tên vật tư (autocomplete) — phải đứng TRƯỚC '/:id' kẻo bị nuốt route
+router.get('/material-suggestions', technicalPurchaseController.getTechnicalMaterialSuggestions);
+
 router.get('/:id/export-xlsx', validateObjectId, technicalPurchaseController.exportTechnicalPurchaseRequestXlsx);
 router.get('/:id', validateObjectId, technicalPurchaseController.getTechnicalPurchaseRequestById);
 
