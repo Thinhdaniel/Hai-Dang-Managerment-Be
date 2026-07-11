@@ -515,11 +515,18 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
                 throw new BadRequestError('Chi co the tong hop cac phieu de xuat da duyet');
             }
 
+            // Cơ sở của phiếu tính theo dòng vật tư (fallback header) — header là cơ sở người tạo,
+            // có thể khác cơ sở nhận hàng khi tạo phiếu mua hộ cơ sở khác.
+            const isValidPlantRef = (v: any) => v && v !== 'undefined' && v !== 'null' && String(v).length === 24;
             const requestPlantIds = [
-                ...new Set(
-                    requests
-                        .map((request) => String((request as any).plantId?._id ?? (request as any).plantId ?? ''))
-                        .filter(Boolean)
+                ...new Set<string>(
+                    requests.flatMap((request): string[] => {
+                        const headerId = String((request as any).plantId?._id ?? (request as any).plantId ?? '');
+                        const ids = ((request as any).items ?? [])
+                            .map((i: any) => (isValidPlantRef(i.plantId) ? String(i.plantId) : headerId))
+                            .filter(Boolean);
+                        return [...new Set<string>(ids.length ? ids : headerId ? [headerId] : [])];
+                    })
                 ),
             ];
             if (requestPlantIds.length !== 1) {

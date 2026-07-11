@@ -428,9 +428,17 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
         );
     }
 
-    const requestPlantIds = [
-        ...new Set(requests.map((r: any) => String(r.plantId?._id ?? r.plantId ?? '')).filter(Boolean)),
-    ];
+    // Cơ sở của phiếu tính theo dòng vật tư (fallback header) — header là cơ sở người tạo,
+    // có thể khác cơ sở nhận hàng khi tạo phiếu mua hộ cơ sở khác.
+    const isValidId = (v: any) => v && v !== 'undefined' && v !== 'null' && String(v).length === 24;
+    const getEffectivePlantIds = (r: any): string[] => {
+        const headerId = String(r.plantId?._id ?? r.plantId ?? '');
+        const ids = (r.items ?? [])
+            .map((i: any) => (isValidId(i.plantId) ? String(i.plantId) : headerId))
+            .filter(Boolean);
+        return [...new Set<string>(ids.length ? ids : headerId ? [headerId] : [])];
+    };
+    const requestPlantIds = [...new Set<string>(requests.flatMap((r: any) => getEffectivePlantIds(r)))];
     if (requestPlantIds.length !== 1) {
         throw new BadRequestError('Chi co the tao don hang tu cac phieu cung mot co so');
     }
@@ -451,7 +459,6 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
     }
 
     // Gom items — populate plantId để lấy plantName
-    const isValidId = (v: any) => v && v !== 'undefined' && v !== 'null' && String(v).length === 24;
     const allPlantIds = [
         ...new Set([
             ...requests.map((r: any) => String(r.plantId?._id ?? r.plantId ?? '')).filter(isValidId),
