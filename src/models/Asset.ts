@@ -85,6 +85,12 @@ const AssetSchema = new mongoose.Schema(
             type: String,
             trim: true,
         },
+        // Ảnh xác thực máy — chụp khi thêm máy, dùng truy xuất khi mất tem QR
+        // (đặc biệt máy không có serial/model mờ). Tối đa 3 ảnh.
+        verificationImages: {
+            type: [String],
+            default: undefined,
+        },
         lastMaintenanceDate: {
             type: Date,
         },

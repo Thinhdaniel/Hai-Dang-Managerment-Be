@@ -163,6 +163,10 @@ export const serializeAsset = (input: any) => {
         specifications: asset?.specifications ?? {},
         note: asset?.note,
         imageUrl: asset?.imageUrl,
+        verificationImages:
+            Array.isArray(asset?.verificationImages) && asset.verificationImages.length
+                ? asset.verificationImages
+                : undefined,
         lastMaintenanceDate: toIso(asset?.lastMaintenanceDate),
         nextMaintenanceDate: toIso(asset?.nextMaintenanceDate),
         lastSeen,

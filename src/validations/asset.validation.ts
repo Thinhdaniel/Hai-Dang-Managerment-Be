@@ -22,6 +22,7 @@ export const createAssetSchema = z.object({
     purchasePrice: zRequiredNumber('Gia mua', 0).optional(),
     specifications: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
     imageUrl: zOptionalString(),
+    verificationImages: z.array(z.string().trim().url({ message: 'Link anh khong hop le' })).max(3).optional(),
     lastMaintenanceDate: zOptionalString(),
     nextMaintenanceDate: zOptionalString(),
 });
@@ -43,6 +44,7 @@ export const updateAssetSchema = z.object({
     purchasePrice: z.number().min(0).optional(),
     specifications: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
     imageUrl: zOptionalString(),
+    verificationImages: z.array(z.string().trim().url({ message: 'Link anh khong hop le' })).max(3).optional(),
     lastMaintenanceDate: zOptionalString(),
     nextMaintenanceDate: zOptionalString(),
 });
