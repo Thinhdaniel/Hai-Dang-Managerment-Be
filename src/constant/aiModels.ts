@@ -24,6 +24,7 @@ export const AI_FEATURES = {
     OCR_SUPPLY_REQUEST_VERIFY: 'ocr-supply-request-verify', // Lần đọc 2 độc lập của phiếu đề xuất cấp
     OCR_PURCHASE_RECEIPT: 'ocr-purchase-receipt', // OCR ảnh phiếu giao hàng/nhận hàng NCC -> đối soát đơn đặt (vision, JSON)
     OCR_PURCHASE_RECEIPT_VERIFY: 'ocr-purchase-receipt-verify', // Lần đọc 2 độc lập (model khác dòng) để đối chiếu chéo
+    RECEIPT_SEMANTIC_MATCH: 'receipt-semantic-match', // Ghép dòng phiếu NCC vào dòng đơn theo NGỮ NGHĨA (text, JSON)
     OCR_MACHINE_LABEL: 'ocr-machine-label', // OCR ảnh tem thông số máy -> nhãn hiệu/model/serial (vision, JSON)
     PURCHASE_QUOTE_TEXT: 'purchase-quote-text', // Dán tin nhắn báo giá NCC (text) -> trích dòng vật tư
     APPROVAL_REVIEW: 'approval-review', // Rà soát phiếu mua trước khi duyệt (tóm tắt cảnh báo)

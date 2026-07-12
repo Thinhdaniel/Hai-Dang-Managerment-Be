@@ -7,6 +7,7 @@ import { BadRequestError, NotFoundError } from '@/errors/customError';
 import PurchaseOrder from '@/models/PurchaseOrder';
 import PurchaseReceiptScan from '@/models/PurchaseReceiptScan';
 import PurchaseShortage from '@/models/PurchaseShortage';
+import SupplierItemAlias from '@/models/SupplierItemAlias';
 import { aiProviderService, type AiGenerateTextOptions } from '@/services/ai/ai-provider.service';
 import { vertexProviderService } from '@/services/ai/vertex-provider.service';
 import { getUserPlantId, toId } from '@/services/material-workflow.helpers';
@@ -215,6 +216,9 @@ const buildReceiptOcrPrompt = () =>
         'Bo qua dong tong cong, chiet khau, thanh toan, chu ky, tieu de bang.',
         'So luong va tien tra ve so thuan, khong dau phan cach nghin. Vi du "1.200" -> 1200, "12,5" -> 12.5.',
         'Ngay tra ISO YYYY-MM-DD neu doc duoc.',
+        'TIENG VIET PHAI DU DAU: moi text tra ve (ten hang, ten cong ty, ghi chu) viet tieng Viet CO DAU day du. Neu chu tren anh mo/mat dau, KHOI PHUC dau theo tu vung nganh may thong dung (vd "ong nhua"->"ống nhựa", "mo duoi vat so"->"mỏ dưới vắt sổ", "day cap"->"dây cấp", "mat nguyet"->"mặt nguyệt", "cam bien"->"cảm biến"). CON SO thi nguoc lai: mo/khong ro -> null, KHONG doan.',
+        'Neu bang co cot "Ma hang"/"Ma so"/"Ma vat tu" thi ghi vao note dang "Mã hàng: <ma>" (giu nguyen ky tu ma).',
+        'header.supplierName = TEN CONG TY PHAT HANH phieu o dau trang (letterhead/dong dau). Dong "Don vi:"/"Kinh gui:" la BEN MUA (cong ty minh) — TUYET DOI KHONG dien vao supplierName.',
         'Output schema:',
         '{"header":{"supplierName":null,"invoiceNo":null,"deliveryCode":null,"invoiceDate":null,"receivedDate":null},"lines":[{"pageIndex":0,"lineNo":1,"materialName":"","unit":null,"quantity":null,"unitPrice":null,"vatRate":null,"supplierName":null,"note":null,"rawText":null,"confidence":0.8}]}',
     ].join('\n');
@@ -359,43 +363,174 @@ const runOcrPass = async (files: Express.Multer.File[], feature: string) => {
 };
 
 /**
- * Đọc 2 LẦN ĐỘC LẬP bằng 2 model khác dòng (gemini + gpt) chạy song song rồi đối chiếu.
- * Ưu tiên độ chính xác hơn tốc độ: dòng nào 2 lần đọc không thống nhất sẽ KHÔNG được tự điền.
+ * Đọc 2 LẦN ĐỘC LẬP bằng 2 model khác dòng (gemini + gpt) rồi đối chiếu.
+ * Mỗi ẢNH được OCR RIÊNG (chất lượng đọc per-image cao hơn hẳn dồn nhiều ảnh
+ * một request — đã kiểm chứng cùng model trên phiếu thật) và đối chiếu THEO TRANG
+ * để dòng trang này không bị so nhầm với trang khác.
  * Lần 2 lỗi (model bận/hết quota) thì vẫn chạy tiếp 1 lần đọc, nhưng đánh dấu chưa đối chiếu.
  */
 const scanReceiptImages = async (files: Express.Multer.File[]) => {
-    const [primary, verifyResult] = await Promise.allSettled([
-        runOcrPass(files, AI_FEATURES.OCR_PURCHASE_RECEIPT),
-        runOcrPass(files, AI_FEATURES.OCR_PURCHASE_RECEIPT_VERIFY),
+    const startedAt = Date.now();
+    const [primaryPages, verifyPages] = await Promise.all([
+        Promise.allSettled(files.map((file) => runOcrPass([file], AI_FEATURES.OCR_PURCHASE_RECEIPT))),
+        Promise.allSettled(files.map((file) => runOcrPass([file], AI_FEATURES.OCR_PURCHASE_RECEIPT_VERIFY))),
     ]);
-    if (primary.status === 'rejected') throw primary.reason;
-    const aiResult = primary.value;
-    const firstLines = normalizeOcrLines(aiResult.data);
 
-    let lines: VerifiedLine[] = firstLines;
-    let verification: { status: 'verified' | 'skipped'; model?: string; note?: string } = {
-        status: 'skipped',
-        note: 'Không chạy được lần đọc 2 — kết quả CHƯA được đối chiếu chéo, hãy rà kỹ hơn',
-    };
-    if (verifyResult.status === 'fulfilled') {
-        lines = reconcileScans(firstLines, normalizeOcrLines(verifyResult.value.data));
-        verification = { status: 'verified', model: verifyResult.value.model };
+    const firstFailure = primaryPages.find((page) => page.status === 'rejected');
+    if (primaryPages.every((page) => page.status === 'rejected')) {
+        throw (firstFailure as PromiseRejectedResult).reason;
     }
 
+    const withPageIndex = (lines: ReceiptOcrLine[], pageIndex: number) =>
+        lines.map((line) => ({ ...line, pageIndex }));
+
+    const lines: VerifiedLine[] = [];
+    let verifiedAllPages = true;
+    let verifyModel: string | undefined;
+    let sampleResult: any;
+    let header: ReceiptOcrResult['header'] | undefined;
+
+    files.forEach((_, pageIndex) => {
+        const primary = primaryPages[pageIndex];
+        if (primary.status === 'rejected') {
+            verifiedAllPages = false;
+            return;
+        }
+        sampleResult = sampleResult ?? primary.value;
+        if (!header?.supplierName && primary.value.data?.header) header = primary.value.data.header;
+
+        const firstLines = withPageIndex(normalizeOcrLines(primary.value.data), pageIndex);
+        const verify = verifyPages[pageIndex];
+        if (verify.status === 'fulfilled') {
+            verifyModel = verify.value.model;
+            lines.push(...reconcileScans(firstLines, withPageIndex(normalizeOcrLines(verify.value.data), pageIndex)));
+        } else {
+            verifiedAllPages = false;
+            lines.push(...firstLines);
+        }
+    });
+
+    const verification: { status: 'verified' | 'skipped'; model?: string; note?: string } = verifiedAllPages
+        ? { status: 'verified', model: verifyModel }
+        : {
+              status: 'skipped',
+              note: 'Không chạy được lần đọc 2 cho toàn bộ ảnh — kết quả CHƯA được đối chiếu chéo đầy đủ, hãy rà kỹ hơn',
+          };
+
     return {
-        provider: aiResult.provider,
-        model: aiResult.model,
-        latencyMs: aiResult.latencyMs,
+        provider: sampleResult?.provider,
+        model: sampleResult?.model,
+        latencyMs: Date.now() - startedAt,
         verification,
         header: {
-            supplierName: cleanText(aiResult.data?.header?.supplierName),
-            invoiceNo: cleanText(aiResult.data?.header?.invoiceNo),
-            deliveryCode: cleanText(aiResult.data?.header?.deliveryCode),
-            invoiceDate: cleanText(aiResult.data?.header?.invoiceDate),
-            receivedDate: cleanText(aiResult.data?.header?.receivedDate),
+            supplierName: cleanText(header?.supplierName),
+            invoiceNo: cleanText(header?.invoiceNo),
+            deliveryCode: cleanText(header?.deliveryCode),
+            invoiceDate: cleanText(header?.invoiceDate),
+            receivedDate: cleanText(header?.receivedDate),
         },
         lines,
     };
+};
+
+// ── Bộ nhớ NCC: tra alias đã học từ các lần đối soát tay trước ─────────────────
+const extractAliasCode = (line: ReceiptOcrLine) => {
+    const match = `${line.note ?? ''} ${line.rawText ?? ''}`.match(
+        /m[aã]\s*(?:h[aà]ng|s[oố]|v[aậ]t\s*t[uư])?\s*[:.]?\s*([A-Za-z0-9][A-Za-z0-9._\/-]{2,})/i
+    );
+    return match?.[1]?.toUpperCase();
+};
+
+const loadSupplierAliases = async (supplierName?: string) => {
+    const supplierKey = normalizeText(supplierName);
+    if (!supplierKey) return { byCode: new Map<string, any>(), byName: new Map<string, any>() };
+    const aliases = await SupplierItemAlias.find({ supplierKey }).sort('-useCount').limit(500).lean();
+    const byCode = new Map<string, any>();
+    const byName = new Map<string, any>();
+    (aliases as any[]).forEach((alias) => {
+        if (alias.aliasCode && !byCode.has(alias.aliasCode)) byCode.set(alias.aliasCode, alias);
+        if (alias.aliasKey && !byName.has(alias.aliasKey)) byName.set(alias.aliasKey, alias);
+    });
+    return { byCode, byName };
+};
+
+// ── AI ghép NGỮ NGHĨA: cứu các dòng tên NCC ≠ tên nội bộ mà so chuỗi bó tay ────
+type SemanticMatch = {
+    reviewIndex: number;
+    type: 'po_item' | 'shortage' | 'none';
+    poItemIndex?: number | null;
+    shortageId?: string | null;
+    confidence?: number;
+    reason?: string;
+};
+
+const buildSemanticMatchPrompt = () =>
+    [
+        'Ban la chuyen gia vat tu nganh may cong nghiep. Nhiem vu: ghep tung DONG PHIEU GIAO cua nha cung cap vao dung DONG DON DAT (hoac NO HANG cu) neu chung la CUNG MOT MAT HANG THUC TE.',
+        'Ten hai ben thuong ghi KHAC nhau: NCC ghi ten ky thuat/quy cach, don noi bo ghi ten dan da. Vi du cung mot mon: "Ong nhua PU kt:6x4mm x 200M" = "Day hoi may nen khi phi 6mm"; "Mo duoi vat so PEGASUS" = "Moc duoi (mo duoi) vat so Pegasus"; "Cam bien Y, ma hang 0103040478" = "Cam bien tiem can dinh vi truc Y"; "Mat nguyet may 1 kim dien tu F20" = "Mat nguyet dung cho may may cong nghiep 1 kim".',
+        'Tin hieu manh de ghep: SO LUONG giao khop so luong dang cho nhan; kich co/ma so/thuong hieu trung nhau; cung nhom chuc nang.',
+        'CAN TRONG voi bien the: kich thuoc khac nhau (phi 6 vs phi 8, 11/75 vs 9/65, 4 chi vs 5 chi) la 2 mat hang KHAC nhau — KHONG ghep.',
+        'Moi dong phieu ghep TOI DA 1 dong don/no; moi dong don chi duoc nhan toi da 1 dong phieu.',
+        'confidence: >=0.9 chi khi rat chac cung mat hang; 0.7-0.85 kha nang cao; <0.7 -> type "none".',
+        'reason viet tieng Viet ngan gon (vi sao ghep / vi sao khong).',
+        'Chi tra JSON hop le: {"matches":[{"reviewIndex":0,"type":"po_item","poItemIndex":3,"shortageId":null,"confidence":0.9,"reason":""}]}',
+    ].join('\n');
+
+const runSemanticMatch = async (
+    pendingLines: Array<{ line: VerifiedLine; quantity: number }>,
+    orderItems: any[],
+    shortages: any[],
+    remainingByIndex: Map<number, number>,
+    shortageRemaining: Map<string, number>
+): Promise<SemanticMatch[]> => {
+    const openItems = orderItems.filter((item: any) => (remainingByIndex.get(item.index) ?? 0) > 0);
+    if (!pendingLines.length || (!openItems.length && !shortages.length)) return [];
+
+    const lineRows = pendingLines.map(
+        ({ line, quantity }, index) =>
+            `R${index}: "${line.materialName}" | SL giao=${quantity} ${line.unit || ''}${line.note ? ` | ${line.note}` : ''}`
+    );
+    const itemRows = openItems.map(
+        (item: any) =>
+            `P${item.index}: "${item.materialName}" | DVT=${item.unit || '?'} | con cho nhan=${remainingByIndex.get(item.index) ?? 0}${item.supplierName ? ` | NCC=${item.supplierName}` : ''}`
+    );
+    const shortageRows = shortages
+        .filter((shortage: any) => (shortageRemaining.get(String(shortage._id)) ?? 0) > 0)
+        .map(
+            (shortage: any) =>
+                `S${shortage._id}: "${shortage.materialName}" | DVT=${shortage.unit || '?'} | con no=${shortageRemaining.get(String(shortage._id)) ?? 0} | tu don ${shortage.originalPurchaseOrderCode || ''}`
+        );
+
+    try {
+        const result = await generateReceiptOcrJson<{ matches?: SemanticMatch[] }>(
+            {
+                feature: AI_FEATURES.RECEIPT_SEMANTIC_MATCH,
+                temperature: 0.05,
+                reasoningEffort: 'low',
+                maxTokens: 4000,
+                timeoutMs: 45000,
+                messages: [
+                    { role: 'system', content: buildSemanticMatchPrompt() },
+                    {
+                        role: 'user',
+                        content: [
+                            'DONG PHIEU GIAO CHUA GHEP DUOC:',
+                            ...lineRows,
+                            '',
+                            'DONG DON DAT CON CHO NHAN:',
+                            ...itemRows,
+                            ...(shortageRows.length ? ['', 'NO HANG CU CON THIEU:', ...shortageRows] : []),
+                        ].join('\n'),
+                    },
+                ],
+            },
+            config.vertex.visionModel
+        );
+        return Array.isArray(result.data?.matches) ? result.data.matches : [];
+    } catch (error) {
+        console.warn('[receipt-scan] semantic match failed, skip:', error instanceof Error ? error.message : error);
+        return [];
+    }
 };
 
 export const previewPurchaseReceiptScan = async (req: Request, res: Response) => {
@@ -451,6 +586,9 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
     const reviewLines: Array<any> = [];
     const unreadableLines: Array<any> = [];
 
+    // Bộ nhớ map NCC học từ các lần đối soát tay trước
+    const aliases = await loadSupplierAliases(scan.header.supplierName);
+
     // Dòng đọc dở dang (thiếu tên/SL) KHÔNG âm thầm bỏ — trả riêng để người dùng đối chiếu ảnh gốc
     const readableLines = (scan.lines as VerifiedLine[]).filter((line) => {
         const ok = line.materialName && Number(line.quantity ?? 0) > 0;
@@ -477,6 +615,40 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
         // (phiếu "Chiếc" vs danh mục "cái" là chuyện thường) — chỉ chặn TỰ ĐIỀN, vẫn gợi ý.
         const compatibleWith = (name?: string, supplierName?: string) =>
             !numbersConflict(line.materialName, name) && sameSupplier(lineSupplier, supplierName);
+
+        // Bộ nhớ NCC: tên/mã hàng này đã được map tay trước đây -> khớp ngay không cần so chuỗi
+        const lineAliasCode = extractAliasCode(line);
+        const aliasHit =
+            (lineAliasCode ? aliases.byCode.get(lineAliasCode) : undefined) ||
+            aliases.byName.get(normalizeText(line.materialName));
+        let aliasSuggestionItem: any;
+        if (aliasHit && remainingQty > 0) {
+            const aliasBest = orderItems
+                .filter((item: any) => (currentRemaining.get(item.index) ?? 0) > 0)
+                .map((item: any) => ({ item, sim: nameMatchScore(aliasHit.targetMaterialName, item.materialName) }))
+                .sort((a: any, b: any) => b.sim - a.sim)[0];
+            if (aliasBest && aliasBest.sim >= 0.8) {
+                if (lineConfident) {
+                    const available = currentRemaining.get(aliasBest.item.index) ?? 0;
+                    const quantity = roundQty(Math.min(available, remainingQty));
+                    if (quantity > 0) {
+                        currentRemaining.set(aliasBest.item.index, roundQty(available - quantity));
+                        remainingQty = roundQty(remainingQty - quantity);
+                        currentAllocations.push({
+                            sourceLine: line,
+                            poItemIndex: aliasBest.item.index,
+                            materialName: aliasBest.item.materialName,
+                            unit: aliasBest.item.unit,
+                            quantity,
+                            confidence: 0.95,
+                            reason: `Khớp lịch sử NCC (đã map ${aliasHit.useCount ?? 1} lần trước)`,
+                        });
+                    }
+                } else {
+                    aliasSuggestionItem = aliasBest.item;
+                }
+            }
+        }
 
         const candidates = orderItems
             .filter(
@@ -556,7 +728,10 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
 
         if (remainingQty > 0) {
             // Không tự điền — kèm GỢI Ý tốt nhất (nếu có) để người dùng tick xác nhận
-            const bestItem = candidates[0];
+            // Alias lịch sử NCC là gợi ý mạnh nhất (đã từng map tay đúng món này)
+            const bestItem = aliasSuggestionItem
+                ? { item: aliasSuggestionItem, nameSim: 0.95, unitOk: sameUnit(line.unit, aliasSuggestionItem.unit) }
+                : candidates[0];
             const bestShortage = shortageCandidates[0];
             let suggestion: any = bestItem
                 ? {
@@ -601,6 +776,107 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                                 : 'Không khớp đơn hiện tại hoặc nợ cũ nào',
                 suggestion,
             });
+        }
+    }
+
+    // ── AI ghép ngữ nghĩa: cứu các dòng ảnh đọc rõ nhưng so chuỗi không ra
+    // (tên NCC khác hẳn tên nội bộ: "Ống nhựa PU 6x4mm" vs "Dây hơi phi 6mm")
+    const pendingForAi = reviewLines
+        .map((row: any, index: number) => ({ row, index }))
+        .filter(
+            ({ row }) =>
+                row.quantity > 0 &&
+                (row.sourceLine?.confidence ?? 0) >= AUTO_LINE_CONFIDENCE &&
+                row.sourceLine?.verify !== 'quantity_mismatch'
+        );
+    if (pendingForAi.length) {
+        const matches = await runSemanticMatch(
+            pendingForAi.map(({ row }) => ({ line: row.sourceLine, quantity: row.quantity })),
+            orderItems,
+            shortageState,
+            currentRemaining,
+            shortageRemaining
+        );
+        const usedPo = new Set<number>();
+        const usedShortage = new Set<string>();
+        const resolvedReviewIdx = new Set<number>();
+
+        for (const match of matches) {
+            const pending = pendingForAi[Number(match.reviewIndex)];
+            if (!pending || match.type === 'none') continue;
+            const row: any = pending.row;
+            const confidence = Math.min(1, Math.max(0, Number(match.confidence ?? 0)));
+
+            if (match.type === 'po_item' && match.poItemIndex != null && !usedPo.has(Number(match.poItemIndex))) {
+                const itemIndex = Number(match.poItemIndex);
+                const item = orderItems.find((candidate: any) => candidate.index === itemIndex);
+                const available = currentRemaining.get(itemIndex) ?? 0;
+                if (!item || available <= 0) continue;
+                const unitOk = sameUnit(row.sourceLine.unit, item.unit);
+                const quantity = roundQty(Math.min(available, row.quantity));
+                if (confidence >= 0.85 && unitOk && quantity > 0 && row.quantity <= available) {
+                    usedPo.add(itemIndex);
+                    currentRemaining.set(itemIndex, roundQty(available - quantity));
+                    currentAllocations.push({
+                        sourceLine: row.sourceLine,
+                        poItemIndex: itemIndex,
+                        materialName: item.materialName,
+                        unit: item.unit,
+                        quantity,
+                        confidence: Number(confidence.toFixed(2)),
+                        reason: `AI đối chiếu ngữ nghĩa: ${match.reason || 'cùng một mặt hàng'}`,
+                    });
+                    resolvedReviewIdx.add(pending.index);
+                } else if (confidence >= 0.6 && quantity > 0 && !row.suggestion) {
+                    row.suggestion = {
+                        type: 'po_item',
+                        poItemIndex: itemIndex,
+                        materialName: item.materialName,
+                        unit: item.unit,
+                        unitMismatch: !unitOk ? row.sourceLine.unit || '' : undefined,
+                        quantity,
+                        nameSimilarity: Number(confidence.toFixed(2)),
+                    };
+                    row.reason = `AI cho rằng đây là "${item.materialName}" (tin cậy ${Math.round(confidence * 100)}%)${match.reason ? `: ${match.reason}` : ''} — xác nhận trước khi nhận`;
+                }
+            } else if (match.type === 'shortage' && match.shortageId && !usedShortage.has(String(match.shortageId))) {
+                const key = String(match.shortageId);
+                const shortage = shortageState.find((candidate: any) => String(candidate._id) === key);
+                const available = shortageRemaining.get(key) ?? 0;
+                if (!shortage || available <= 0) continue;
+                const unitOk = sameUnit(row.sourceLine.unit, (shortage as any).unit);
+                const quantity = roundQty(Math.min(available, row.quantity));
+                if (confidence >= 0.85 && unitOk && quantity > 0 && row.quantity <= available) {
+                    usedShortage.add(key);
+                    shortageRemaining.set(key, roundQty(available - quantity));
+                    shortageAllocations.push({
+                        sourceLine: row.sourceLine,
+                        shortageId: key,
+                        originalPurchaseOrderCode: (shortage as any).originalPurchaseOrderCode,
+                        materialName: (shortage as any).materialName,
+                        unit: (shortage as any).unit,
+                        quantity,
+                        confidence: Number(confidence.toFixed(2)),
+                        reason: `AI đối chiếu ngữ nghĩa: ${match.reason || 'bù nợ hàng cũ'}`,
+                    });
+                    resolvedReviewIdx.add(pending.index);
+                } else if (confidence >= 0.6 && quantity > 0 && !row.suggestion) {
+                    row.suggestion = {
+                        type: 'shortage',
+                        shortageId: key,
+                        originalPurchaseOrderCode: (shortage as any).originalPurchaseOrderCode,
+                        materialName: (shortage as any).materialName,
+                        unit: (shortage as any).unit,
+                        unitMismatch: !unitOk ? row.sourceLine.unit || '' : undefined,
+                        quantity,
+                        nameSimilarity: Number(confidence.toFixed(2)),
+                    };
+                    row.reason = `AI cho rằng đây là nợ cũ "${(shortage as any).materialName}" (tin cậy ${Math.round(confidence * 100)}%) — xác nhận trước khi nhận`;
+                }
+            }
+        }
+        for (let index = reviewLines.length - 1; index >= 0; index -= 1) {
+            if (resolvedReviewIdx.has(index)) reviewLines.splice(index, 1);
         }
     }
 
@@ -693,6 +969,62 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                 summary,
             },
             message: 'Da quet va doi soat phieu nhan hang',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+/**
+ * Học map NCC từ lần đối soát tay: FE gọi khi người dùng bấm "Áp dụng vào form".
+ * Lần giao sau cùng NCC, cùng tên/mã hàng sẽ được tự map ngay (không cần AI).
+ */
+export const recordReceiptScanMappings = async (req: Request, res: Response) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw new BadRequestError('Don hang khong hop le');
+    const order = await PurchaseOrder.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).lean();
+    if (!order) throw new NotFoundError('Khong tim thay don dat hang');
+    ensureOrderScope(req, order);
+
+    const mappings: Array<{ materialName?: string; note?: string; supplierName?: string; poItemIndex?: number }> =
+        Array.isArray(req.body?.mappings) ? req.body.mappings : [];
+    const supplierFallback = cleanText(req.body?.supplierName);
+    let saved = 0;
+
+    for (const mapping of mappings.slice(0, 100)) {
+        const item = ((order as any).items ?? [])[Number(mapping.poItemIndex ?? -1)];
+        const supplierName = cleanText(mapping.supplierName) || supplierFallback || item?.supplierName;
+        const supplierKey = normalizeText(supplierName);
+        const aliasKey = normalizeText(mapping.materialName);
+        if (!supplierKey || !aliasKey || !item?.materialName) continue;
+        // Tên 2 bên vốn trùng nhau thì string-match tự lo, không cần tốn alias
+        if (aliasKey === normalizeText(item.materialName)) continue;
+
+        const aliasCode = extractAliasCode({ materialName: mapping.materialName ?? '', note: mapping.note } as any);
+        await SupplierItemAlias.updateOne(
+            { supplierKey, aliasKey },
+            {
+                $set: {
+                    supplierName,
+                    aliasText: mapping.materialName,
+                    aliasCode,
+                    targetMaterialName: item.materialName,
+                    targetMaterialId: item.materialId || undefined,
+                    targetUnit: item.unit,
+                    lastUsedAt: new Date(),
+                    updatedBy: req.userId,
+                },
+                $setOnInsert: { createdBy: req.userId },
+                $inc: { useCount: 1 },
+            },
+            { upsert: true }
+        );
+        saved += 1;
+    }
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: { saved },
+            message: 'Da luu map ten hang NCC',
             status: StatusCodes.OK,
             success: true,
         })

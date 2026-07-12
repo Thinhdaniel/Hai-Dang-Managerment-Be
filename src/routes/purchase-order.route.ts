@@ -35,6 +35,8 @@ router.post(
     imageUpload.array('images', 5),
     ctrl.previewPurchaseReceiptScan
 );
+// Học map tên hàng NCC -> vật tư nội bộ từ lần đối soát tay (gọi khi Áp dụng vào form)
+router.post('/:id/receipt-scan/mappings', requireProcurementDirector, validateObjectId, ctrl.recordReceiptScanMappings);
 router.patch(
     '/:id/receive',
     requireProcurementDirector,
