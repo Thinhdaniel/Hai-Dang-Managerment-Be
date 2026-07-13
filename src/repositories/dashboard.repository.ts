@@ -6,6 +6,7 @@ import DistributionRecord from '@/models/DistributionRecord';
 import { ASSET_OWNERSHIP_TYPE } from '@/constant/assetStatus';
 import { AT_PLANT_RADIUS_M, MAX_ACCURACY_M } from '@/constant/mislocation';
 import { format, startOfMonth, subDays, subMonths } from 'date-fns';
+import { Types } from 'mongoose';
 
 type DashboardSummaryRow = {
     totalMachines: number;
@@ -414,14 +415,15 @@ export const dashboardRepository = {
     },
 
     // Top máy bị bảo trì/hỏng nhiều nhất theo SỐ LẦN phát sinh phiếu (khác báo cáo chi phí theo tiền).
-    getTopBrokenAssets(limit = 8) {
+    getTopBrokenAssets(limit = 8, plantId?: string) {
         return Maintenance.aggregate<TopBrokenAssetRow>([
             { $match: { isDeleted: { $ne: true } } },
             { $group: { _id: '$assetId', count: { $sum: 1 }, lastDate: { $max: '$createdAt' } } },
-            { $sort: { count: -1, lastDate: -1 } },
-            { $limit: limit },
             { $lookup: { from: 'assets', localField: '_id', foreignField: '_id', as: 'asset' } },
             { $unwind: { path: '$asset', preserveNullAndEmptyArrays: true } },
+            ...(plantId ? [{ $match: { 'asset.plantId': new Types.ObjectId(plantId) } }] : []),
+            { $sort: { count: -1 as const, lastDate: -1 as const } },
+            { $limit: limit },
             { $lookup: { from: 'plants', localField: 'asset.plantId', foreignField: '_id', as: 'plant' } },
             { $unwind: { path: '$plant', preserveNullAndEmptyArrays: true } },
             {

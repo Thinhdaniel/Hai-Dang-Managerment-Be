@@ -35,16 +35,34 @@ import {
 import { validateObjectId } from '@/middlewares/objectIdValidation';
 import { getQrFieldInsight } from '@/services/ai-qr-field.service';
 import { imageUpload } from '@/middlewares/multerMiddleware';
+import { userRateLimitMiddleware } from '@/middlewares/limiterResquestMiddleware';
+import { submitAssistantFeedback } from '@/services/ai-assistant-quality.service';
+import { assistantFeedbackSchema } from '@/validations/ai-assistant-quality.validation';
 
 const router = Router();
 
 router.use(authenticate);
 
+// Tính theo từng tài khoản, không theo IP chung của nhà máy.
+const assistantLimiter = userRateLimitMiddleware(60, 20);
+const assistantFeedbackLimiter = userRateLimitMiddleware(60, 30);
+
 router.post('/help', validator(askAiHelpSchema), asyncHandler(askAiHelp));
 router.post('/asset-search', validator(aiAssetSearchSchema), asyncHandler(aiAssetSearch));
 router.post('/assistant/assets', validator(aiAssetAssistantSchema), asyncHandler(askAssetAssistant));
-router.post('/assistant', validator(aiAssetAssistantSchema), asyncHandler(askAgentAssistant));
-router.post('/assistant/stream', validator(aiAssetAssistantSchema), asyncHandler(streamAgentAssistant));
+router.post('/assistant', assistantLimiter, validator(aiAssetAssistantSchema), asyncHandler(askAgentAssistant));
+router.post(
+    '/assistant/:reqId/feedback',
+    assistantFeedbackLimiter,
+    validator(assistantFeedbackSchema),
+    asyncHandler(submitAssistantFeedback)
+);
+router.post(
+    '/assistant/stream',
+    assistantLimiter,
+    validator(aiAssetAssistantSchema),
+    asyncHandler(streamAgentAssistant)
+);
 router.post('/tts', validator(aiTtsSchema), asyncHandler(synthesizeSpeech));
 router.post('/material-match', validator(aiMaterialMatchSchema), asyncHandler(matchMaterialsByAi));
 router.post('/chat-summary', validator(aiChatSummarySchema), asyncHandler(summarizeChatConversation));

@@ -8,6 +8,7 @@ import Plant from '@/models/Plant';
 import { aiProviderService } from '@/services/ai/ai-provider.service';
 import { buildFacilityCostReport } from '@/services/report.service';
 import { runAssistant } from '@/services/ai-agent.service';
+import { buildAssistantContext } from '@/services/ai/assistant-policy.service';
 import customResponse from '@/utils/response';
 
 // AI Analytics Studio: câu hỏi ngôn ngữ tự nhiên -> chart-spec (chọn TRONG danh mục cho phép,
@@ -24,14 +25,53 @@ type MetricKey =
     | 'total_cost';
 type ChartType = 'bar' | 'line' | 'pie';
 
-const METRICS: Record<MetricKey, { label: string; dims: Dimension[]; unit: string; defaultChart: ChartType; timed: boolean }> = {
+const METRICS: Record<
+    MetricKey,
+    { label: string; dims: Dimension[]; unit: string; defaultChart: ChartType; timed: boolean }
+> = {
     asset_count: { label: 'Số máy', dims: ['plant', 'status', 'type'], unit: 'máy', defaultChart: 'bar', timed: false },
-    maintenance_count: { label: 'Số phiếu bảo trì', dims: ['month', 'type', 'repairMode', 'status'], unit: 'phiếu', defaultChart: 'line', timed: true },
-    request_count: { label: 'Số phiếu đề xuất mua', dims: ['plant', 'month', 'status'], unit: 'phiếu', defaultChart: 'bar', timed: true },
-    purchase_value: { label: 'Giá trị đề xuất mua', dims: ['plant', 'month', 'status'], unit: 'đ', defaultChart: 'bar', timed: true },
-    distribution_cost: { label: 'Chi phí cấp phát vật tư', dims: ['plant', 'month'], unit: 'đ', defaultChart: 'bar', timed: true },
-    external_repair_cost: { label: 'Chi phí sửa ngoài', dims: ['plant', 'month'], unit: 'đ', defaultChart: 'bar', timed: true },
-    total_cost: { label: 'Tổng chi phí vận hành', dims: ['plant', 'month'], unit: 'đ', defaultChart: 'bar', timed: true },
+    maintenance_count: {
+        label: 'Số phiếu bảo trì',
+        dims: ['month', 'type', 'repairMode', 'status'],
+        unit: 'phiếu',
+        defaultChart: 'line',
+        timed: true,
+    },
+    request_count: {
+        label: 'Số phiếu đề xuất mua',
+        dims: ['plant', 'month', 'status'],
+        unit: 'phiếu',
+        defaultChart: 'bar',
+        timed: true,
+    },
+    purchase_value: {
+        label: 'Giá trị đề xuất mua',
+        dims: ['plant', 'month', 'status'],
+        unit: 'đ',
+        defaultChart: 'bar',
+        timed: true,
+    },
+    distribution_cost: {
+        label: 'Chi phí cấp phát vật tư',
+        dims: ['plant', 'month'],
+        unit: 'đ',
+        defaultChart: 'bar',
+        timed: true,
+    },
+    external_repair_cost: {
+        label: 'Chi phí sửa ngoài',
+        dims: ['plant', 'month'],
+        unit: 'đ',
+        defaultChart: 'bar',
+        timed: true,
+    },
+    total_cost: {
+        label: 'Tổng chi phí vận hành',
+        dims: ['plant', 'month'],
+        unit: 'đ',
+        defaultChart: 'bar',
+        timed: true,
+    },
 };
 
 const DIM_LABEL: Record<Dimension, string> = {
@@ -97,7 +137,9 @@ const monthKeyLabel = (monthKey: string) => {
 };
 
 const plantNameMap = async () => {
-    const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name code').lean();
+    const plants = await Plant.find({ isDeleted: { $ne: true } })
+        .select('_id name code')
+        .lean();
     return new Map(plants.map((p: any) => [String(p._id), String(p.name || p.code || 'Chưa rõ')]));
 };
 
@@ -200,7 +242,11 @@ const buildChart = async (
         }
         const field = dimension === 'type' ? '$type' : dimension === 'repairMode' ? '$repairMode' : '$status';
         const labelMap =
-            dimension === 'type' ? MAINT_TYPE_LABEL : dimension === 'repairMode' ? REPAIR_MODE_LABEL : MAINT_STATUS_LABEL;
+            dimension === 'type'
+                ? MAINT_TYPE_LABEL
+                : dimension === 'repairMode'
+                  ? REPAIR_MODE_LABEL
+                  : MAINT_STATUS_LABEL;
         const rows = (await groupAgg(Maintenance, match, field, { $sum: 1 })).sort((a, b) => b.value - a.value);
         return {
             categories: rows.map((r) => labelMap[r.key] || r.key || 'Khác'),
@@ -249,7 +295,14 @@ const catalogForPrompt = () =>
         .map(([key, m]) => `- ${key} (${m.label}); chiều: ${m.dims.join(', ')}`)
         .join('\n');
 
-type Spec = { metric: MetricKey; dimension: Dimension; period: number; chartType: ChartType; title: string; monthKey?: string };
+type Spec = {
+    metric: MetricKey;
+    dimension: Dimension;
+    period: number;
+    chartType: ChartType;
+    title: string;
+    monthKey?: string;
+};
 
 const sanitizeSpec = (raw: any): Spec => {
     const metric: MetricKey = (METRICS as any)[raw?.metric] ? raw.metric : 'asset_count';
@@ -273,12 +326,7 @@ const sanitizeSpec = (raw: any): Spec => {
 // Định tuyến từ khóa XÁC ĐỊNH (chạy trước AI): câu phân tích/so sánh rõ ràng -> catalog ngay,
 // nhanh + luôn đúng + không phụ thuộc AI. Chỉ bắt khi có "tín hiệu phân tích" để không cướp
 // các câu liệt kê ("máy nào đang bảo trì") vốn nên đi agentic.
-const normQ = (s: string) =>
-    s
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .replace(/đ/g, 'd');
+const normQ = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd');
 
 // Nhận diện THÁNG CỤ THỂ trong câu -> YYYY-MM. Phân biệt với KHUNG THỜI GIAN ("6 tháng qua"):
 // chỉ bắt "tháng <N>" (số ĐỨNG SAU "tháng"), "tháng này", "tháng trước". KHÔNG bắt "6 tháng".
@@ -357,7 +405,17 @@ const keywordSpec = (question: string): Spec | null => {
     const dims = meta.dims;
     // CHỌN CHIỀU theo ý định RÕ RÀNG, ưu tiên đúng. Lưu ý: "6 tháng/X tháng" là KHUNG THỜI GIAN (period),
     // KHÔNG phải yêu cầu nhóm theo tháng -> chỉ chọn month khi có "xu hướng/theo tháng/hàng tháng...".
-    const wantsMonth = has('xu huong', 'theo thang', 'hang thang', 'theo ky', 'qua cac thang', 'moi thang', 'theo tung thang', 'theo thoi gian', 'dien bien');
+    const wantsMonth = has(
+        'xu huong',
+        'theo thang',
+        'hang thang',
+        'theo ky',
+        'qua cac thang',
+        'moi thang',
+        'theo tung thang',
+        'theo thoi gian',
+        'dien bien'
+    );
     const wantsStatus = has('trang thai') || assetStatusIntent;
     const wantsType = has('loai may', 'theo loai', 'chung loai');
     const wantsRepair = has('noi bo', 'sua ngoai');
@@ -438,12 +496,25 @@ const chartToTable = (chart: ChartData) => ({
 });
 
 // ----- Converter: aggregates (số THẬT từ tool) -> chart. Số lấy nguyên văn, không bịa. -----
-type AgenticChart = { type: ChartType; title: string; categories: string[]; series: { name: string; data: number[] }[]; unit: string };
+type AgenticChart = {
+    type: ChartType;
+    title: string;
+    categories: string[];
+    series: { name: string; data: number[] }[];
+    unit: string;
+};
 const num = (v: unknown) => Math.round(Number(v || 0));
 
 const aggregatesToChart = (agg: any): AgenticChart | null => {
     if (!agg || typeof agg !== 'object') return null;
-    const mk = (type: ChartType, title: string, categories: any[], name: string, data: number[], unit: string): AgenticChart => ({
+    const mk = (
+        type: ChartType,
+        title: string,
+        categories: any[],
+        name: string,
+        data: number[],
+        unit: string
+    ): AgenticChart => ({
         type,
         title,
         categories: categories.map((c) => (c == null || c === '' ? 'Khác' : String(c))), // chống nhãn "null"
@@ -468,11 +539,25 @@ const aggregatesToChart = (agg: any): AgenticChart | null => {
     if (agg.compareCost?.purchase) {
         const c = agg.compareCost;
         const v = (b: any) => num(b?.current ?? 0);
-        return mk('bar', `Mua vs Cấp phát ${c.periodLabel || ''}`.trim(), ['Mua vật tư', 'Cấp phát'], 'Chi phí', [v(c.purchase), v(c.distribution)], 'đ');
+        return mk(
+            'bar',
+            `Mua vs Cấp phát ${c.periodLabel || ''}`.trim(),
+            ['Mua vật tư', 'Cấp phát'],
+            'Chi phí',
+            [v(c.purchase), v(c.distribution)],
+            'đ'
+        );
     }
     if (agg.distributionAnalysis?.materials?.length) {
         const ms = agg.distributionAnalysis.materials.slice(0, 12);
-        return mk('bar', 'Chi phí cấp phát theo vật tư', ms.map((m: any) => m.materialName), 'Giá trị', ms.map((m: any) => num(m.totalValue)), 'đ');
+        return mk(
+            'bar',
+            'Chi phí cấp phát theo vật tư',
+            ms.map((m: any) => m.materialName),
+            'Giá trị',
+            ms.map((m: any) => num(m.totalValue)),
+            'đ'
+        );
     }
     if (agg.variance?.drivers?.length) {
         const d = agg.variance.drivers.slice(0, 12);
@@ -500,14 +585,25 @@ const aggregatesToChart = (agg: any): AgenticChart | null => {
     }
     if (agg.supplierComparison?.suppliers?.length) {
         const s = agg.supplierComparison.suppliers.slice(0, 12);
-        return mk('bar', `Giá nhà cung cấp${agg.supplierComparison.materialName ? `: ${agg.supplierComparison.materialName}` : ''}`, s.map((x: any) => x.supplierName), 'Giá', s.map((x: any) => num(x.value)), 'đ');
+        return mk(
+            'bar',
+            `Giá nhà cung cấp${agg.supplierComparison.materialName ? `: ${agg.supplierComparison.materialName}` : ''}`,
+            s.map((x: any) => x.supplierName),
+            'Giá',
+            s.map((x: any) => num(x.value)),
+            'đ'
+        );
     }
     if (agg.priceHistory?.points?.length) {
         const p = agg.priceHistory.points;
         return mk(
             'line',
             `Lịch sử giá${agg.priceHistory.materialName ? `: ${agg.priceHistory.materialName}` : ''}`,
-            p.map((x: any, i: number) => (x.date ? new Date(x.date).toLocaleDateString('vi-VN', { month: '2-digit', year: '2-digit' }) : String(i + 1))),
+            p.map((x: any, i: number) =>
+                x.date
+                    ? new Date(x.date).toLocaleDateString('vi-VN', { month: '2-digit', year: '2-digit' })
+                    : String(i + 1)
+            ),
             'Đơn giá',
             p.map((x: any) => num(x.unitPrice)),
             'đ'
@@ -516,24 +612,53 @@ const aggregatesToChart = (agg: any): AgenticChart | null => {
     if (agg.requestAnalysis?.byPlant?.length) {
         const b = agg.requestAnalysis.byPlant.slice(0, 12);
         const isMoney = b[0]?.value != null;
-        return mk('bar', 'Đề xuất theo cơ sở', b.map((x: any) => x.label), isMoney ? 'Giá trị' : 'Số phiếu', b.map((x: any) => num(x.value ?? x.count)), isMoney ? 'đ' : 'phiếu');
+        return mk(
+            'bar',
+            'Đề xuất theo cơ sở',
+            b.map((x: any) => x.label),
+            isMoney ? 'Giá trị' : 'Số phiếu',
+            b.map((x: any) => num(x.value ?? x.count)),
+            isMoney ? 'đ' : 'phiếu'
+        );
     }
     if (agg.requestAnalysis?.byStatus?.length) {
         const b = agg.requestAnalysis.byStatus.slice(0, 10);
-        return mk('pie', 'Đề xuất theo trạng thái', b.map((x: any) => x.label), 'Số phiếu', b.map((x: any) => num(x.count)), 'phiếu');
+        return mk(
+            'pie',
+            'Đề xuất theo trạng thái',
+            b.map((x: any) => x.label),
+            'Số phiếu',
+            b.map((x: any) => num(x.count)),
+            'phiếu'
+        );
     }
     if (agg.usageByPlant?.materials?.length) {
         const ms = agg.usageByPlant.materials.slice(0, 12);
-        return mk('bar', 'Vật tư cấp nhiều nhất', ms.map((m: any) => m.materialName), 'Số lượng', ms.map((m: any) => num(m.totalQty)), '');
+        return mk(
+            'bar',
+            'Vật tư cấp nhiều nhất',
+            ms.map((m: any) => m.materialName),
+            'Số lượng',
+            ms.map((m: any) => num(m.totalQty)),
+            ''
+        );
     }
     if (agg.topBroken?.length) {
         const t = agg.topBroken.slice(0, 12);
-        return mk('bar', 'Máy hỏng nhiều nhất', t.map((x: any) => x.machineCode || x.name), 'Số lần', t.map((x: any) => num(x.count)), 'lần');
+        return mk(
+            'bar',
+            'Máy hỏng nhiều nhất',
+            t.map((x: any) => x.machineCode || x.name),
+            'Số lần',
+            t.map((x: any) => num(x.count)),
+            'lần'
+        );
     }
     return null;
 };
 
-const fmtNum = (v: number, unit: string) => (unit === 'đ' ? `${Math.round(v).toLocaleString('vi-VN')}đ` : `${v.toLocaleString('vi-VN')} ${unit}`);
+const fmtNum = (v: number, unit: string) =>
+    unit === 'đ' ? `${Math.round(v).toLocaleString('vi-VN')}đ` : `${v.toLocaleString('vi-VN')} ${unit}`;
 
 const buildNarrative = (spec: Spec, chart: ChartData): string => {
     const total = chart.series[0]?.data.reduce((s, n) => s + n, 0) ?? 0;
@@ -548,7 +673,9 @@ const buildNarrative = (spec: Spec, chart: ChartData): string => {
 };
 
 const ok = (res: Response, data: any) =>
-    res.status(StatusCodes.OK).json(customResponse({ data, message: 'Đã phân tích', status: StatusCodes.OK, success: true }));
+    res
+        .status(StatusCodes.OK)
+        .json(customResponse({ data, message: 'Đã phân tích', status: StatusCodes.OK, success: true }));
 
 const catalogResult = async (spec: Spec, plantId: string | undefined, aiUsed: boolean, question?: string) => {
     let chart = await buildChart(spec.metric, spec.dimension, spec.period, plantId, spec.monthKey);
@@ -596,14 +723,22 @@ export const runAnalyticsQuery = async (req: Request, res: Response) => {
         } catch {
             mapped = null;
         }
-        if (mapped) return ok(res, await catalogResult({ ...mapped, monthKey: mapped.monthKey ?? monthKey }, plantId, true, question));
+        if (mapped)
+            return ok(
+                res,
+                await catalogResult({ ...mapped, monthKey: mapped.monthKey ?? monthKey }, plantId, true, question)
+            );
 
         // 3) Catalog không phủ -> FALLBACK AGENTIC (tham khảo): số lấy từ tool, kèm bảng đối chiếu.
         try {
-            const r = await runAssistant([{ role: 'user', content: question }]);
+            const r = await runAssistant([{ role: 'user', content: question }], buildAssistantContext(req));
             const ac = aggregatesToChart(r.aggregates);
-            const chart = ac ? { type: ac.type, title: ac.title, categories: ac.categories, series: ac.series, unit: ac.unit } : null;
-            const table = ac ? chartToTable({ categories: ac.categories, series: ac.series, unit: ac.unit }) : undefined;
+            const chart = ac
+                ? { type: ac.type, title: ac.title, categories: ac.categories, series: ac.series, unit: ac.unit }
+                : null;
+            const table = ac
+                ? chartToTable({ categories: ac.categories, series: ac.series, unit: ac.unit })
+                : undefined;
             return ok(res, {
                 source: 'agentic',
                 trusted: false,
@@ -613,7 +748,13 @@ export const runAnalyticsQuery = async (req: Request, res: Response) => {
                 aiUsed: true,
             });
         } catch {
-            return ok(res, { source: 'agentic', trusted: false, chart: null, narrative: 'Chưa phân tích được câu hỏi này, thử diễn đạt khác.', aiUsed: false });
+            return ok(res, {
+                source: 'agentic',
+                trusted: false,
+                chart: null,
+                narrative: 'Chưa phân tích được câu hỏi này, thử diễn đạt khác.',
+                aiUsed: false,
+            });
         }
     }
 

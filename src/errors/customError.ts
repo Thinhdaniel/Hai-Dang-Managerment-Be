@@ -68,6 +68,17 @@ export class UnAuthorizedError extends HttpException {
     }
 }
 
+export class TooManyRequestsError extends HttpException {
+    public status: number;
+    public name: string;
+
+    constructor(message: string) {
+        super(message);
+        this.name = ReasonPhrases.TOO_MANY_REQUESTS;
+        this.status = StatusCodes.TOO_MANY_REQUESTS;
+    }
+}
+
 export class NotAcceptableError extends HttpException {
     public status: number;
     public name: string;

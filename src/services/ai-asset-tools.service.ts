@@ -15,6 +15,8 @@ const ASSET_STATUS_LABEL: Record<string, string> = {
     broken: 'Hỏng',
     borrowing: 'Đang mượn',
     storage: 'Rảnh/Lưu kho',
+    pending_disposal: 'Chuẩn bị thanh lý',
+    disposed: 'Đã thanh lý',
     returned_to_partner: 'Đã trả đối tác',
 };
 const TRANSFER_STATUS_LABEL: Record<string, string> = {
@@ -27,7 +29,9 @@ const TRANSFER_STATUS_LABEL: Record<string, string> = {
 const ACTIVE_TRANSFER = ['pending', 'approved'];
 
 const loadPlants = async () => {
-    const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean();
+    const plants = await Plant.find({ isDeleted: { $ne: true } })
+        .select('_id name')
+        .lean();
     const nameById = new Map(plants.map((p: any) => [String(p._id), String(p.name)]));
     const resolve = (input?: string): string | undefined => {
         if (!input) return undefined;
@@ -46,8 +50,14 @@ const loadPlants = async () => {
 const periodRange = (period?: string) => {
     const now = new Date();
     if (period === 'today') return { start: startOfDay(now), end: endOfDay(now), label: 'hôm nay' };
-    if (period === 'week') return { start: startOfWeek(now, { weekStartsOn: 1 }), end: endOfWeek(now, { weekStartsOn: 1 }), label: 'tuần này' };
-    if (period === 'month') return { start: startOfMonth(now), end: endOfMonth(now), label: `tháng ${format(now, 'MM/yyyy')}` };
+    if (period === 'week')
+        return {
+            start: startOfWeek(now, { weekStartsOn: 1 }),
+            end: endOfWeek(now, { weekStartsOn: 1 }),
+            label: 'tuần này',
+        };
+    if (period === 'month')
+        return { start: startOfMonth(now), end: endOfMonth(now), label: `tháng ${format(now, 'MM/yyyy')}` };
     // mặc định "gần đây" = 2 tuần gần nhất
     return { start: startOfDay(subWeeks(now, 2)), end: endOfDay(now), label: 'gần đây (2 tuần)' };
 };
@@ -152,10 +162,7 @@ export const transferOrders = async (args: {
 
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
     // Lọc thời gian theo transferDate (ngày điều chuyển), fallback createdAt.
-    filter.$or = [
-        { transferDate: { $gte: r.start, $lte: r.end } },
-        { createdAt: { $gte: r.start, $lte: r.end } },
-    ];
+    filter.$or = [{ transferDate: { $gte: r.start, $lte: r.end } }, { createdAt: { $gte: r.start, $lte: r.end } }];
     if (args.status && TRANSFER_STATUS_LABEL[args.status]) filter.status = args.status;
     const plantId = resolve(args.plantName);
     if (plantId) filter.$and = [{ $or: [{ fromPlantId: plantId }, { toPlantId: plantId }] }];
@@ -170,7 +177,9 @@ export const transferOrders = async (args: {
         (t.assetIds || []).forEach((id: any) => allAssetIds.add(String(id)));
     });
     const assets = allAssetIds.size
-        ? await Asset.find({ _id: { $in: [...allAssetIds] } }).select('_id machineCode name').lean()
+        ? await Asset.find({ _id: { $in: [...allAssetIds] } })
+              .select('_id machineCode name')
+              .lean()
         : [];
     const assetById = new Map(assets.map((x: any) => [String(x._id), { machineCode: x.machineCode, name: x.name }]));
 

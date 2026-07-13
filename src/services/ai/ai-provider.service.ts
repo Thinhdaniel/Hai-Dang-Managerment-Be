@@ -7,9 +7,7 @@ export type AiProviderName = 'ollama' | '9router' | 'openrouter' | 'vertex' | 'f
 // Nội dung tin nhắn: text thuần (đa số tác vụ) hoặc đa phương thức (text + ảnh) cho vision/OCR.
 // Dạng mảng theo chuẩn OpenAI-compatible: [{type:'text',text}, {type:'image_url',image_url:{url}}].
 // Chỉ nhánh 9router/openrouter hỗ trợ ảnh; Ollama bỏ qua (OCR luôn đi qua 9router).
-export type AiContentPart =
-    | { type: 'text'; text: string }
-    | { type: 'image_url'; image_url: { url: string } };
+export type AiContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
 export type AiChatMessage = {
     role: 'system' | 'user' | 'assistant';
@@ -61,6 +59,32 @@ const normalizeProvider = (): AiProviderName => {
 
 const toModelList = (value?: string | string[]): string[] =>
     Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
+
+type ModelHealth = { failures: number; openUntil: number };
+const modelHealth = new Map<string, ModelHealth>();
+const CIRCUIT_FAILURE_THRESHOLD = 3;
+const CIRCUIT_COOLDOWN_MS = 2 * 60 * 1000;
+
+const modelHealthKey = (provider: AiProviderName, model: string) => `${provider}:${model}`;
+const isModelCircuitOpen = (provider: AiProviderName, model: string) => {
+    const key = modelHealthKey(provider, model);
+    const state = modelHealth.get(key);
+    if (!state) return false;
+    if (state.openUntil > Date.now()) return true;
+    if (state.openUntil) modelHealth.delete(key);
+    return false;
+};
+const recordModelSuccess = (provider: AiProviderName, model: string) =>
+    modelHealth.delete(modelHealthKey(provider, model));
+const recordModelFailure = (provider: AiProviderName, model: string) => {
+    const key = modelHealthKey(provider, model);
+    const previous = modelHealth.get(key) || { failures: 0, openUntil: 0 };
+    const failures = previous.failures + 1;
+    modelHealth.set(key, {
+        failures,
+        openUntil: failures >= CIRCUIT_FAILURE_THRESHOLD ? Date.now() + CIRCUIT_COOLDOWN_MS : 0,
+    });
+};
 
 // Chuỗi model theo tác vụ (ưu tiên giảm dần). Biến thể "<feature>-light|-standard|-heavy|-answer"
 // tự suy về feature gốc nếu chưa map riêng.
@@ -226,11 +250,19 @@ export const aiProviderService = {
         let lastError: unknown;
         for (let i = 0; i < chain.length; i += 1) {
             const model = chain[i];
+            if (i < chain.length - 1 && isModelCircuitOpen(provider, model)) {
+                console.warn(`[AI] bỏ qua model "${model}" đang cooldown, chuyển sang "${chain[i + 1]}".`);
+                continue;
+            }
             try {
-                return provider === 'ollama'
-                    ? await callOllama({ ...options, model })
-                    : await callOpenAiCompatible(provider, { ...options, model });
+                const result =
+                    provider === 'ollama'
+                        ? await callOllama({ ...options, model })
+                        : await callOpenAiCompatible(provider, { ...options, model });
+                recordModelSuccess(provider, model);
+                return result;
             } catch (error) {
+                recordModelFailure(provider, model);
                 lastError = error;
                 if (i < chain.length - 1) {
                     const reason = error instanceof Error ? error.message : String(error);

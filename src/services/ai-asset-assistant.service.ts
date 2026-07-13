@@ -22,6 +22,8 @@ const STATUS_LABEL: Record<string, string> = {
     [ASSET_STATUS.BROKEN]: 'Lỗi / hỏng',
     [ASSET_STATUS.BORROWING]: 'Đang mượn',
     [ASSET_STATUS.STORAGE]: 'Tồn kho',
+    [ASSET_STATUS.PENDING_DISPOSAL]: 'Chuẩn bị thanh lý',
+    [ASSET_STATUS.DISPOSED]: 'Đã thanh lý',
     [ASSET_STATUS.RETURNED_TO_PARTNER]: 'Đã trả đối tác',
 };
 const OWNERSHIP_LABEL: Record<string, string> = {
@@ -57,7 +59,10 @@ const extractMachineRefs = (q: string): string[] => {
 const extractTransferDest = (q: string): string | undefined => {
     const m = q.match(/\b(?:sang|tới|toi|đến|den|về|ve|qua)\s+(.+)$/i);
     if (!m) return undefined;
-    const dest = m[1].trim().split(/[,.;\n]/)[0].trim();
+    const dest = m[1]
+        .trim()
+        .split(/[,.;\n]/)[0]
+        .trim();
     return dest || undefined;
 };
 
@@ -125,9 +130,7 @@ const planSchema = z
                 notScannedDays: z.number().nullish(),
             })
             .default({}),
-        aggregate: z
-            .enum(['count', 'sum_value', 'breakdown_by_status', 'breakdown_by_plant', 'top_broken'])
-            .nullish(),
+        aggregate: z.enum(['count', 'sum_value', 'breakdown_by_status', 'breakdown_by_plant', 'top_broken']).nullish(),
         limit: z.number().nullish(),
         followups: z.array(z.string()).nullish(),
     })
@@ -202,7 +205,10 @@ const buildAssetQuery = async (filters: Plan['filters'], plantId?: string, brand
 
     if (filters.search) {
         // Tách từng từ khoá -> mỗi từ phải khớp ở 1 trường nào đó (AND theo từ). Tránh đòi cụm liền mạch.
-        const tokens = String(filters.search).split(/\s+/).map((t) => t.trim()).filter(Boolean);
+        const tokens = String(filters.search)
+            .split(/\s+/)
+            .map((t) => t.trim())
+            .filter(Boolean);
         for (const tok of tokens) {
             const rx = buildSearchRegex(tok);
             if (rx) and.push({ $or: [{ name: rx }, { machineCode: rx }, { serial: rx }, { type: rx }, { model: rx }] });
@@ -232,11 +238,15 @@ const buildAssetQuery = async (filters: Plan['filters'], plantId?: string, brand
     }
 
     const flags = (filters.flags || []).filter((f) => VALID_FLAGS.has(f));
-    if (flags.includes('no_qr')) and.push({ $or: [{ publicId: { $exists: false } }, { publicId: null }, { publicId: '' }] });
+    if (flags.includes('no_qr'))
+        and.push({ $or: [{ publicId: { $exists: false } }, { publicId: null }, { publicId: '' }] });
     if (flags.includes('not_scanned')) {
         const days = Number(filters.notScannedDays) > 0 ? Number(filters.notScannedDays) : 30;
         and.push({
-            $or: [{ 'lastSeen.scannedAt': { $exists: false } }, { 'lastSeen.scannedAt': { $lt: subDays(new Date(), days) } }],
+            $or: [
+                { 'lastSeen.scannedAt': { $exists: false } },
+                { 'lastSeen.scannedAt': { $lt: subDays(new Date(), days) } },
+            ],
         });
     }
     if (flags.includes('mislocated')) {
@@ -294,7 +304,11 @@ const executePlan = async (plan: Plan, plantId?: string, brandId?: string) => {
             { $group: { _id: '$status', count: { $sum: 1 } } },
             { $sort: { count: -1 } },
         ]);
-        aggregates.breakdown = rows.map((r: any) => ({ key: r._id, label: STATUS_LABEL[r._id] || r._id, count: r.count }));
+        aggregates.breakdown = rows.map((r: any) => ({
+            key: r._id,
+            label: STATUS_LABEL[r._id] || r._id,
+            count: r.count,
+        }));
     } else if (plan.aggregate === 'breakdown_by_plant') {
         const rows = await Asset.aggregate([
             { $match: query },
@@ -303,7 +317,11 @@ const executePlan = async (plan: Plan, plantId?: string, brandId?: string) => {
             { $lookup: { from: 'plants', localField: '_id', foreignField: '_id', as: 'plant' } },
             { $unwind: { path: '$plant', preserveNullAndEmptyArrays: true } },
         ]);
-        aggregates.breakdown = rows.map((r: any) => ({ key: String(r._id), label: r.plant?.name || 'Chưa gán cơ sở', count: r.count }));
+        aggregates.breakdown = rows.map((r: any) => ({
+            key: String(r._id),
+            label: r.plant?.name || 'Chưa gán cơ sở',
+            count: r.count,
+        }));
     } else if (plan.aggregate === 'top_broken' || plan.intent === 'rank') {
         const scopeIds = await Asset.find(query).select('_id').lean();
         const idSet = scopeIds.map((d: any) => d._id);
@@ -327,7 +345,12 @@ const executePlan = async (plan: Plan, plantId?: string, brandId?: string) => {
     }
 
     const count = await Asset.countDocuments(query);
-    const docs = await Asset.find(query).sort({ updatedAt: -1 }).limit(limit).populate('brandId').populate('plantId').lean();
+    const docs = await Asset.find(query)
+        .sort({ updatedAt: -1 })
+        .limit(limit)
+        .populate('brandId')
+        .populate('plantId')
+        .lean();
     const items = docs.map(compactItem);
 
     return { count, items, aggregates };
@@ -336,12 +359,24 @@ const executePlan = async (plan: Plan, plantId?: string, brandId?: string) => {
 // ===== Dien giai ket qua that thanh cau tra loi =====
 const buildResultContext = (count: number, items: any[], aggregates: Record<string, any>) => {
     const lines: string[] = [`Tong so may khop: ${count}.`];
-    if (aggregates.totalValue != null) lines.push(`Tong gia tri: ${Number(aggregates.totalValue).toLocaleString('vi-VN')} d.`);
-    if (aggregates.breakdown) lines.push('Phan ra: ' + aggregates.breakdown.map((b: any) => `${b.label}=${b.count}`).join(', '));
-    if (aggregates.topBroken) lines.push('Top hong nhieu: ' + aggregates.topBroken.map((t: any) => `${t.machineCode || t.name} (${t.count} lan)`).join('; '));
+    if (aggregates.totalValue != null)
+        lines.push(`Tong gia tri: ${Number(aggregates.totalValue).toLocaleString('vi-VN')} d.`);
+    if (aggregates.breakdown)
+        lines.push('Phan ra: ' + aggregates.breakdown.map((b: any) => `${b.label}=${b.count}`).join(', '));
+    if (aggregates.topBroken)
+        lines.push(
+            'Top hong nhieu: ' +
+                aggregates.topBroken.map((t: any) => `${t.machineCode || t.name} (${t.count} lan)`).join('; ')
+        );
     if (items.length) {
         lines.push('Mot so may tieu bieu:');
-        items.slice(0, 8).forEach((it) => lines.push(`- ${it.machineCode || ''} ${it.name || ''} [${it.statusLabel || ''}] @ ${it.plantName || ''}`));
+        items
+            .slice(0, 8)
+            .forEach((it) =>
+                lines.push(
+                    `- ${it.machineCode || ''} ${it.name || ''} [${it.statusLabel || ''}] @ ${it.plantName || ''}`
+                )
+            );
     }
     return lines.join('\n');
 };
@@ -367,9 +402,12 @@ const generateAnswer = async (question: string, context: string) => {
 };
 
 const fallbackAnswer = (count: number, aggregates: Record<string, any>) => {
-    if (aggregates.totalValue != null) return `Tìm thấy ${count} máy, tổng giá trị ${Number(aggregates.totalValue).toLocaleString('vi-VN')}đ.`;
-    if (aggregates.topBroken) return `Top máy hỏng nhiều nhất: ${aggregates.topBroken.map((t: any) => `${t.machineCode || t.name} (${t.count} lần)`).join(', ')}.`;
-    if (aggregates.breakdown) return `Phân bổ: ${aggregates.breakdown.map((b: any) => `${b.label} ${b.count}`).join(', ')}.`;
+    if (aggregates.totalValue != null)
+        return `Tìm thấy ${count} máy, tổng giá trị ${Number(aggregates.totalValue).toLocaleString('vi-VN')}đ.`;
+    if (aggregates.topBroken)
+        return `Top máy hỏng nhiều nhất: ${aggregates.topBroken.map((t: any) => `${t.machineCode || t.name} (${t.count} lần)`).join(', ')}.`;
+    if (aggregates.breakdown)
+        return `Phân bổ: ${aggregates.breakdown.map((b: any) => `${b.label} ${b.count}`).join(', ')}.`;
     return `Tìm thấy ${count} máy khớp yêu cầu của bạn.`;
 };
 
@@ -377,10 +415,31 @@ const DEFAULT_FOLLOWUPS = ['Máy nào quá hạn bảo trì?', 'Top 5 máy hỏn
 
 // Router model thông minh (không tốn call AI): phân loại độ phức tạp câu hỏi -> chọn tier model.
 const HEAVY_SIGNALS = [
-    'phan tich', 'so sanh', 'tai sao', 'vi sao', 'danh gia', 'du doan', 'xu huong',
-    'khuyen nghi', 'tu van', 'de xuat', 'toi uu', 'co nen', 'nen lam', 'lam sao',
+    'phan tich',
+    'so sanh',
+    'tai sao',
+    'vi sao',
+    'danh gia',
+    'du doan',
+    'xu huong',
+    'khuyen nghi',
+    'tu van',
+    'de xuat',
+    'toi uu',
+    'co nen',
+    'nen lam',
+    'lam sao',
 ];
-const LIGHT_SIGNALS = ['liet ke', 'danh sach', 'co nhung may nao', 'tim ', 'dem ', 'bao nhieu', 'co may cai', 'may nao'];
+const LIGHT_SIGNALS = [
+    'liet ke',
+    'danh sach',
+    'co nhung may nao',
+    'tim ',
+    'dem ',
+    'bao nhieu',
+    'co may cai',
+    'may nao',
+];
 
 const classifyTier = (question: string): keyof typeof ASSET_SEARCH_TIERS => {
     const t = normalize(question);
@@ -405,8 +464,12 @@ export const assetQueryTool = async (args: {
     limit?: number;
 }) => {
     const [plantDocs, brandDocs] = await Promise.all([
-        Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
-        Brand.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
+        Plant.find({ isDeleted: { $ne: true } })
+            .select('_id name')
+            .lean(),
+        Brand.find({ isDeleted: { $ne: true } })
+            .select('_id name')
+            .lean(),
     ]);
     const plants = plantDocs.map((d: any) => ({ id: String(d._id), name: String(d.name ?? '') }));
     const brands = brandDocs.map((d: any) => ({ id: String(d._id), name: String(d.name ?? '') }));
@@ -494,7 +557,11 @@ export const buildTransferDraft = async (
 ) => {
     const plants =
         plantsArg ??
-        (await Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean()).map((d: any) => ({
+        (
+            await Plant.find({ isDeleted: { $ne: true } })
+                .select('_id name')
+                .lean()
+        ).map((d: any) => ({
             id: String(d._id),
             name: String(d.name ?? ''),
         }));
@@ -527,11 +594,19 @@ export const buildTransferDraft = async (
 
 // ===== Core (tái dùng cho trợ lý toàn cục) =====
 export const runAssetAssistant = async (messages: AssistantMessage[]) => {
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content?.trim() || '';
+    const lastUser =
+        [...messages]
+            .reverse()
+            .find((m) => m.role === 'user')
+            ?.content?.trim() || '';
 
     const [plantDocs, brandDocs, areaDocs] = await Promise.all([
-        Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
-        Brand.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
+        Plant.find({ isDeleted: { $ne: true } })
+            .select('_id name')
+            .lean(),
+        Brand.find({ isDeleted: { $ne: true } })
+            .select('_id name')
+            .lean(),
         Asset.distinct('area', { isDeleted: { $ne: true }, area: { $nin: [null, ''] } }),
     ]);
     const plants = plantDocs.map((d: any) => ({ id: String(d._id), name: String(d.name ?? '') }));
@@ -553,7 +628,14 @@ export const runAssetAssistant = async (messages: AssistantMessage[]) => {
                 temperature: 0.1,
                 maxTokens: 600,
                 messages: [
-                    { role: 'system', content: buildPlanSystemPrompt(plants.map((p) => p.name), brands.map((b) => b.name), areas) },
+                    {
+                        role: 'system',
+                        content: buildPlanSystemPrompt(
+                            plants.map((p) => p.name),
+                            brands.map((b) => b.name),
+                            areas
+                        ),
+                    },
                     ...messages.map((m) => ({ role: m.role, content: m.content })),
                 ],
             });
@@ -578,9 +660,7 @@ export const runAssetAssistant = async (messages: AssistantMessage[]) => {
     // Gỡ tên nhãn/cơ sở khỏi từ khoá tìm (vd "1 kim hikari" -> "1 kim"), tránh tìm cụm liền mạch ra 0 kết quả.
     if (plan.filters.search) {
         const drop = new Set(
-            [matchedBrand?.name, matchedPlant?.name]
-                .filter(Boolean)
-                .flatMap((n) => normalize(n as string).split(' '))
+            [matchedBrand?.name, matchedPlant?.name].filter(Boolean).flatMap((n) => normalize(n as string).split(' '))
         );
         const cleaned = normalize(plan.filters.search)
             .split(' ')
@@ -649,7 +729,7 @@ export const runAssetAssistant = async (messages: AssistantMessage[]) => {
 // ===== HTTP (giữ endpoint cũ /ai/assistant/assets) =====
 export const askAssetAssistant = async (req: Request, res: Response) => {
     const data = await runAssetAssistant((req.body.messages ?? []) as AssistantMessage[]);
-    return res.status(StatusCodes.OK).json(
-        customResponse({ data, message: 'Tro ly da xu ly cau hoi', status: StatusCodes.OK, success: true })
-    );
+    return res
+        .status(StatusCodes.OK)
+        .json(customResponse({ data, message: 'Tro ly da xu ly cau hoi', status: StatusCodes.OK, success: true }));
 };

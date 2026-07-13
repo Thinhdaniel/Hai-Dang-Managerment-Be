@@ -3,9 +3,10 @@ import Plant from '@/models/Plant';
 import PurchaseOrder from '@/models/PurchaseOrder';
 import PurchaseRequest from '@/models/PurchaseRequest';
 import SupplyShortage from '@/models/SupplyShortage';
+import { addVietnamDays, endOfVietnamDay, startOfVietnamDay, vietnamCalendarParts } from '@/utils/vietnamDate';
 import { Types } from 'mongoose';
 
-type PeriodType = 'week' | 'month' | 'all';
+type PeriodType = 'today' | 'yesterday' | 'week' | 'month' | 'all';
 type RequestKind = 'supply' | 'purchase' | 'technical' | 'purchase_all';
 
 type RequestArgs = {
@@ -19,6 +20,11 @@ type RequestArgs = {
     period?: PeriodType;
     limit?: number;
     staleDays?: number;
+    startDate?: string;
+    endDate?: string;
+    // Phạm vi bắt buộc do policy của trợ lý gắn vào. Không nhận trực tiếp từ HTTP/client.
+    scopePlantId?: string;
+    scopeUserId?: string;
 };
 
 const REQUEST_STATUS_LABEL: Record<string, string> = {
@@ -50,13 +56,7 @@ const SHORTAGE_STATUS_LABEL: Record<string, string> = {
 };
 
 const normalize = (v?: string) =>
-    (v ?? '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .replace(/đ/g, 'd')
-        .replace(/\s+/g, ' ')
-        .trim();
+    (v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
 
 const expandPlantAlias = (v?: string) => normalize(v).replace(/\bc\.?\s*s\.?\s*(\d+)/g, 'co so $1');
 
@@ -89,34 +89,40 @@ const plantName = (value: any) => {
 
 const clampLimit = (limit?: number, max = 50) => Math.min(Math.max(Number(limit) || 12, 1), max);
 
-const startOfDay = (date: Date) => {
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
-    return d;
-};
-
-const endOfDay = (date: Date) => {
-    const d = new Date(date);
-    d.setHours(23, 59, 59, 999);
-    return d;
-};
-
 const periodRange = (period?: PeriodType) => {
     const now = new Date();
+    if (period === 'today') {
+        return { start: startOfVietnamDay(now), end: endOfVietnamDay(now), label: 'hôm nay' };
+    }
+    if (period === 'yesterday') {
+        const yesterday = addVietnamDays(now, -1);
+        return { start: startOfVietnamDay(yesterday), end: endOfVietnamDay(yesterday), label: 'hôm qua' };
+    }
     if (period === 'week') {
-        const day = now.getDay() || 7;
-        const start = startOfDay(new Date(now));
-        start.setDate(start.getDate() - day + 1);
-        const end = endOfDay(new Date(start));
-        end.setDate(start.getDate() + 6);
+        const day = vietnamCalendarParts(now).weekday || 7;
+        const start = startOfVietnamDay(addVietnamDays(now, -day + 1));
+        const end = endOfVietnamDay(addVietnamDays(start, 6));
         return { start, end, label: 'tuần này' };
     }
     if (period === 'month' || !period) {
-        const start = new Date(now.getFullYear(), now.getMonth(), 1);
-        const end = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0));
-        return { start, end, label: `tháng ${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}` };
+        const { year, month } = vietnamCalendarParts(now);
+        const start = new Date(Date.UTC(year, month, 1) - 7 * 60 * 60 * 1000);
+        const end = new Date(Date.UTC(year, month + 1, 1) - 7 * 60 * 60 * 1000 - 1);
+        return { start, end, label: `tháng ${String(month + 1).padStart(2, '0')}/${year}` };
     }
     return { start: undefined, end: undefined, label: 'toàn bộ thời gian' };
+};
+
+const customPeriodRange = (startDate?: string, endDate?: string) => {
+    if (!startDate && !endDate) return undefined;
+    const from = startDate || endDate!;
+    const to = endDate || startDate!;
+    const display = (value: string) => value.split('-').reverse().join('/');
+    return {
+        start: new Date(`${from}T00:00:00.000+07:00`),
+        end: new Date(`${to}T23:59:59.999+07:00`),
+        label: from === to ? `ngày ${display(from)}` : `từ ${display(from)} đến ${display(to)}`,
+    };
 };
 
 const daysBetween = (from?: Date | string, to = new Date()) => {
@@ -125,7 +131,9 @@ const daysBetween = (from?: Date | string, to = new Date()) => {
 };
 
 const loadPlants = async () => {
-    const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name code').lean();
+    const plants = await Plant.find({ isDeleted: { $ne: true } })
+        .select('_id name code')
+        .lean();
     const nameById = new Map(plants.map((p: any) => [String(p._id), String(p.name || p.code)]));
     const resolve = (input?: string) => {
         if (!input) return undefined;
@@ -183,12 +191,25 @@ const buildFilter = async (args: RequestArgs, defaultKind: RequestKind) => {
             $or: [{ plantId: oid }, { fromPlantId: oid }, { toPlantId: oid }, { 'items.plantId': oid }],
         });
     }
-    if (args.period !== 'all') {
-        const range = periodRange(args.period);
+    if (args.scopePlantId) {
+        const scopedPlantId = new Types.ObjectId(args.scopePlantId);
+        and.push({
+            $or: [
+                { plantId: scopedPlantId },
+                { fromPlantId: scopedPlantId },
+                { toPlantId: scopedPlantId },
+                { 'items.plantId': scopedPlantId },
+            ],
+        });
+    }
+    if (args.scopeUserId) filter.requestedBy = new Types.ObjectId(args.scopeUserId);
+    const customRange = customPeriodRange(args.startDate, args.endDate);
+    if (customRange || args.period !== 'all') {
+        const range = customRange || periodRange(args.period);
         filter.createdAt = { $gte: range.start, $lte: range.end };
     }
     if (and.length) filter.$and = and;
-    return { filter, kind, periodLabel: periodRange(args.period).label };
+    return { filter, kind, periodLabel: customRange?.label || periodRange(args.period).label };
 };
 
 const fetchRequests = async (args: RequestArgs, defaultKind: RequestKind, maxLimit = 200) => {
@@ -265,7 +286,10 @@ const buildPurchaseLinks = async (requests: any[]) => {
             summary.orderedQty += itemRows.reduce((s: number, item: any) => s + Number(item.quantityOrdered || 0), 0);
             summary.receivedQty += itemRows.reduce((s: number, item: any) => s + Number(item.quantityReceived || 0), 0);
             summary.missingQty += itemRows.reduce((s: number, item: any) => s + Number(item.quantityMissing || 0), 0);
-            summary.totalWithVat += itemRows.reduce((s: number, item: any) => s + Number(item.totalWithVat || item.totalPrice || 0), 0);
+            summary.totalWithVat += itemRows.reduce(
+                (s: number, item: any) => s + Number(item.totalWithVat || item.totalPrice || 0),
+                0
+            );
             summary.firstOrderedAt = summary.firstOrderedAt || toIso(order.orderedAt || order.createdAt);
             if (order.receivedAt) summary.lastReceivedAt = toIso(order.receivedAt);
         }
@@ -323,15 +347,22 @@ const buildSupplyLinks = async (requests: any[]) => {
             (s: number, item: any) => s + Number(item.quantityDistributed ?? item.quantity ?? 0),
             0
         );
-        summary.shortageQty += (record.items || []).reduce((s: number, item: any) => s + Number(item.quantityShortage || 0), 0);
+        summary.shortageQty += (record.items || []).reduce(
+            (s: number, item: any) => s + Number(item.quantityShortage || 0),
+            0
+        );
         summary.totalWithVat += Number(record.totalWithVat || record.totalAmount || 0);
-        summary.distributedAt = summary.distributedAt || toIso(record.distributedAt || record.confirmedAt || record.createdAt);
+        summary.distributedAt =
+            summary.distributedAt || toIso(record.distributedAt || record.confirmedAt || record.createdAt);
     }
     for (const shortage of shortages as any[]) {
         const key = String(shortage.originalSupplyRequestId || '');
         if (!key) continue;
         const summary = ensure(key);
-        const outstanding = Math.max(0, Number(shortage.quantityShortage || 0) - Number(shortage.quantityResolved || 0));
+        const outstanding = Math.max(
+            0,
+            Number(shortage.quantityShortage || 0) - Number(shortage.quantityResolved || 0)
+        );
         summary.shortageLines += 1;
         summary.outstandingQty += shortage.status === 'settled' || shortage.status === 'cancelled' ? 0 : outstanding;
         summary.shortages.push({
@@ -357,9 +388,15 @@ const buildSupplyLinks = async (requests: any[]) => {
 
 const itemSummary = (items: any[] = []) => {
     const totalRequested = items.reduce((s, item) => s + Number(item.quantityRequested || 0), 0);
-    const totalApproved = items.reduce((s, item) => s + Number(item.quantityApproved ?? item.quantityRequested ?? 0), 0);
+    const totalApproved = items.reduce(
+        (s, item) => s + Number(item.quantityApproved ?? item.quantityRequested ?? 0),
+        0
+    );
     const totalOrdered = items.reduce((s, item) => s + Number(item.quantityOrdered || 0), 0);
-    const totalWithVat = items.reduce((s, item) => s + Number(item.totalWithVat || item.totalPrice || item.estimatedTotal || 0), 0);
+    const totalWithVat = items.reduce(
+        (s, item) => s + Number(item.totalWithVat || item.totalPrice || item.estimatedTotal || 0),
+        0
+    );
     return {
         itemCount: items.length,
         totalRequested: Math.round(totalRequested),
@@ -378,7 +415,12 @@ const serializeRequestRow = (request: any, linkMap: Map<string, any>, kind: Requ
         id,
         requestCode: request.requestCode || '(chưa có mã)',
         requestType: request.requestType,
-        requestTypeLabel: request.requestType === 'supply_request' ? 'Đề xuất cấp' : request.requestType === 'technical_purchase' ? 'Đề nghị mua kỹ thuật' : 'Đề xuất mua',
+        requestTypeLabel:
+            request.requestType === 'supply_request'
+                ? 'Đề xuất cấp'
+                : request.requestType === 'technical_purchase'
+                  ? 'Đề nghị mua kỹ thuật'
+                  : 'Đề xuất mua',
         status: request.status,
         statusLabel: REQUEST_STATUS_LABEL[request.status] || request.status,
         plantName: plantName(request.plantId),
@@ -444,7 +486,11 @@ const rowsFor = async (args: RequestArgs, defaultKind: RequestKind, maxLimit = 2
     return { ...data, rows, kind };
 };
 
-const groupTop = <T extends Record<string, any>>(rows: T[], keyFn: (row: T) => string | undefined, valueFn?: (row: T) => number) => {
+const groupTop = <T extends Record<string, any>>(
+    rows: T[],
+    keyFn: (row: T) => string | undefined,
+    valueFn?: (row: T) => number
+) => {
     const map = new Map<string, { label: string; count: number; value: number }>();
     for (const row of rows) {
         const label = keyFn(row) || 'Chưa rõ';
@@ -490,7 +536,12 @@ const topMaterials = (rows: any[]) => {
             totalWithVat: Math.round(m.totalWithVat),
             requestCodes: [...new Set(m.requestCodes)].slice(0, 8),
         }))
-        .sort((a, b) => b.requestCount - a.requestCount || b.quantityRequested - a.quantityRequested || b.totalWithVat - a.totalWithVat)
+        .sort(
+            (a, b) =>
+                b.requestCount - a.requestCount ||
+                b.quantityRequested - a.quantityRequested ||
+                b.totalWithVat - a.totalWithVat
+        )
         .slice(0, 12);
 };
 
@@ -506,7 +557,11 @@ export const listMaterialRequests = async (args: RequestArgs & { kind: RequestKi
         summary: {
             totalValue: rows.reduce((s, row) => s + Number(row.totalWithVat || 0), 0),
             byStatus: groupTop(rows, (row) => row.statusLabel),
-            byPlant: groupTop(rows, (row) => row.fromPlantName || row.plantName, (row) => Number(row.totalWithVat || 0)),
+            byPlant: groupTop(
+                rows,
+                (row) => row.fromPlantName || row.plantName,
+                (row) => Number(row.totalWithVat || 0)
+            ),
             topMaterials: topMaterials(rows).slice(0, 8),
         },
     };
@@ -530,7 +585,10 @@ export const analyzeMaterialRequests = async (args: RequestArgs & { kind: Reques
         data.kind === 'supply'
             ? rows
                   .filter((row) => Number(row.distribution?.outstandingQty || 0) > 0)
-                  .sort((a, b) => Number(b.distribution?.outstandingQty || 0) - Number(a.distribution?.outstandingQty || 0))
+                  .sort(
+                      (a, b) =>
+                          Number(b.distribution?.outstandingQty || 0) - Number(a.distribution?.outstandingQty || 0)
+                  )
                   .slice(0, 8)
             : rows
                   .filter((row) => Number(row.orders?.missingQty || 0) > 0)
@@ -544,7 +602,11 @@ export const analyzeMaterialRequests = async (args: RequestArgs & { kind: Reques
         total: data.total,
         totalValue: rows.reduce((s, row) => s + Number(row.totalWithVat || 0), 0),
         byStatus: groupTop(rows, (row) => row.statusLabel),
-        byPlant: groupTop(rows, (row) => row.fromPlantName || row.plantName, (row) => Number(row.totalWithVat || 0)),
+        byPlant: groupTop(
+            rows,
+            (row) => row.fromPlantName || row.plantName,
+            (row) => Number(row.totalWithVat || 0)
+        ),
         byRequester: groupTop(rows, (row) => row.requestedBy),
         topMaterials: topMaterials(rows),
         oldestPending,
@@ -560,7 +622,11 @@ export const requestLifecycle = async (args: RequestArgs) => {
     if (!code) {
         return { found: 0, request: null, message: 'Cần mã phiếu YC-/DX-/KT- để xem vòng đời.' };
     }
-    const kind: RequestKind = normalize(code).startsWith('yc') ? 'supply' : normalize(code).startsWith('kt') ? 'technical' : 'purchase_all';
+    const kind: RequestKind = normalize(code).startsWith('yc')
+        ? 'supply'
+        : normalize(code).startsWith('kt')
+          ? 'technical'
+          : 'purchase_all';
     const data = await rowsFor({ ...args, search: code, period: 'all', limit: 5, kind }, kind, 5);
     const request = data.rows[0];
     if (!request) return { found: 0, request: null, message: `Không tìm thấy phiếu ${code}.` };
@@ -568,8 +634,18 @@ export const requestLifecycle = async (args: RequestArgs) => {
     const timeline = [
         { label: 'Tạo phiếu', at: request.createdAt, by: request.requestedBy, status: 'done' },
         request.approvedAt
-            ? { label: request.status === 'rejected' ? 'Từ chối' : 'Duyệt phiếu', at: request.approvedAt, by: request.approvedBy, status: request.status === 'rejected' ? 'blocked' : 'done' }
-            : { label: 'Chờ duyệt', at: undefined, by: undefined, status: ['draft', 'pending'].includes(request.status) ? 'current' : 'pending' },
+            ? {
+                  label: request.status === 'rejected' ? 'Từ chối' : 'Duyệt phiếu',
+                  at: request.approvedAt,
+                  by: request.approvedBy,
+                  status: request.status === 'rejected' ? 'blocked' : 'done',
+              }
+            : {
+                  label: 'Chờ duyệt',
+                  at: undefined,
+                  by: undefined,
+                  status: ['draft', 'pending'].includes(request.status) ? 'current' : 'pending',
+              },
     ];
     if (request.requestType === 'supply_request') {
         if (request.distribution?.distributionCount) {
@@ -580,7 +656,12 @@ export const requestLifecycle = async (args: RequestArgs) => {
                 status: Number(request.distribution.outstandingQty || 0) > 0 ? 'warning' : 'done',
             });
         } else {
-            timeline.push({ label: 'Chưa có phiếu cấp phát', at: undefined, by: undefined, status: request.status === 'approved' ? 'current' : 'pending' });
+            timeline.push({
+                label: 'Chưa có phiếu cấp phát',
+                at: undefined,
+                by: undefined,
+                status: request.status === 'approved' ? 'current' : 'pending',
+            });
         }
         if (request.distribution?.shortageLines) {
             timeline.push({
@@ -602,10 +683,20 @@ export const requestLifecycle = async (args: RequestArgs) => {
                 label: 'Nhận hàng',
                 at: request.orders.lastReceivedAt,
                 by: undefined,
-                status: Number(request.orders.missingQty || 0) > 0 ? 'warning' : request.orders.lastReceivedAt ? 'done' : 'current',
+                status:
+                    Number(request.orders.missingQty || 0) > 0
+                        ? 'warning'
+                        : request.orders.lastReceivedAt
+                          ? 'done'
+                          : 'current',
             });
         } else {
-            timeline.push({ label: 'Chưa lên đơn mua', at: undefined, by: undefined, status: ['approved', 'pending'].includes(request.status) ? 'current' : 'pending' });
+            timeline.push({
+                label: 'Chưa lên đơn mua',
+                at: undefined,
+                by: undefined,
+                status: ['approved', 'pending'].includes(request.status) ? 'current' : 'pending',
+            });
         }
     }
     return { found: data.rows.length, request, timeline };
@@ -617,13 +708,24 @@ export const requestBacklog = async (args: RequestArgs = {}) => {
         analyzeMaterialRequests({ ...args, kind: 'purchase_all', period: args.period || 'all', limit: 1000 }),
     ]);
     const cards = [
-        { key: 'supplyPending', label: 'YC cấp chờ xử lý', count: supply.byStatus.find((x) => x.label === 'Chờ duyệt')?.count || 0 },
-        { key: 'supplyApprovedNoDistribution', label: 'YC đã duyệt chưa cấp', count: supply.approvedWithoutNextStep.length },
+        {
+            key: 'supplyPending',
+            label: 'YC cấp chờ xử lý',
+            count: supply.byStatus.find((x) => x.label === 'Chờ duyệt')?.count || 0,
+        },
+        {
+            key: 'supplyApprovedNoDistribution',
+            label: 'YC đã duyệt chưa cấp',
+            count: supply.approvedWithoutNextStep.length,
+        },
         {
             key: 'supplyOutstandingShortage',
             label: 'YC còn thiếu vật tư',
             count: supply.shortages.length,
-            quantity: supply.shortages.reduce((s: number, row: any) => s + Number(row.distribution?.outstandingQty || 0), 0),
+            quantity: supply.shortages.reduce(
+                (s: number, row: any) => s + Number(row.distribution?.outstandingQty || 0),
+                0
+            ),
         },
         { key: 'purchasePending', label: 'DX mua chờ duyệt/nháp', count: purchase.oldestPending.length },
         { key: 'purchaseApprovedNoOrder', label: 'DX chưa lên đơn', count: purchase.approvedWithoutNextStep.length },

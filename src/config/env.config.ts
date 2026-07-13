@@ -83,6 +83,7 @@ const envVarsSchema = z.object({
     // Map model theo từng tác vụ AI (JSON). Vd: {"material-match":"oc/deepseek-v4-flash-free","asset-search":"oc/nemotron-3-ultra-free"}
     AI_FEATURE_MODELS: z.string().optional(),
     AI_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+    AI_TRACE_TTL_DAYS: z.coerce.number().int().min(7).max(365).default(90),
     OLLAMA_BASE_URL: z.string().optional(),
     OLLAMA_MODEL: z.string().optional(),
     OLLAMA_SEARCH_MODEL: z.string().optional(),
@@ -223,6 +224,7 @@ const config = {
         // Default mạnh nhúng trong code làm nền; env AI_FEATURE_MODELS đè lên để tinh chỉnh.
         featureModels: { ...DEFAULT_FEATURE_MODELS, ...parseFeatureModels(envVars.AI_FEATURE_MODELS) },
         timeoutMs: envVars.AI_TIMEOUT_MS,
+        traceTtlDays: envVars.AI_TRACE_TTL_DAYS,
         ollama: {
             baseUrl: envVars.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
             defaultModel: envVars.OLLAMA_MODEL || envVars.AI_MODEL_DEFAULT || 'qwen2.5:3b',

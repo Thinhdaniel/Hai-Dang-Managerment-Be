@@ -14,6 +14,9 @@
     "migrate:maintenance-plant": "node scripts/backfill-maintenance-plant-snapshot.mjs",
     "migrate:maintenance-plant:dry": "node scripts/backfill-maintenance-plant-snapshot.mjs --dry-run",
     "ai:regression": "node scripts/ai-regression.mjs",
+    "ai:policy-check": "tsx scripts/ai-policy-regression.ts",
+    "ai:action-smoke": "tsx scripts/ai-guided-action-smoke.ts",
+    "ai:quality-gate": "npm run ai:policy-check && npm run ai:regression -- --max-bad 0 --max-p95-ms 45000",
     "cleanup:dry": "node scripts/data-cleanup-dry-run.mjs",
     "cleanup:apply": "node scripts/data-cleanup-apply.mjs"
   },

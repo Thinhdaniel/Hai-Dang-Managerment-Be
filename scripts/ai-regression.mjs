@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { goldenCases } from './ai-golden-cases.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -30,8 +31,12 @@ const EMAIL = process.env.AI_TEST_EMAIL || '';
 const PASSWORD = process.env.AI_TEST_PASSWORD || '';
 const LIMIT = Number(arg('limit', 0)) || 0;
 const MAX_BAD = Number(arg('max-bad', 0)) || 0;
-const REPORT_IN = arg('in', path.join(REPO_ROOT, 'tmp', 'prod-ai-assistant-100-deep-report.json'));
-const REPORT_OUT = arg('out', path.join(REPO_ROOT, 'tmp', `ai-regression-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`));
+const MAX_P95_MS = Number(arg('max-p95-ms', 45000)) || 45000;
+const REPORT_IN = arg('in', '');
+const REPORT_OUT = arg(
+    'out',
+    path.join(REPO_ROOT, 'tmp', `ai-regression-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`)
+);
 
 if (!EMAIL || !PASSWORD) {
     console.error('❌ Thiếu AI_TEST_EMAIL / AI_TEST_PASSWORD trong env.');
@@ -76,6 +81,7 @@ const ask = async (token, question) => {
             model: d.model,
             tier: d.tier,
             confidence: d.confidence,
+            grounding: d.grounding,
             count: d.count,
             sources: (d.sources || []).map((s) => s.label),
             reqId: d.reqId,
@@ -85,10 +91,30 @@ const ask = async (token, question) => {
     }
 };
 
-const grade = (res) => {
+const normalizeText = (value) =>
+    String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/đ/g, 'd');
+
+const grade = (res, expected = {}) => {
     if (res.error || !res.answer) return 'bad';
     if (res.provider === 'fallback' && (!res.sources || !res.sources.length)) return 'bad';
     if (RX_FALLBACK.test(res.answer.trim())) return 'bad';
+    const sources = new Set(res.sources || []);
+    if ((expected.expectedSources || []).some((source) => !sources.has(source))) return 'bad';
+    if ((expected.forbiddenSources || []).some((source) => sources.has(source))) return 'bad';
+    const answer = normalizeText(res.answer);
+    if ((expected.answerIncludes || []).some((text) => !answer.includes(normalizeText(text)))) return 'bad';
+    if ((expected.answerExcludes || []).some((text) => answer.includes(normalizeText(text)))) return 'bad';
+    if (
+        expected.minConfidence &&
+        ['none', 'low', 'medium', 'high'].indexOf(res.confidence) <
+            ['none', 'low', 'medium', 'high'].indexOf(expected.minConfidence)
+    )
+        return 'bad';
+    if (expected.requireGrounding && !['verified', 'corrected'].includes(res.grounding)) return 'bad';
     if (RX_GENERIC.test(res.answer)) return 'warn';
     if (res.took > 30000) return 'warn';
     if (!res.count && (!res.sources || !res.sources.length) && res.confidence === 'none') return 'warn';
@@ -102,12 +128,23 @@ const pctile = (arr, p) => {
 };
 
 const main = async () => {
-    if (!fs.existsSync(REPORT_IN)) {
+    if (REPORT_IN && !fs.existsSync(REPORT_IN)) {
         console.error(`❌ Không thấy file câu hỏi: ${REPORT_IN}`);
         process.exit(2);
     }
-    let questions = JSON.parse(fs.readFileSync(REPORT_IN, 'utf-8'))
-        .map((it) => ({ id: it.id, group: it.group, question: it.question }))
+    const sourceCases = REPORT_IN ? JSON.parse(fs.readFileSync(REPORT_IN, 'utf-8')) : goldenCases;
+    let questions = sourceCases
+        .map((it) => ({
+            id: it.id,
+            group: it.group,
+            question: it.question,
+            expectedSources: it.expectedSources,
+            forbiddenSources: it.forbiddenSources,
+            answerIncludes: it.answerIncludes,
+            answerExcludes: it.answerExcludes,
+            minConfidence: it.minConfidence,
+            requireGrounding: it.requireGrounding,
+        }))
         .filter((q) => q.question);
     if (LIMIT) questions = questions.slice(0, LIMIT);
 
@@ -123,14 +160,16 @@ const main = async () => {
 
     for (const q of questions) {
         const res = await ask(token, q.question);
-        const verdict = grade(res);
+        const verdict = grade(res, q);
         if (verdict === 'good') good++;
         else if (verdict === 'warn') warn++;
         else bad++;
         latencies.push(res.took);
         results.push({ ...q, verdict, ...res });
         const icon = verdict === 'good' ? '🟢' : verdict === 'warn' ? '🟡' : '🔴';
-        console.log(`${icon} ${String(q.id).padStart(3)} [${(res.took / 1000).toFixed(1)}s] ${q.question.slice(0, 60)}`);
+        console.log(
+            `${icon} ${String(q.id).padStart(3)} [${(res.took / 1000).toFixed(1)}s] ${q.question.slice(0, 60)}`
+        );
         if (verdict !== 'good') console.log(`     ↳ ${(res.error || res.answer || '').slice(0, 90)}`);
     }
 
@@ -150,15 +189,22 @@ const main = async () => {
         ranAt: new Date().toISOString(),
     };
 
+    fs.mkdirSync(path.dirname(REPORT_OUT), { recursive: true });
     fs.writeFileSync(REPORT_OUT, JSON.stringify({ summary, results }, null, 2), 'utf-8');
 
     console.log('\n──────── TỔNG KẾT ────────');
     console.log(`🟢 good ${good}  🟡 warn ${warn}  🔴 bad ${bad}  (/${results.length})`);
-    console.log(`⏱  avg ${(summary.latencyMs.avg / 1000).toFixed(1)}s · P50 ${(summary.latencyMs.p50 / 1000).toFixed(1)}s · P90 ${(summary.latencyMs.p90 / 1000).toFixed(1)}s · P95 ${(summary.latencyMs.p95 / 1000).toFixed(1)}s`);
+    console.log(
+        `⏱  avg ${(summary.latencyMs.avg / 1000).toFixed(1)}s · P50 ${(summary.latencyMs.p50 / 1000).toFixed(1)}s · P90 ${(summary.latencyMs.p90 / 1000).toFixed(1)}s · P95 ${(summary.latencyMs.p95 / 1000).toFixed(1)}s`
+    );
     console.log(`📄 ${REPORT_OUT}`);
 
     if (bad > MAX_BAD) {
         console.error(`\n❌ ${bad} câu BAD vượt ngưỡng cho phép (${MAX_BAD}).`);
+        process.exit(1);
+    }
+    if (summary.latencyMs.p95 > MAX_P95_MS) {
+        console.error(`\n❌ P95 ${summary.latencyMs.p95}ms vượt ngưỡng ${MAX_P95_MS}ms.`);
         process.exit(1);
     }
     console.log('\n✅ Đạt ngưỡng regression.');
