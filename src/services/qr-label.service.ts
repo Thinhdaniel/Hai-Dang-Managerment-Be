@@ -336,19 +336,35 @@ export const createBatch = async (req: Request, res: Response, next: NextFunctio
         updatedBy: userId,
     });
 
-    await QrLabel.insertMany(
-        publicIds.map((publicId) => ({
-            publicId,
-            type: req.body.type ?? QR_LABEL_TYPE.MACHINE,
-            batchId: batch._id,
-            plannedPlantId: req.body.plantId,
-            plannedArea: req.body.area,
-            note: req.body.note,
-            createdBy: userId,
-            updatedBy: userId,
-        })),
-        { ordered: false }
-    );
+    // Sinh mã đã đảm bảo unique toàn hệ thống (check cả QrLabel + Asset). Unique index trên
+    // publicId là chốt chặn cuối: nếu 2 lô tạo đồng thời lỡ trùng, index từ chối bản trùng.
+    // Ta nuốt lỗi trùng rồi BÙ thêm mã mới cho đủ số lượng, thay vì để lô thiếu tem hoặc hỏng cả request.
+    const isDuplicateKeyError = (error: any) =>
+        error?.code === 11000 || Array.isArray(error?.writeErrors) || error?.name === 'MongoBulkWriteError';
+
+    let pendingIds = publicIds;
+    for (let attempt = 0; attempt < 5 && pendingIds.length; attempt += 1) {
+        try {
+            await QrLabel.insertMany(
+                pendingIds.map((publicId) => ({
+                    publicId,
+                    type: req.body.type ?? QR_LABEL_TYPE.MACHINE,
+                    batchId: batch._id,
+                    plannedPlantId: req.body.plantId,
+                    plannedArea: req.body.area,
+                    note: req.body.note,
+                    createdBy: userId,
+                    updatedBy: userId,
+                })),
+                { ordered: false }
+            );
+        } catch (error) {
+            if (!isDuplicateKeyError(error)) throw error;
+        }
+        const inserted = await QrLabel.countDocuments({ batchId: batch._id, isDeleted: { $ne: true } });
+        if (inserted >= quantity) break;
+        pendingIds = await generateUniquePublicIds(quantity - inserted);
+    }
 
     const createdBatch = await QrLabelBatch.findById(batch._id).populate('plantId');
 
