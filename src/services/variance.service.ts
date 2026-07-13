@@ -17,7 +17,36 @@ const METRIC_LABEL: Record<Metric, string> = {
     total_cost: 'Tổng chi phí',
     maintenance_tickets: 'Số phiếu bảo trì',
 };
-const VALID_METRICS = new Set<Metric>(['repair_cost', 'distribution_cost', 'purchase_cost', 'total_cost', 'maintenance_tickets']);
+const VALID_METRICS = new Set<Metric>([
+    'repair_cost',
+    'distribution_cost',
+    'purchase_cost',
+    'total_cost',
+    'maintenance_tickets',
+]);
+
+const METRIC_DEFINITION: Record<Metric, { definition: string; excludes: string[] }> = {
+    repair_cost: {
+        definition: 'Chi phí sửa ngoài của các phiếu đã hoàn tất trong kỳ.',
+        excludes: ['Chi phí sửa nội bộ', 'Chi phí vật tư', 'Chi phí mua vật tư nhập kho'],
+    },
+    distribution_cost: {
+        definition: 'Giá trị vật tư đã cấp phát, ghi nhận theo cơ sở nhận.',
+        excludes: ['Chi phí mua vật tư chưa cấp phát', 'Chi phí sửa ngoài'],
+    },
+    purchase_cost: {
+        definition: 'Giá trị vật tư trên đơn mua, ghi nhận theo cơ sở của từng dòng vật tư.',
+        excludes: ['Chi phí cấp phát vật tư', 'Chi phí sửa ngoài'],
+    },
+    total_cost: {
+        definition: 'Tổng chi phí vận hành theo cơ sở = chi phí sửa ngoài đã hoàn tất + giá trị vật tư đã cấp phát.',
+        excludes: ['Chi phí mua vật tư nhập kho'],
+    },
+    maintenance_tickets: {
+        definition: 'Số phiếu bảo trì phát sinh trong kỳ, ghi nhận theo cơ sở.',
+        excludes: [],
+    },
+};
 
 const periodRange = (type: PeriodType) => {
     const now = new Date();
@@ -55,7 +84,13 @@ const groupByPlant = async (model: any, match: Record<string, any>, valueExpr: a
 // Chi phí MUA gom theo cơ sở ở CẤP DÒNG: mỗi dòng vật tư trong PO có cơ sở riêng (plantId cấp phiếu thường rỗng).
 const groupPurchaseByPlant = async (s: Date, e: Date) => {
     const rows = await PurchaseOrder.aggregate([
-        { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] }, createdAt: { $gte: s, $lte: e } } },
+        {
+            $match: {
+                isDeleted: { $ne: true },
+                status: { $in: ['ordered', 'partially_received', 'received'] },
+                createdAt: { $gte: s, $lte: e },
+            },
+        },
         { $unwind: '$items' },
         {
             $group: {
@@ -93,11 +128,25 @@ const groupDistByPlant = async (s: Date, e: Date) => {
                 },
             },
         },
-        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] }, _eff: { $gte: s, $lte: e } } },
+        {
+            $match: {
+                isDeleted: { $ne: true },
+                status: { $in: ['distributed', 'confirmed'] },
+                _eff: { $gte: s, $lte: e },
+            },
+        },
         {
             $group: {
                 _id: '$toPlantId',
-                v: { $sum: { $cond: [{ $gt: ['$_items', 0] }, '$_items', { $ifNull: ['$totalWithVat', { $ifNull: ['$totalAmount', 0] }] }] } },
+                v: {
+                    $sum: {
+                        $cond: [
+                            { $gt: ['$_items', 0] },
+                            '$_items',
+                            { $ifNull: ['$totalWithVat', { $ifNull: ['$totalAmount', 0] }] },
+                        ],
+                    },
+                },
             },
         },
     ]);
@@ -157,7 +206,9 @@ export const computeCostByPlant = async (metricInput: unknown, periodInput: unkn
     const r = periodRange(periodType);
 
     const { cur } = await buildMaps(metric, r);
-    const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean();
+    const plants = await Plant.find({ isDeleted: { $ne: true } })
+        .select('_id name')
+        .lean();
     const plantName = new Map(plants.map((p: any) => [String(p._id), String(p.name)]));
 
     const rows = [...cur.entries()]
@@ -168,6 +219,8 @@ export const computeCostByPlant = async (metricInput: unknown, periodInput: unkn
     return {
         metric,
         metricLabel: METRIC_LABEL[metric],
+        definition: METRIC_DEFINITION[metric].definition,
+        excludes: METRIC_DEFINITION[metric].excludes,
         periodLabel: r.label,
         isCost,
         total: rows.reduce((s, row) => s + row.value, 0),
@@ -187,7 +240,9 @@ export const computeVarianceData = async (metricInput: unknown, periodInput: unk
     const totalDelta = current - previous;
 
     // Tên cơ sở
-    const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean();
+    const plants = await Plant.find({ isDeleted: { $ne: true } })
+        .select('_id name')
+        .lean();
     const plantName = new Map(plants.map((p: any) => [String(p._id), String(p.name)]));
 
     const drivers = [...new Set([...cur.keys(), ...prev.keys()])]
@@ -233,7 +288,7 @@ export const computeVarianceData = async (metricInput: unknown, periodInput: unk
 
 export const explainVariance = async (req: Request, res: Response) => {
     const data = await computeVarianceData(req.body.metric, req.body.periodType);
-    return res.status(StatusCodes.OK).json(
-        customResponse({ data, message: 'Da phan tich bien dong', status: StatusCodes.OK, success: true })
-    );
+    return res
+        .status(StatusCodes.OK)
+        .json(customResponse({ data, message: 'Da phan tich bien dong', status: StatusCodes.OK, success: true }));
 };

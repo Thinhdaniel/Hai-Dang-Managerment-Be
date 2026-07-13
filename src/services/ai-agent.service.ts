@@ -428,9 +428,31 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
     switch (name) {
         case 'search_assets': {
             const r = await assetQueryTool(args || {});
+            const ownershipTypes = Array.isArray(args?.ownershipType) ? args.ownershipType : [];
+            const ownershipLabel: Record<string, string> = {
+                owned: 'máy Hải Đăng',
+                partner_borrowed: 'máy mượn đối tác',
+                rental: 'máy thuê',
+            };
+            const countScope = ownershipTypes.length
+                ? {
+                      code: 'filtered_ownership',
+                      label: `Chỉ các nhóm nguồn gốc đã lọc: ${ownershipTypes.map((type: string) => ownershipLabel[type] || type).join(', ')}`,
+                      ownershipTypes,
+                      includesBorrowedOrRental:
+                          ownershipTypes.includes('partner_borrowed') || ownershipTypes.includes('rental'),
+                  }
+                : {
+                      code: 'all_ownership',
+                      label: 'Toàn bộ danh mục máy, gồm máy Hải Đăng, máy mượn và máy thuê',
+                      ownershipTypes: ['owned', 'partner_borrowed', 'rental', 'legacy_unspecified'],
+                      includesBorrowedOrRental: true,
+                  };
             return {
                 ai: {
                     count: r.count,
+                    phamViDem: countScope.label,
+                    countScope,
                     sample: r.items.slice(0, 8).map((i: any) => ({
                         code: i.machineCode,
                         name: i.name,
@@ -443,7 +465,7 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
                     domain: 'asset',
                     count: r.count,
                     items: r.items,
-                    aggregates: r.aggregates,
+                    aggregates: { ...r.aggregates, countScope },
                     appliedFilters: r.appliedFilters,
                 },
             };
@@ -635,10 +657,14 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
                     ky: c.periodLabel,
                     tong: c.total,
                     theoCoSo: c.rows.slice(0, 10),
+                    dinhNghia: c.definition,
+                    khongBaoGom: c.excludes,
                     luuY:
                         c.metric === 'repair_cost'
                             ? 'repair_cost chi tinh phieu sua NGOAI da hoan tat trong ky'
-                            : undefined,
+                            : c.metric === 'total_cost'
+                              ? 'total_cost khong bao gom chi phi mua vat tu nhap kho; khong duoc suy ra chi phi mua bang 0'
+                              : undefined,
                 },
                 render: { domain: 'cost', count: c.rows.length, items: [], aggregates: { costByPlant: c } },
             };
@@ -1156,13 +1182,20 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
         }
         case 'summary_metrics': {
             const s = await dashboardRepository.getSummaryMetrics();
+            const countScope = {
+                code: 'company_owned_dashboard',
+                label: 'Máy Hải Đăng (ownershipType=owned và bản ghi cũ chưa khai báo nguồn gốc), không gồm máy mượn/thuê',
+                ownershipTypes: ['owned', 'legacy_unspecified'],
+                includesBorrowedOrRental: false,
+            };
+            const scopedSummary = { ...s, countScope };
             return {
-                ai: s,
+                ai: { ...s, phamViDem: countScope.label, countScope },
                 render: {
                     domain: 'asset',
                     count: Number(s.totalMachines || 0),
                     items: [],
-                    aggregates: { summaryMetrics: s },
+                    aggregates: { summaryMetrics: scopedSummary, countScope },
                 },
             };
         }
@@ -1250,6 +1283,31 @@ const transferDraftRoute = (q: string): { tool: ToolName; args: any } | null => 
     return { tool: 'draft_transfer', args: { machineRefs: refs, toPlantName: extractTransferDest(q) } };
 };
 
+const extractMaintenanceDescription = (question: string, refs: string[]) => {
+    let source = question;
+    [...refs]
+        .sort((a, b) => b.length - a.length)
+        .forEach((ref) => {
+            source = source.replace(new RegExp(escapeRegex(ref), 'gi'), ' ');
+        });
+
+    const symptom = source.match(
+        /(?:^|[\s,:;\-])((?:bị|lỗi|hỏng|kẹt|gãy|đứt|rò|chảy|bỏ|nhảy|nóng|rung|ồn|mất|yếu|không)(?:\s+|:)\s*.+?)(?=\s*[,;.]?\s*(?:sửa\s+(?:nội\s+bộ|ngoài)|gửi\s+sửa|bảo\s+trì\s+định\s+kỳ)(?=\s|[,;.]|$)|[;.]|$)/i
+    )?.[1];
+
+    const cleaned = (symptom || source)
+        .replace(
+            /\b(?:giúp\s+)?(?:tôi\s+)?(?:tạo|lập|soạn|mở|báo)\s+(?:phiếu\s+)?(?:bảo\s+trì|sửa(?:\s+chữa)?)(?:\s+cho)?(?:\s+máy)?(?=\s|[,;.]|$)/gi,
+            ' '
+        )
+        .replace(/\b(?:máy|thiết\s+bị|sửa\s+nội\s+bộ|sửa\s+ngoài|gửi\s+sửa)(?=\s|[,;.]|$)/gi, ' ')
+        .replace(/[,:;\-.]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : undefined;
+};
+
 const maintenanceDraftRoute = (q: string): { tool: ToolName; args: any } | null => {
     const n = normalize(q);
     const refs = extractMachineRefs(q);
@@ -1263,13 +1321,14 @@ const maintenanceDraftRoute = (q: string): { tool: ToolName; args: any } | null 
         n.includes('lap phieu sua') ||
         n.includes('bao sua may');
     if (!asksDraft) return null;
+    const description = extractMaintenanceDescription(q, refs);
     return {
         tool: 'draft_maintenance',
         args: {
             machineRefs: refs,
             type: n.includes('dinh ky') ? 'periodic' : n.includes('kiem tra') ? 'inspection' : 'emergency',
             repairMode: n.includes('sua ngoai') || n.includes('gui sua') ? 'external' : 'internal',
-            description: q,
+            ...(description ? { description } : {}),
         },
     };
 };
@@ -1845,7 +1904,7 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
     if (a.costByPlant) {
         const c = a.costByPlant;
         if (!c.rows.length)
-            return `${c.metricLabel} ${c.periodLabel}: chưa phát sinh ở cơ sở nào${c.metric === 'repair_cost' ? ' (chỉ tính phiếu sửa ngoài đã hoàn tất)' : ''}.`;
+            return `${c.metricLabel} ${c.periodLabel}: chưa phát sinh ở cơ sở nào. Phạm vi: ${c.definition}${c.excludes?.length ? ` Không bao gồm: ${c.excludes.join(', ')}.` : ''}`;
         const fmt = (v: number) => (c.isCost ? fmtVnd(v) : `${v}`);
         return (
             `${c.metricLabel} ${c.periodLabel} theo cơ sở (tổng ${fmt(c.total)}): ` +
@@ -1853,7 +1912,7 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
                 .slice(0, 5)
                 .map((r: any, i: number) => `${i + 1}. ${r.plantName} ${fmt(r.value)}`)
                 .join('; ') +
-            `.${c.metric === 'repair_cost' ? ' (Chỉ tính phiếu sửa ngoài đã hoàn tất — chưa gồm vật tư/sửa nội bộ.)' : ''}`
+            `. Phạm vi: ${c.definition}${c.excludes?.length ? ` Không bao gồm: ${c.excludes.join(', ')}.` : ''}`
         );
     }
     if (a.topBroken?.length) {
@@ -1892,11 +1951,38 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
             }.`;
         return s;
     }
+    if (a.summaryMetrics) {
+        const s = a.summaryMetrics;
+        return `Tổng quan ${s.countScope?.label || 'máy Hải Đăng'}: ${s.totalMachines || 0} máy; đang hoạt động ${s.activeMachines || 0}; bảo trì ${s.maintenanceMachines || 0}; hỏng/tồn kho ${s.inactiveMachines || 0}; chưa gán cơ sở ${s.unassignedMachines || 0}.`;
+    }
     if (render.domain === 'material')
         return render.count ? `Tìm thấy ${render.count} vật tư phù hợp.` : 'Không có vật tư nào khớp.';
-    if (render.domain === 'asset')
-        return render.count ? `Tìm thấy ${render.count} máy phù hợp.` : 'Không có máy nào khớp.';
+    if (render.domain === 'asset') {
+        const scope = a.countScope?.label ? ` Phạm vi đếm: ${a.countScope.label}.` : '';
+        return render.count ? `Tìm thấy ${render.count} máy phù hợp.${scope}` : `Không có máy nào khớp.${scope}`;
+    }
     return null;
+};
+
+const enforceScopeDisclosure = (answer: string, render?: ToolOutcome['render']) => {
+    if (!render) return answer;
+    const aggregates = render.aggregates || {};
+    const costByPlant = aggregates.costByPlant;
+
+    // total_cost có định nghĩa kế toán hẹp hơn "tổng mua + cấp + sửa". Dùng câu
+    // xác định để loại bỏ hoàn toàn khả năng mô hình suy diễn chi phí mua bằng 0.
+    if (costByPlant?.metric === 'total_cost') return buildDeterministicAnswer(render) || answer;
+
+    const countScope = aggregates.countScope || aggregates.summaryMetrics?.countScope;
+    if (!countScope?.label) return answer;
+    const normalizedAnswer = normalize(answer);
+    if (
+        normalizedAnswer.includes('pham vi dem') ||
+        normalizedAnswer.includes('gom ca may muon') ||
+        normalizedAnswer.includes('khong gom may muon')
+    )
+        return answer;
+    return `${answer} Phạm vi đếm: ${countScope.label}.`;
 };
 
 const BASE_SYSTEM_PROMPT = [
@@ -1921,6 +2007,7 @@ const BASE_SYSTEM_PROMPT = [
     '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|pending_disposal|disposed|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke NHIEU may theo bo loc. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
     '  ⚠ MAP TRANG THAI CHINH XAC: "dang hoat dong / dang chay / su dung binh thuong" = status:["active"] DUY NHAT — TUYET DOI khong gop broken/borrowing/maintenance vao. "hong" = ["broken"], "dang bao tri/dang sua" = ["maintenance"], "dang cho muon" = ["borrowing"], "ton kho/ranh" = ["storage"], "chuan bi thanh ly" = ["pending_disposal"], "da thanh ly" = ["disposed"]. Cau hoi tong quat "bao nhieu may hoat dong" -> dung aggregate:"breakdown_by_status" de nguoi doc thay ro tung nhom, roi neu con so active.',
     '  ⚠ PHAM VI SO HUU: neu KHONG chi dinh ownershipType, ket qua gom CA may Hai Dang lan may muon/thue doi tac dang active (Dashboard mac dinh CHI tinh may Hai Dang nen so co the LECH). Cau hoi dem TONG SO MAY chung chung ("toan he thong", "tat ca may") BAT BUOC noi ro trong cau tra loi co gom may muon/thue khong, vd "996 may toan he thong (gom ca may muon/thue doi tac)". Neu nguoi hoi ro y chi may cua cong ty -> them ownershipType:["owned"].',
+    '  ⚠ KHONG duoc so sanh hoac tron so dem tu search_assets voi summary_metrics neu chua neu ro pham vi. Luon doc phamViDem/countScope trong ket qua tool va ghi pham vi ngay sau con so.',
     '- locate_asset(args:{query}): tra cuu 1 MAY CU THE theo MA may / SERIAL / TEN -> vi tri (co so quan ly + khu vuc + noi quet QR cuoi + co lech vi tri khong) + tinh trang + LENH DIEU CHUYEN lien quan. Dung khi hoi "may X dang o dau", "may serial ... co lenh dieu chuyen nao khong".',
     '- transfer_orders(args:{period?:today|week|month, status?:pending|approved|completed|rejected|cancelled, plantName?, limit?}): tra cuu LENH DIEU CHUYEN (kem danh sach may trong lenh). Dung khi hoi "lenh dieu chuyen hom nay/gan day", "lenh gan nhat gom may nao", "lenh nao dang cho duyet". Khong truyen period = gan day (2 tuan).',
     '- draft_transfer(args:{machineRefs:[ma/serial may], toPlantName?}): SOAN NHAP lenh dieu chuyen (KHONG tao that) -> tra the "Mo form dieu chuyen" de nguoi dung chot. Dung khi nguoi dung MUON DIEU CHUYEN may cu the sang co so khac, vd "dieu chuyen may MCV-... sang Co So 2", "soan lenh chuyen 3 may nay ve Co So 1", "tao lenh dieu chuyen 2 may co seri 0242889, 02115139". machineRefs = TAT CA ma may/serial/seri/SN trong cau, ke ca serial TOAN SO; toPlantName = co so DICH neu co. Neu thieu co so dich van goi draft_transfer de tim may truoc roi hoi them co so dich.',
@@ -1956,7 +2043,7 @@ const BASE_SYSTEM_PROMPT = [
     'TOOL CHI PHI MUA & DON HANG:',
     '- cost_variance(args:{metric:repair_cost|distribution_cost|purchase_cost|total_cost|maintenance_tickets, period:week|month}): current la TONG TOAN HE THONG (TAT CA co so) + bien dong vs ky truoc, kem top co so bien dong. KHONG LOC duoc 1 co so. ⚠ TUYET DOI KHONG dung cho cau hoi ve 1 co so cu the (vd "CS2 bao nhieu") — luc do dung distribution_analysis (cap phat) / purchase_analysis (mua) voi plantName. "mua"=purchase_cost, "cap phat"=distribution_cost, "sua ngoai"=repair_cost.',
     '  ⚠ DINH NGHIA repair_cost: CHI tinh phieu sua NGOAI (thue ngoai) DA HOAN TAT trong ky — khong gom sua noi bo, khong gom vat tu. Khi dung phai NOI RO dinh nghia nay trong cau tra loi. Cau hoi "chi phi sua chua" chung chung ma khong noi ro sua ngoai -> uu tien cost_overview de tra du 3 loai, tranh gay hieu nham.',
-    '- cost_by_plant(args:{metric?:total_cost|purchase_cost|distribution_cost|repair_cost, period?:week|month}): XEP HANG chi phi TUYET DOI theo TUNG CO SO trong ky (cao -> thap). BAT BUOC dung khi hoi "co so nao ton/chi nhieu nhat", "chi phi cao nhat o dau", "so sanh chi phi cac co so". Mac dinh metric=total_cost neu cau hoi khong noi ro loai.',
+    '- cost_by_plant(args:{metric?:total_cost|purchase_cost|distribution_cost|repair_cost, period?:week|month}): XEP HANG chi phi TUYET DOI theo TUNG CO SO trong ky (cao -> thap). BAT BUOC dung khi hoi "co so nao ton/chi nhieu nhat", "chi phi cao nhat o dau", "so sanh chi phi cac co so". Mac dinh metric=total_cost neu cau hoi khong noi ro loai. PHAI doc dinhNghia/khongBaoGom trong ket qua: total_cost CHI gom sua ngoai hoan tat + cap phat, KHONG gom mua vat tu nhap kho. Ket qua total_cost=0 KHONG duoc ket luan chi phi mua=0; muon danh gia mua phai goi cost_overview hoac purchase_analysis.',
     '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): chi phi MUA chi tiet ky nay vs ky truoc, phan ra theo VAT TU hoac NHA CUNG CAP.',
     '- purchase_analysis CHO 1 CO SO: truyen them plantName de loc chi phi mua cua RIENG co so do (loc o cap DONG vat tu). KHONG dung cost_variance(purchase_cost) cho 1 co so.',
     '- purchase_orders(args:{search?, orderCode?, supplierName?, plantName?, status?, period?:week|month, limit?}): tra cuu DON HANG. Truyen orderCode/search de SOI SAU 1 don (tung dong vat tu, SL dat/nhan).',
@@ -2398,6 +2485,8 @@ export const runAssistant = async (
                 ? `Tìm thấy ${lastRender.count} kết quả phù hợp.`
                 : 'Mình chưa chắc ý câu hỏi nên chưa truy vấn được dữ liệu phù hợp. Mình tra được: máy & bảo trì (vị trí, hỏng, điều chuyển, QR), vật tư & tồn kho, và chi phí (mua / cấp phát / sửa ngoài, theo cơ sở & theo kỳ). Bạn nêu rõ hơn cơ sở/khoảng thời gian/loại chi phí giúp mình nhé — ví dụ "chi phí mua của Cơ Sở 2 tháng này".');
     }
+
+    answer = enforceScopeDisclosure(answer, lastRender);
 
     emit?.({ type: 'synthesize' });
 

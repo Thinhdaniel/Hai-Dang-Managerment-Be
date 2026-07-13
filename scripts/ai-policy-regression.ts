@@ -83,6 +83,9 @@ assert.deepEqual(validateAssistantToolArgs('search_assets', { status: 'broken', 
     status: ['broken'],
     limit: 5,
 });
+assert.equal(validateAssistantToolArgs('search_assets', { limit: 100 }).limit, 30);
+assert.equal(validateAssistantToolArgs('search_materials', { search: 'chỉ may', limit: 50 }).limit, 30);
+assert.equal(validateAssistantToolArgs('maintenance_tickets', { status: 'open', limit: 40 }).limit, 30);
 assert.deepEqual(validateAssistantToolArgs('search_assets', { status: null, plantName: null }), {});
 assert.throws(() => validateAssistantToolArgs('cost_variance', { metric: 'made_up_cost' }));
 assert.throws(() => validateAssistantToolArgs('draft_transfer', { machineRefs: [] }));
@@ -135,6 +138,16 @@ assert.equal(routeAssistantQuestion('Hôm nay có phiếu đề xuất cấp v�
 assert.equal(routeAssistantQuestion('So sánh chi phí mua và cấp phát tháng này.')?.tool, 'compare_cost');
 assert.equal(routeAssistantQuestion('Tạo lệnh điều chuyển máy URE-KASU-HD-001 sang Cơ Sở 2.')?.tool, 'draft_transfer');
 assert.equal(routeAssistantQuestion('Tạo phiếu bảo trì máy URE-KASU-HD-001 sửa ngoài.')?.tool, 'draft_maintenance');
+assert.equal(
+    routeAssistantQuestion('Tạo phiếu bảo trì máy URE-KASU-HD-001, bị bỏ mũi và kẹt chỉ, sửa nội bộ.')?.args
+        ?.description,
+    'Bị bỏ mũi và kẹt chỉ'
+);
+assert.equal(
+    routeAssistantQuestion('Lập phiếu sửa máy URE-KASU-HD-001 do không chạy, gửi sửa.')?.args?.description,
+    'Không chạy'
+);
+assert.equal(routeAssistantQuestion('Tạo phiếu bảo trì máy URE-KASU-HD-001 sửa ngoài.')?.args?.description, undefined);
 assert.equal(routeAssistantQuestion('Tạo phiếu đề xuất cấp 10 ram giấy A4.'), null);
 
 console.log('AI assistant policy regression: OK');

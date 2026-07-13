@@ -1,7 +1,15 @@
 import { z } from 'zod';
 
 const optionalText = (max = 160) => z.string().trim().min(1).max(max).optional();
-const optionalLimit = z.coerce.number().int().min(1).max(30).optional();
+const MAX_TOOL_RESULT_LIMIT = 30;
+// `limit` do model sinh ra: yêu cầu 40/50/100 vẫn là câu hỏi hợp lệ. Chuẩn hóa về
+// trần an toàn thay vì để Zod từ chối cả lượt truy vấn và trả lỗi kỹ thuật cho user.
+const optionalLimit = z.coerce
+    .number()
+    .int()
+    .min(1)
+    .transform((value) => Math.min(value, MAX_TOOL_RESULT_LIMIT))
+    .optional();
 const period = z.enum(['today', 'yesterday', 'week', 'month', 'all']).optional();
 const date = z
     .string()
