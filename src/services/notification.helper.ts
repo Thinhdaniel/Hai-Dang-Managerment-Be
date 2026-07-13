@@ -26,6 +26,13 @@ type NotifyOptions = {
     excludeUserIds?: (string | null | undefined)[];
 };
 
+export type NotificationDeliverySummary = {
+    inAppCreated: number;
+    webPushSent: number;
+    telegramSent: number;
+    failedChannels: number;
+};
+
 /**
  * Gửi thông báo cho cấp quản lý: Super Admin + Giám đốc + Quản lý.
  * Tự khử trùng theo excludeUserIds (thường truyền người thao tác để không tự báo cho mình).
@@ -102,6 +109,56 @@ export const notifyUser = async (userId: string, event: string, data: any) => {
     } catch (error) {
         console.error('[Notification] Error notifying user:', error);
     }
+};
+
+/**
+ * Bản đồng bộ dành cho các tác vụ cần lưu biên nhận phân phối. Các luồng thông
+ * báo hiện tại vẫn dùng notifyUser để không phải chờ các kênh ngoài ứng dụng.
+ */
+export const notifyUserTracked = async (
+    userId: string,
+    event: string,
+    data: any
+): Promise<NotificationDeliverySummary> => {
+    const summary: NotificationDeliverySummary = {
+        inAppCreated: 0,
+        webPushSent: 0,
+        telegramSent: 0,
+        failedChannels: 0,
+    };
+
+    try {
+        let notificationPayload = data;
+        if (event === 'notify:new') {
+            const doc = await Notification.create({
+                userId,
+                title: data.title,
+                message: data.message,
+                type: data.type || 'info',
+                actionType: data.actionType || 'system',
+                actionId: data.actionId,
+                isRead: false,
+            });
+            notificationPayload = doc.toObject();
+            summary.inAppCreated = 1;
+        }
+
+        emitToUser(userId, event, notificationPayload);
+        if (event !== 'notify:new') return summary;
+
+        const [webPush, telegram] = await Promise.all([
+            sendWebPushToUser(userId, notificationPayload),
+            sendTelegramToUser(userId, notificationPayload),
+        ]);
+        summary.webPushSent = webPush.sent;
+        summary.telegramSent = telegram.sent;
+        summary.failedChannels = webPush.failed + telegram.failed;
+    } catch (error) {
+        console.error('[Notification] Error notifying tracked user:', error);
+        summary.failedChannels += 1;
+    }
+
+    return summary;
 };
 
 /**

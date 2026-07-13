@@ -55,6 +55,9 @@ export const buildActionUrl = (notification: Pick<INotification, 'actionType' | 
     if (actionType === 'supply_request') return '/materials/supply-requests';
     if (actionType === 'purchase_order') return '/materials/purchase-orders';
     if (actionType === 'distribution') return '/materials/distributions';
+    if (actionType === 'digest') {
+        return `/executive-digests${actionId ? `?digest=${encodeURIComponent(actionId)}` : ''}`;
+    }
     if (actionType === 'chat') return `/chat${actionId ? `?conversation=${encodeURIComponent(actionId)}` : ''}`;
     if (actionType === 'floor_map') {
         return `/assets/floor-map?reality=1${actionId ? `&plantId=${encodeURIComponent(actionId)}` : ''}`;

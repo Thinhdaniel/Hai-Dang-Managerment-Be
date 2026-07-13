@@ -38,6 +38,18 @@ const MaintenanceSchema = new mongoose.Schema(
             required: true,
             trim: true,
         },
+        // Ảnh bằng chứng giữ nguyên URL gốc. Visual Digest chỉ trình bày lại,
+        // không được thay thế hoặc ghi đè các ảnh này bằng ảnh AI.
+        beforeImages: {
+            type: [String],
+            default: [],
+            validate: [(value: string[]) => value.length <= 6, 'Toi da 6 anh truoc sua'],
+        },
+        afterImages: {
+            type: [String],
+            default: [],
+            validate: [(value: string[]) => value.length <= 6, 'Toi da 6 anh sau sua'],
+        },
         startDate: {
             type: Date,
             required: true,

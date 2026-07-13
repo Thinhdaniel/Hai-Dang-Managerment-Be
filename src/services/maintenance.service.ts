@@ -552,6 +552,7 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
                 note: req.body.note,
                 cost: externalCost,
                 externalRepair,
+                afterImages: req.body.afterImages ?? (current as any).afterImages ?? [],
             },
             { new: true, runValidators: true }
         ),

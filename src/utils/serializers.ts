@@ -237,6 +237,8 @@ export const serializeMaintenance = (input: any) => {
         status: maintenance?.status,
         approvalStatus: maintenance?.approvalStatus ?? 'none',
         description: maintenance?.description,
+        beforeImages: maintenance?.beforeImages ?? [],
+        afterImages: maintenance?.afterImages ?? [],
         startDate: toIso(maintenance?.startDate),
         endDate: toIso(maintenance?.endDate),
         technician: maintenance?.technician,

@@ -15,6 +15,24 @@ type VertexProxyResponse = {
     latencyMs?: number;
     error?: string;
     raw?: unknown;
+    images?: Array<
+        | string
+        | {
+              data?: string;
+              base64?: string;
+              url?: string;
+              mimeType?: string;
+          }
+    >;
+};
+
+export type VertexGeneratedImage = {
+    dataUrl?: string;
+    url?: string;
+    mimeType: string;
+    provider: 'vertex';
+    model: string;
+    latencyMs: number;
 };
 
 const textFromPart = (part: AiContentPart) => (part.type === 'text' ? part.text : '');
@@ -100,6 +118,60 @@ export const vertexProviderService = {
         return {
             ...result,
             data: JSON.parse(extractJsonObject(result.content)) as T,
+        };
+    },
+
+    async generateImage(options: {
+        prompt: string;
+        model?: string;
+        aspectRatio?: string;
+        imageSize?: '512' | '1K' | '2K' | '4K';
+        referenceImages?: string[];
+        timeoutMs?: number;
+    }): Promise<VertexGeneratedImage> {
+        requireEnabled();
+        if (!config.vertex.imageEnabled) throw new Error('Vertex image generation is disabled');
+
+        const startedAt = Date.now();
+        const model = options.model || config.vertex.imageModel;
+        const response = await axios.post<VertexProxyResponse>(
+            `${config.vertex.proxyUrl}/image/generate`,
+            {
+                prompt: options.prompt,
+                model,
+                aspectRatio: options.aspectRatio || '4:5',
+                imageSize: options.imageSize || '1K',
+                images: (options.referenceImages || []).slice(0, 6),
+            },
+            {
+                timeout: options.timeoutMs ?? Math.max(config.vertex.timeoutMs, 120000),
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-vertex-proxy-key': config.vertex.proxyKey,
+                },
+            }
+        );
+
+        const first = response.data.images?.[0];
+        const normalized = typeof first === 'string' ? { data: first } : first;
+        const mimeType = normalized?.mimeType || 'image/png';
+        const rawData = normalized?.data || normalized?.base64;
+        const dataUrl = rawData
+            ? rawData.startsWith('data:')
+                ? rawData
+                : `data:${mimeType};base64,${rawData}`
+            : undefined;
+        if (!dataUrl && !normalized?.url) {
+            throw new Error(response.data.error || 'Vertex image response is empty');
+        }
+
+        return {
+            dataUrl,
+            url: normalized?.url,
+            mimeType,
+            provider: 'vertex',
+            model: response.data.model || model,
+            latencyMs: response.data.latencyMs ?? Date.now() - startedAt,
         };
     },
 };

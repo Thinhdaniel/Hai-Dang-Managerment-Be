@@ -104,6 +104,11 @@ const envVarsSchema = z.object({
     VERTEX_MODEL_FAST: z.string().default('gemini-2.5-flash-lite'),
     VERTEX_MODEL_VISION: z.string().default('gemini-2.5-flash'),
     VERTEX_MODEL_VERIFY: z.string().default('gemini-2.5-flash-lite'),
+    VERTEX_IMAGE_ENABLED: z
+        .string()
+        .optional()
+        .transform((value) => value === 'true'),
+    VERTEX_MODEL_IMAGE: z.string().default('gemini-3.1-flash-image'),
     VERTEX_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
 });
 
@@ -247,6 +252,8 @@ const config = {
         fastModel: envVars.VERTEX_MODEL_FAST,
         visionModel: envVars.VERTEX_MODEL_VISION,
         verifyModel: envVars.VERTEX_MODEL_VERIFY,
+        imageEnabled: Boolean(envVars.VERTEX_IMAGE_ENABLED),
+        imageModel: envVars.VERTEX_MODEL_IMAGE,
         timeoutMs: envVars.VERTEX_TIMEOUT_MS,
     },
 };

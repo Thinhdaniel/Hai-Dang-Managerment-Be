@@ -2,6 +2,10 @@ import { zObjectId, zOptionalString, zRequiredString } from '@/lib/validation';
 import { z } from 'zod';
 
 const zOptionalCost = z.number().min(0).optional();
+const evidenceImages = z
+    .array(z.string().trim().url({ message: 'Link anh khong hop le' }))
+    .max(6)
+    .optional();
 
 const externalRepairSchema = z
     .object({
@@ -31,6 +35,8 @@ export const createMaintenanceSchema = z.object({
     type: z.enum(['periodic', 'emergency', 'inspection']),
     repairMode: z.enum(['internal', 'external']).optional(),
     description: zRequiredString('Noi dung bao tri'),
+    beforeImages: evidenceImages,
+    afterImages: evidenceImages,
     startDate: zRequiredString('Ngay bat dau'),
     endDate: zOptionalString(),
     technician: zOptionalString(),
@@ -47,6 +53,8 @@ export const updateMaintenanceSchema = z.object({
     status: z.enum(['pending', 'in_progress', 'completed', 'overdue', 'cancelled']).optional(),
     approvalStatus: z.enum(['none', 'pending', 'approved', 'rejected']).optional(),
     description: zOptionalString(),
+    beforeImages: evidenceImages,
+    afterImages: evidenceImages,
     startDate: zOptionalString(),
     endDate: zOptionalString(),
     technician: zOptionalString(),
@@ -60,6 +68,7 @@ export const completeMaintenanceSchema = z.object({
     note: zOptionalString(),
     cost: zOptionalCost,
     externalRepair: externalRepairSchema,
+    afterImages: evidenceImages,
 });
 
 export const approveMaintenanceSchema = z.object({
