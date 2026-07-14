@@ -43,7 +43,7 @@ Request:
 {
   "prompt": "...",
   "model": "gemini-3.1-flash-image",
-  "aspectRatio": "4:5",
+  "aspectRatio": "16:9",
   "imageSize": "1K",
   "images": ["https://.../before.jpg", "https://.../after.jpg"]
 }
@@ -66,6 +66,8 @@ The proxy must call Vertex AI `generateContent` with text plus optional image pa
 ```
 
 Do not expose the proxy key in the frontend. The Render backend is the only caller.
+
+The production proxy source is versioned in `scripts/vertex-proxy/`. Deploy that file to the VM instead of maintaining an untracked server copy.
 
 ## 3. Scheduled generation when Render sleeps
 

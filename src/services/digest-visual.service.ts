@@ -3,7 +3,7 @@ import config from '@/config/env.config';
 import cloudinaryConfig from '@/config/cloudinary.config';
 import { vertexProviderService } from '@/services/ai/vertex-provider.service';
 
-const PROMPT_VERSION = 'executive-digest-cover-v1';
+const PROMPT_VERSION = 'executive-digest-cover-v2';
 
 cloudinary.config(cloudinaryConfig);
 
@@ -36,7 +36,8 @@ const buildCoverPrompt = (periodLabel: string, hasReferences: boolean) =>
         hasReferences
             ? 'Use the supplied factory photos only as visual context; preserve machine identity and do not invent damage or repairs.'
             : 'Use a realistic garment factory environment with clean industrial lighting.',
-        'Composition: strong central subject, reserved dark negative space near the upper-left for application-rendered title, subtle blue and safety-green accents, professional annual-report quality.',
+        'Composition: wide 16:9 landscape, strong subject placed center-right, with naturally quieter and slightly darker factory depth near the upper-left for application-rendered title.',
+        'The upper-left space must remain part of the real factory scene: no solid rectangle, artificial panel, vignette, frame or graphic overlay.',
         `Editorial period context: ${periodLabel}.`,
         'Do not render any text, numbers, logos, badges, charts, QR codes, watermarks or signatures.',
         'Do not make the factory futuristic, cinematic, damaged, unsafe or staged like stock photography.',
@@ -62,7 +63,7 @@ export const generateDigestVisual = async (
         const generated = await vertexProviderService.generateImage({
             prompt: buildCoverPrompt(options.periodLabel, referenceImages.length > 0),
             model: config.vertex.imageModel,
-            aspectRatio: '4:5',
+            aspectRatio: '16:9',
             imageSize: '1K',
             referenceImages,
         });

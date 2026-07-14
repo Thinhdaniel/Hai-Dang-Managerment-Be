@@ -139,7 +139,7 @@ export const vertexProviderService = {
             {
                 prompt: options.prompt,
                 model,
-                aspectRatio: options.aspectRatio || '4:5',
+                aspectRatio: options.aspectRatio || '16:9',
                 imageSize: options.imageSize || '1K',
                 images: (options.referenceImages || []).slice(0, 6),
             },
