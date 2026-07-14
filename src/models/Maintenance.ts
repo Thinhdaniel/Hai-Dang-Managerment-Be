@@ -38,8 +38,7 @@ const MaintenanceSchema = new mongoose.Schema(
             required: true,
             trim: true,
         },
-        // Ảnh bằng chứng giữ nguyên URL gốc. Visual Digest chỉ trình bày lại,
-        // không được thay thế hoặc ghi đè các ảnh này bằng ảnh AI.
+        // Ảnh bằng chứng giữ nguyên URL gốc, không được thay thế hoặc ghi đè bằng ảnh AI.
         beforeImages: {
             type: [String],
             default: [],

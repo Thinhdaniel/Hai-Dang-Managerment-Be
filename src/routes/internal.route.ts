@@ -5,7 +5,6 @@ import asyncHandler from '@/utils/asyncHandler';
 import customResponse from '@/utils/response';
 import { StatusCodes } from 'http-status-codes';
 import { evaluateAllRealityOperations } from '@/services/reality-operations.service';
-import { runScheduledDigest } from '@/services/digest.service';
 
 const router = Router();
 
@@ -57,33 +56,6 @@ router.post(
             customResponse({
                 data: result,
                 message: 'Da danh gia Reality Operations',
-                status: StatusCodes.OK,
-                success: true,
-            })
-        );
-    })
-);
-
-router.post(
-    '/executive-digest',
-    asyncHandler(async (req, res) => {
-        if (!assertInternalSecret(req.headers['x-internal-cron-secret'])) {
-            return res.status(StatusCodes.UNAUTHORIZED).json(
-                customResponse({
-                    data: null,
-                    message: 'Internal cron secret khong hop le',
-                    status: StatusCodes.UNAUTHORIZED,
-                    success: false,
-                })
-            );
-        }
-
-        const type = String(req.body?.type) === 'month' ? 'month' : 'week';
-        const result = await runScheduledDigest(type);
-        return res.status(StatusCodes.OK).json(
-            customResponse({
-                data: result,
-                message: 'Da tao ban tin dieu hanh cho duyet',
                 status: StatusCodes.OK,
                 success: true,
             })
