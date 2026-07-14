@@ -31,6 +31,7 @@ export const AI_FEATURES = {
     ANALYTICS: 'analytics', // NL -> chart-spec cho AI Analytics Studio (JSON, cần ổn định)
     INCIDENT_REPLAY: 'incident-replay', // Điều tra bất thường vận hành từ timeline/sự kiện thật
     HELP: 'help', // Trợ lý hướng dẫn sử dụng
+    EXECUTIVE_BRIEFING: 'executive-briefing', // Bản tin tuần/tháng: diễn giải snapshot có bằng chứng
     VARIANCE: 'variance', // Giải thích biến động chỉ số (câu ngắn, theo nhu cầu)
     AUDIT: 'audit', // Kiểm toán đêm: fallback khi Vertex lỗi (chạy 1 lần/ngày)
 } as const;
@@ -88,6 +89,7 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     analytics: ['kr/claude-haiku-4.5', 'bb/claude-sonnet-4.6'], // chart-spec JSON từ danh mục cho sẵn
     'incident-replay': ['kr/claude-haiku-4.5', 'gc/gemini-2.5-flash', 'bb/claude-sonnet-4.6'],
     help: ['kr/claude-sonnet-4.5', 'bb/gpt-5.4'],
+    'executive-briefing': ['kr/claude-haiku-4.5', 'gc/gemini-2.5-flash', 'bb/claude-sonnet-4.6'],
     variance: ['kr/claude-haiku-4.5', 'bb/deepseek-v4-flash'],
     audit: ['gc/gemini-2.5-pro', 'kr/claude-sonnet-4.5-agentic'], // kiểm toán đêm: dự phòng khi Vertex lỗi
 };

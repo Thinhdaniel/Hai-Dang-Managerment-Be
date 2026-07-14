@@ -6,6 +6,7 @@ import { checkAndNotifyOverdueMaintenance } from './services/notification.helper
 import { startAuditSchedule } from './services/audit.service';
 import { initSocketServer } from './lib/socket';
 import { startRealityOperationsSchedule } from './services/reality-operations.service';
+import { startExecutiveBriefingSchedule } from './services/executive-briefing.service';
 
 const PORT = config.port || 8080;
 const HOSTNAME = config.hostname;
@@ -36,6 +37,9 @@ connectDB().then(async () => {
 
     // Snapshot + cảnh báo Reality Health mỗi ngày; production sleep dùng thêm internal route/UptimeRobot.
     startRealityOperationsSchedule();
+
+    // Bản tin tuần/tháng dùng kỳ đã đóng; startup tự tạo bù nếu cron bị lỡ do server sleep.
+    startExecutiveBriefingSchedule();
 });
 
 const exitHandler = () => {

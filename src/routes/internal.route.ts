@@ -5,6 +5,8 @@ import asyncHandler from '@/utils/asyncHandler';
 import customResponse from '@/utils/response';
 import { StatusCodes } from 'http-status-codes';
 import { evaluateAllRealityOperations } from '@/services/reality-operations.service';
+import { ensureLatestExecutiveBriefings } from '@/services/executive-briefing.service';
+import type { BriefingPeriodType } from '@/types/executiveBriefing';
 
 const router = Router();
 
@@ -31,6 +33,43 @@ router.post(
             customResponse({
                 data: result,
                 message: 'Da chay kiem tra bao tri qua han',
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    })
+);
+
+router.post(
+    '/executive-briefing',
+    asyncHandler(async (req, res) => {
+        if (!assertInternalSecret(req.headers['x-internal-cron-secret'])) {
+            return res.status(StatusCodes.UNAUTHORIZED).json(
+                customResponse({
+                    data: null,
+                    message: 'Internal cron secret khong hop le',
+                    status: StatusCodes.UNAUTHORIZED,
+                    success: false,
+                })
+            );
+        }
+
+        const requested = req.body?.period;
+        if (requested !== undefined && requested !== 'week' && requested !== 'month') {
+            return res.status(StatusCodes.BAD_REQUEST).json(
+                customResponse({
+                    data: null,
+                    message: 'period phai la week hoac month',
+                    status: StatusCodes.BAD_REQUEST,
+                    success: false,
+                })
+            );
+        }
+        const result = await ensureLatestExecutiveBriefings('internal', requested as BriefingPeriodType | undefined);
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: result,
+                message: 'Da kiem tra ban tin van hanh',
                 status: StatusCodes.OK,
                 success: true,
             })

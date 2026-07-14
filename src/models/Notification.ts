@@ -14,6 +14,7 @@ export type NotificationActionType =
     | 'distribution'
     | 'chat'
     | 'digest'
+    | 'briefing'
     | 'floor_map'
     | 'system';
 
@@ -60,6 +61,7 @@ const NotificationSchema = new mongoose.Schema<INotification>(
                 'distribution',
                 'chat',
                 'digest',
+                'briefing',
                 'floor_map',
                 'system',
             ],
