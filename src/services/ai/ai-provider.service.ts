@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 import config from '@/config/env.config';
 import { STRONG_FALLBACK_MODEL } from '@/constant/aiModels';
 
@@ -129,6 +129,12 @@ const getOpenAiCompatibleConfig = (provider: AiProviderName) => {
     };
 };
 
+const isUnsupportedJsonResponseFormat = (error: unknown) => {
+    if (!axios.isAxiosError(error) || error.response?.status !== 400) return false;
+    const detail = JSON.stringify(error.response?.data ?? error.message).toLowerCase();
+    return /response.?format|json.?mode|json_object/.test(detail);
+};
+
 const callOpenAiCompatible = async (
     provider: AiProviderName,
     options: AiGenerateTextOptions
@@ -137,26 +143,38 @@ const callOpenAiCompatible = async (
     const providerConfig = getOpenAiCompatibleConfig(provider);
     // Model đã được generateText quyết theo chuỗi dự phòng và truyền vào options.model.
     const model = options.model || (options.jsonMode ? providerConfig.jsonModel : providerConfig.model);
-
-    const response = await axios.post<OpenAiCompatibleResponse>(
-        `${providerConfig.baseUrl}/chat/completions`,
-        {
-            model,
-            messages: options.messages,
-            temperature: options.temperature ?? 0.2,
-            max_tokens: options.maxTokens ?? 900,
-            stream: false,
-            ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+    const requestBody = {
+        model,
+        messages: options.messages,
+        temperature: options.temperature ?? 0.2,
+        max_tokens: options.maxTokens ?? 900,
+        stream: false,
+        ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+    };
+    const requestConfig = {
+        timeout: options.timeoutMs ?? config.ai.timeoutMs,
+        headers: {
+            'Content-Type': 'application/json',
+            ...(providerConfig.apiKey ? { Authorization: `Bearer ${providerConfig.apiKey}` } : {}),
+            ...providerConfig.extraHeaders,
         },
-        {
-            timeout: options.timeoutMs ?? config.ai.timeoutMs,
-            headers: {
-                'Content-Type': 'application/json',
-                ...(providerConfig.apiKey ? { Authorization: `Bearer ${providerConfig.apiKey}` } : {}),
-                ...providerConfig.extraHeaders,
+    };
+    const endpoint = `${providerConfig.baseUrl}/chat/completions`;
+    let response: AxiosResponse<OpenAiCompatibleResponse>;
+    try {
+        response = await axios.post<OpenAiCompatibleResponse>(
+            endpoint,
+            {
+                ...requestBody,
+                ...(options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
             },
-        }
-    );
+            requestConfig
+        );
+    } catch (error) {
+        if (!options.jsonMode || !isUnsupportedJsonResponseFormat(error)) throw error;
+        console.warn(`[AI] model "${model}" không hỗ trợ response_format; thử lại bằng JSON prompt.`);
+        response = await axios.post<OpenAiCompatibleResponse>(endpoint, requestBody, requestConfig);
+    }
 
     const content = response.data?.choices?.[0]?.message?.content?.trim();
     if (!content) {

@@ -57,6 +57,7 @@ const ExecutiveBriefingSchema = new mongoose.Schema(
         fallbackReason: { type: String, trim: true, maxlength: 240 },
         aiAttemptedAt: { type: Date },
         nextAiRetryAt: { type: Date },
+        aiContributionCount: { type: Number, default: 0, min: 0 },
         version: { type: Number, default: 1, min: 1 },
         generatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         notifiedAt: { type: Date },

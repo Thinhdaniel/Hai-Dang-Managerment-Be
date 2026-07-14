@@ -134,6 +134,7 @@ const runGeneration = async (
         trigger: options.trigger,
         provider: generated.provider,
         aiAttemptedAt,
+        aiContributionCount: generated.aiContributionCount ?? 0,
         ...(generated.model ? { model: generated.model } : {}),
         ...(generated.latencyMs !== undefined ? { latencyMs: generated.latencyMs } : {}),
         ...(generated.generationStatus === 'degraded'
@@ -280,7 +281,7 @@ export const listExecutiveBriefings = async (req: Request, res: Response) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 12, 1), 24);
     const rows = await ExecutiveBriefing.find(periodType ? { periodType } : {})
         .select(
-            'periodType periodKey periodLabel rangeStart rangeEnd dataAsOf generationStatus trigger provider model fallbackCode fallbackReason aiAttemptedAt nextAiRetryAt version createdAt updatedAt'
+            'periodType periodKey periodLabel rangeStart rangeEnd dataAsOf generationStatus trigger provider model fallbackCode fallbackReason aiAttemptedAt nextAiRetryAt aiContributionCount version createdAt updatedAt'
         )
         .sort({ rangeEnd: -1 })
         .limit(limit)
