@@ -70,6 +70,7 @@ const snapshot: ExecutiveBriefingSnapshot = {
 test('tính đúng tuần đã đóng theo múi giờ Việt Nam', () => {
     const period = getClosedBriefingPeriod('week', new Date('2026-07-14T03:00:00.000Z'));
     assert.equal(period.periodKey, '2026-W28');
+    assert.equal(period.periodLabel, 'Tuần 06/07 - 12/07/2026');
     assert.equal(period.rangeStart.toISOString(), '2026-07-05T17:00:00.000Z');
     assert.equal(period.rangeEnd.toISOString(), '2026-07-12T16:59:59.999Z');
     assert.equal(period.comparisonKey, '2026-W27');

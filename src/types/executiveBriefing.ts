@@ -1,5 +1,12 @@
 export type BriefingPeriodType = 'week' | 'month';
 export type BriefingGenerationStatus = 'ready' | 'degraded';
+export type BriefingFallbackCode =
+    | 'ai_disabled'
+    | 'authentication'
+    | 'quota'
+    | 'timeout'
+    | 'invalid_response'
+    | 'provider_unavailable';
 export type BriefingSeverity = 'positive' | 'info' | 'warning' | 'critical';
 export type BriefingTrigger = 'cron' | 'startup' | 'manual' | 'internal';
 

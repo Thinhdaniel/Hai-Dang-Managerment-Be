@@ -239,47 +239,69 @@ const buildModelChain = (provider: AiProviderName, options: AiGenerateTextOption
     return chain.length ? chain : [providerFallback];
 };
 
+type ModelResultTransformer<T> = (result: AiGenerateTextResult) => T | Promise<T>;
+
+/**
+ * Chạy toàn bộ tác vụ (kể cả parse/validate kết quả) bên trong chuỗi model.
+ * Nhờ vậy model trả HTTP 200 nhưng JSON hỏng/sai schema vẫn được xem là lỗi
+ * của model đó và tự chuyển sang model dự phòng tiếp theo.
+ */
+const runWithModelChain = async <T>(
+    options: AiGenerateTextOptions,
+    transform: ModelResultTransformer<T>
+): Promise<T> => {
+    const provider = normalizeProvider();
+    if (provider === 'disabled') {
+        throw new Error('AI provider is disabled');
+    }
+
+    const chain = buildModelChain(provider, options);
+    let lastError: unknown;
+    for (let i = 0; i < chain.length; i += 1) {
+        const model = chain[i];
+        if (i < chain.length - 1 && isModelCircuitOpen(provider, model)) {
+            console.warn(`[AI] bỏ qua model "${model}" đang cooldown, chuyển sang "${chain[i + 1]}".`);
+            continue;
+        }
+
+        try {
+            const result =
+                provider === 'ollama'
+                    ? await callOllama({ ...options, model })
+                    : await callOpenAiCompatible(provider, { ...options, model });
+            const transformed = await transform(result);
+            recordModelSuccess(provider, model);
+            return transformed;
+        } catch (error) {
+            recordModelFailure(provider, model);
+            lastError = error;
+            if (i < chain.length - 1) {
+                const reason = error instanceof Error ? error.message : String(error);
+                console.warn(
+                    `[AI] model "${model}"${options.feature ? ` (${options.feature})` : ''} lỗi: ${reason} — thử model dự phòng "${chain[i + 1]}"...`
+                );
+            }
+        }
+    }
+
+    throw lastError ?? new Error('AI provider failed');
+};
+
 export const aiProviderService = {
     async generateText(options: AiGenerateTextOptions): Promise<AiGenerateTextResult> {
-        const provider = normalizeProvider();
-        if (provider === 'disabled') {
-            throw new Error('AI provider is disabled');
-        }
-        // Gọi lần lượt theo chuỗi dự phòng; model lỗi/không khả dụng thì tự rớt sang model kế tiếp.
-        const chain = buildModelChain(provider, options);
-        let lastError: unknown;
-        for (let i = 0; i < chain.length; i += 1) {
-            const model = chain[i];
-            if (i < chain.length - 1 && isModelCircuitOpen(provider, model)) {
-                console.warn(`[AI] bỏ qua model "${model}" đang cooldown, chuyển sang "${chain[i + 1]}".`);
-                continue;
-            }
-            try {
-                const result =
-                    provider === 'ollama'
-                        ? await callOllama({ ...options, model })
-                        : await callOpenAiCompatible(provider, { ...options, model });
-                recordModelSuccess(provider, model);
-                return result;
-            } catch (error) {
-                recordModelFailure(provider, model);
-                lastError = error;
-                if (i < chain.length - 1) {
-                    const reason = error instanceof Error ? error.message : String(error);
-                    console.warn(
-                        `[AI] model "${model}"${options.feature ? ` (${options.feature})` : ''} lỗi: ${reason} — thử model dự phòng "${chain[i + 1]}"...`
-                    );
-                }
-            }
-        }
-        throw lastError ?? new Error('AI provider failed');
+        return runWithModelChain(options, (result) => result);
     },
 
-    async generateJson<T>(options: AiGenerateTextOptions): Promise<AiGenerateTextResult & { data: T }> {
-        const result = await this.generateText({ ...options, jsonMode: true });
-        return {
-            ...result,
-            data: JSON.parse(extractJsonObject(result.content)) as T,
-        };
+    async generateJson<T>(
+        options: AiGenerateTextOptions,
+        validate?: (data: unknown) => T
+    ): Promise<AiGenerateTextResult & { data: T }> {
+        return runWithModelChain({ ...options, jsonMode: true }, (result) => {
+            const parsed = JSON.parse(extractJsonObject(result.content)) as unknown;
+            return {
+                ...result,
+                data: validate ? validate(parsed) : (parsed as T),
+            };
+        });
     },
 };

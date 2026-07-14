@@ -9,6 +9,7 @@ import {
 import type {
     BriefingActionKey,
     BriefingContentItem,
+    BriefingFallbackCode,
     BriefingPeriodRange,
     ExecutiveBriefingContent,
     ExecutiveBriefingSnapshot,
@@ -150,6 +151,34 @@ export type GeneratedBriefingContent = {
     provider: string;
     model?: string;
     latencyMs?: number;
+    fallbackCode?: BriefingFallbackCode;
+    fallbackReason?: string;
+};
+
+export const describeExecutiveBriefingAiFailure = (error: unknown): { code: BriefingFallbackCode; reason: string } => {
+    const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const message = raw.toLowerCase();
+
+    if (message.includes('disabled')) {
+        return { code: 'ai_disabled', reason: 'Nhà cung cấp AI đang bị tắt trong cấu hình hệ thống.' };
+    }
+    if (/\b(401|403)\b|unauthori[sz]ed|forbidden|api key|required for remote/.test(message)) {
+        return { code: 'authentication', reason: 'Kết nối AI chưa xác thực được với nhà cung cấp.' };
+    }
+    if (/\b429\b|rate.?limit|quota|credit|depleted|resource.?exhausted/.test(message)) {
+        return { code: 'quota', reason: 'Nhà cung cấp AI đang giới hạn lượt gọi hoặc đã hết hạn mức.' };
+    }
+    if (/timeout|timed.?out|econnaborted|etimedout/.test(message)) {
+        return { code: 'timeout', reason: 'Nhà cung cấp AI không phản hồi trong thời gian cho phép.' };
+    }
+    if (
+        error instanceof SyntaxError ||
+        error instanceof z.ZodError ||
+        /json|schema|validation|invalid_type|expected/.test(message)
+    ) {
+        return { code: 'invalid_response', reason: 'Các model AI đã trả kết quả không đúng cấu trúc bản tin.' };
+    }
+    return { code: 'provider_unavailable', reason: 'Nhà cung cấp AI tạm thời không khả dụng.' };
 };
 
 export const generateGroundedBriefingContent = async (
@@ -160,18 +189,21 @@ export const generateGroundedBriefingContent = async (
     const validEvidence = new Set(snapshot.evidence.map((entry) => entry.key));
 
     try {
-        const response = await aiProviderService.generateJson<unknown>({
-            feature: AI_FEATURES.EXECUTIVE_BRIEFING,
-            temperature: 0.15,
-            reasoningEffort: 'low',
-            maxTokens: 2200,
-            timeoutMs: 90_000,
-            messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user', content: JSON.stringify(buildAiDataset(period, snapshot)) },
-            ],
-        });
-        const parsed = aiBriefingSchema.parse(response.data);
+        const response = await aiProviderService.generateJson<AiBriefing>(
+            {
+                feature: AI_FEATURES.EXECUTIVE_BRIEFING,
+                temperature: 0.15,
+                reasoningEffort: 'low',
+                maxTokens: 2200,
+                timeoutMs: 90_000,
+                messages: [
+                    { role: 'system', content: SYSTEM_PROMPT },
+                    { role: 'user', content: JSON.stringify(buildAiDataset(period, snapshot)) },
+                ],
+            },
+            (data) => aiBriefingSchema.parse(data)
+        );
+        const parsed = response.data;
         const highlights = normalizeItems('highlight', parsed.highlights, validEvidence).filter((entry) =>
             ['positive', 'info'].includes(entry.severity)
         );
@@ -194,14 +226,17 @@ export const generateGroundedBriefingContent = async (
             latencyMs: response.latencyMs,
         };
     } catch (error) {
+        const fallback = describeExecutiveBriefingAiFailure(error);
         console.warn(
-            '[ExecutiveBriefing] AI không khả dụng, dùng nội dung xác định:',
+            `[ExecutiveBriefing] AI không khả dụng (${fallback.code}), dùng nội dung xác định:`,
             error instanceof Error ? error.message : error
         );
         return {
             content: deterministic,
             generationStatus: 'degraded',
             provider: 'fallback',
+            fallbackCode: fallback.code,
+            fallbackReason: fallback.reason,
         };
     }
 };

@@ -50,6 +50,13 @@ const ExecutiveBriefingSchema = new mongoose.Schema(
         provider: { type: String, trim: true },
         model: { type: String, trim: true },
         latencyMs: { type: Number, min: 0 },
+        fallbackCode: {
+            type: String,
+            enum: ['ai_disabled', 'authentication', 'quota', 'timeout', 'invalid_response', 'provider_unavailable'],
+        },
+        fallbackReason: { type: String, trim: true, maxlength: 240 },
+        aiAttemptedAt: { type: Date },
+        nextAiRetryAt: { type: Date },
         version: { type: Number, default: 1, min: 1 },
         generatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         notifiedAt: { type: Date },

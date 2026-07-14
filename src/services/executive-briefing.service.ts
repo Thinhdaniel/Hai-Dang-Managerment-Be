@@ -31,6 +31,7 @@ type BriefingGenerationResult = {
 const inFlight = new Map<string, Promise<BriefingGenerationResult>>();
 let scheduleStarted = false;
 const SNAPSHOT_VERSION = 2;
+const DEGRADED_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 
 const periodTypes: BriefingPeriodType[] = ['week', 'month'];
 
@@ -40,6 +41,12 @@ const stableSnapshotHash = (snapshot: ExecutiveBriefingSnapshot) =>
     createHash('sha256')
         .update(JSON.stringify({ version: SNAPSHOT_VERSION, snapshot }))
         .digest('hex');
+
+const isDegradedRetryDue = (briefing: any, forceNarrative = false) => {
+    if (!briefing || briefing.generationStatus !== 'degraded') return false;
+    if (forceNarrative || !briefing.nextAiRetryAt) return true;
+    return new Date(briefing.nextAiRetryAt).getTime() <= Date.now();
+};
 
 const notifyDirectorsOnce = async (briefingId: string) => {
     const claimed = await ExecutiveBriefing.findOneAndUpdate(
@@ -82,21 +89,28 @@ const runGeneration = async (
 ): Promise<BriefingGenerationResult> => {
     const period = getClosedBriefingPeriod(periodType);
     const existing = await ExecutiveBriefing.findOne({ periodType, periodKey: period.periodKey });
-    if (existing && existing.snapshotVersion >= SNAPSHOT_VERSION && !options.forceDataRefresh) {
-        return { briefing: existing.toObject(), created: false, changed: false };
-    }
-
-    const snapshot = await buildExecutiveBriefingSnapshot(period);
-    const sourceHash = stableSnapshotHash(snapshot);
-
+    const retryDegraded = isDegradedRetryDue(existing, options.forceNarrative);
     if (
         existing &&
-        existing.sourceHash === sourceHash &&
-        !(options.forceNarrative && existing.generationStatus === 'degraded')
+        existing.snapshotVersion >= SNAPSHOT_VERSION &&
+        !options.forceDataRefresh &&
+        !options.forceNarrative &&
+        !retryDegraded
     ) {
         return { briefing: existing.toObject(), created: false, changed: false };
     }
 
+    const reusingSnapshot = Boolean(existing?.snapshot && retryDegraded && !options.forceDataRefresh);
+    const snapshot = reusingSnapshot
+        ? (existing!.snapshot as ExecutiveBriefingSnapshot)
+        : await buildExecutiveBriefingSnapshot(period);
+    const sourceHash = stableSnapshotHash(snapshot);
+
+    if (existing && existing.sourceHash === sourceHash && !options.forceNarrative && !retryDegraded) {
+        return { briefing: existing.toObject(), created: false, changed: false };
+    }
+
+    const aiAttemptedAt = new Date();
     const generated = await generateGroundedBriefingContent(period, snapshot);
     const update = {
         periodType,
@@ -108,7 +122,7 @@ const runGeneration = async (
         comparisonLabel: period.comparisonLabel,
         comparisonStart: period.comparisonStart,
         comparisonEnd: period.comparisonEnd,
-        dataAsOf: new Date(),
+        dataAsOf: reusingSnapshot && existing?.dataAsOf ? existing.dataAsOf : new Date(),
         snapshotVersion: SNAPSHOT_VERSION,
         sourceHash,
         snapshot,
@@ -119,17 +133,37 @@ const runGeneration = async (
         generationStatus: generated.generationStatus,
         trigger: options.trigger,
         provider: generated.provider,
-        model: generated.model,
-        latencyMs: generated.latencyMs,
+        aiAttemptedAt,
+        ...(generated.model ? { model: generated.model } : {}),
+        ...(generated.latencyMs !== undefined ? { latencyMs: generated.latencyMs } : {}),
+        ...(generated.generationStatus === 'degraded'
+            ? {
+                  fallbackCode: generated.fallbackCode,
+                  fallbackReason: generated.fallbackReason,
+                  nextAiRetryAt: new Date(aiAttemptedAt.getTime() + DEGRADED_RETRY_COOLDOWN_MS),
+              }
+            : {}),
         version: (existing?.version ?? 0) + 1,
         ...(options.generatedBy && mongoose.isValidObjectId(options.generatedBy)
             ? { generatedBy: options.generatedBy }
             : {}),
     };
 
+    const unsetFields: Record<string, 1> = {};
+    if (generated.generationStatus === 'ready') {
+        unsetFields.fallbackCode = 1;
+        unsetFields.fallbackReason = 1;
+        unsetFields.nextAiRetryAt = 1;
+    }
+    if (!generated.model) unsetFields.model = 1;
+    if (generated.latencyMs === undefined) unsetFields.latencyMs = 1;
+
     const briefing = await ExecutiveBriefing.findOneAndUpdate(
         { periodType, periodKey: period.periodKey },
-        { $set: update },
+        {
+            $set: update,
+            ...(Object.keys(unsetFields).length ? { $unset: unsetFields } : {}),
+        },
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     ).lean();
 
@@ -201,6 +235,16 @@ export const startExecutiveBriefingSchedule = () => {
         start: true,
         timeZone: BRIEFING_TIME_ZONE,
     });
+    CronJob.from({
+        cronTime: '0 */30 * * * *',
+        onTick: () => {
+            void ensureLatestExecutiveBriefings('cron').catch((error) =>
+                console.error('[ExecutiveBriefing] Tự phục hồi bản tin dự phòng thất bại:', error)
+            );
+        },
+        start: true,
+        timeZone: BRIEFING_TIME_ZONE,
+    });
 
     void ensureLatestExecutiveBriefings('startup').catch((error) =>
         console.error('[ExecutiveBriefing] Không thể tạo bù bản tin lúc khởi động:', error)
@@ -236,7 +280,7 @@ export const listExecutiveBriefings = async (req: Request, res: Response) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 12, 1), 24);
     const rows = await ExecutiveBriefing.find(periodType ? { periodType } : {})
         .select(
-            'periodType periodKey periodLabel rangeStart rangeEnd dataAsOf generationStatus trigger provider model version createdAt updatedAt'
+            'periodType periodKey periodLabel rangeStart rangeEnd dataAsOf generationStatus trigger provider model fallbackCode fallbackReason aiAttemptedAt nextAiRetryAt version createdAt updatedAt'
         )
         .sort({ rangeEnd: -1 })
         .limit(limit)

@@ -17,7 +17,7 @@
     "ai:policy-check": "tsx scripts/ai-policy-regression.ts",
     "ai:action-smoke": "tsx scripts/ai-guided-action-smoke.ts",
     "ai:quality-gate": "npm run ai:policy-check && npm run ai:regression -- --max-bad 0 --max-p95-ms 45000",
-    "test:briefing": "tsx --test src/services/__tests__/executive-briefing.helpers.test.ts",
+    "test:briefing": "tsx --test src/services/__tests__/executive-briefing.helpers.test.ts src/services/__tests__/ai-provider-json-retry.test.ts",
     "cleanup:dry": "node scripts/data-cleanup-dry-run.mjs",
     "cleanup:apply": "node scripts/data-cleanup-apply.mjs"
   },

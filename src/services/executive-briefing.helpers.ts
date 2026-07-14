@@ -37,11 +37,11 @@ export const getClosedBriefingPeriod = (
         return {
             periodType,
             periodKey: `${rangeStart.isoWeekYear()}-W${String(rangeStart.isoWeek()).padStart(2, '0')}`,
-            periodLabel: `Tuần ${rangeStart.format('DD/MM')}–${rangeEnd.format('DD/MM/YYYY')}`,
+            periodLabel: `Tuần ${rangeStart.format('DD/MM')} - ${rangeEnd.format('DD/MM/YYYY')}`,
             rangeStart: rangeStart.toDate(),
             rangeEnd: rangeEnd.toDate(),
             comparisonKey: `${comparisonStart.isoWeekYear()}-W${String(comparisonStart.isoWeek()).padStart(2, '0')}`,
-            comparisonLabel: `Tuần ${comparisonStart.format('DD/MM')}–${comparisonEnd.format('DD/MM/YYYY')}`,
+            comparisonLabel: `Tuần ${comparisonStart.format('DD/MM')} - ${comparisonEnd.format('DD/MM/YYYY')}`,
             comparisonStart: comparisonStart.toDate(),
             comparisonEnd: comparisonEnd.toDate(),
         };
