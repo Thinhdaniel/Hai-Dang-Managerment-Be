@@ -63,7 +63,6 @@ router.patch(
 router.patch(
     '/:id/items/:index/cancel',
     requireProcurementDirector,
-    validateObjectId,
     validator(cancelPurchaseOrderItemSchema),
     ctrl.cancelPurchaseOrderItem
 );

@@ -707,6 +707,10 @@ export const updatePurchaseOrder = async (req: Request, res: Response, next: Nex
 };
 
 export const cancelPurchaseOrderItem = async (req: Request, res: Response, next: NextFunction) => {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+        throw new BadRequestError('Ma don dat hang khong hop le');
+    }
+
     const order = await purchaseOrderRepository.findById(String(req.params.id));
     if (!order) throw new NotFoundError('Khong tim thay don dat hang');
     ensureOrderMutationScope(req, order);
