@@ -1,4 +1,4 @@
-import { zObjectId, zOptionalString } from '@/lib/validation';
+import { zObjectId, zOptionalString, zRequiredString } from '@/lib/validation';
 import { z } from 'zod';
 
 export const createPurchaseOrderSchema = z.object({
@@ -19,6 +19,10 @@ const updateItemSchema = z.object({
 export const updatePurchaseOrderSchema = z.object({
     items: z.array(updateItemSchema).optional(),
     note: zOptionalString(),
+});
+
+export const cancelPurchaseOrderItemSchema = z.object({
+    reason: zRequiredString('Ly do huy').max(500, { message: 'Ly do huy toi da 500 ky tu' }),
 });
 
 export const receivePurchaseOrderSchema = z.object({

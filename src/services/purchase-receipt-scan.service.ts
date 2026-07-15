@@ -309,10 +309,7 @@ const getUploadedImages = (req: Request) => {
     return files as Express.Multer.File[];
 };
 
-const generateReceiptOcrJson = async <T>(
-    options: AiGenerateTextOptions,
-    vertexModel: string
-) => {
+const generateReceiptOcrJson = async <T>(options: AiGenerateTextOptions, vertexModel: string) => {
     if (vertexProviderService.isEnabled()) {
         try {
             return await vertexProviderService.generateJson<T>({
@@ -344,19 +341,19 @@ const runOcrPass = async (files: Express.Multer.File[], feature: string) => {
 
     return generateReceiptOcrJson<ReceiptOcrResult>(
         {
-        feature,
-        temperature: 0.05,
-        reasoningEffort: 'low',
-        maxTokens: 16000,
-        timeoutMs: 90000,
-        messages: [
-            {
-                role: 'system',
-                content:
-                    'Ban trich xuat du lieu co cau truc tu anh phieu giao hang/hoa don nhan hang. Chi tra JSON hop le. Khong duoc doan ky tu khong doc ro.',
-            },
-            { role: 'user', content },
-        ],
+            feature,
+            temperature: 0.05,
+            reasoningEffort: 'low',
+            maxTokens: 16000,
+            timeoutMs: 90000,
+            messages: [
+                {
+                    role: 'system',
+                    content:
+                        'Ban trich xuat du lieu co cau truc tu anh phieu giao hang/hoa don nhan hang. Chi tra JSON hop le. Khong duoc doan ky tu khong doc ro.',
+                },
+                { role: 'user', content },
+            ],
         },
         vertexModel
     );
@@ -381,8 +378,7 @@ const scanReceiptImages = async (files: Express.Multer.File[]) => {
         throw (firstFailure as PromiseRejectedResult).reason;
     }
 
-    const withPageIndex = (lines: ReceiptOcrLine[], pageIndex: number) =>
-        lines.map((line) => ({ ...line, pageIndex }));
+    const withPageIndex = (lines: ReceiptOcrLine[], pageIndex: number) => lines.map((line) => ({ ...line, pageIndex }));
 
     const lines: VerifiedLine[] = [];
     let verifiedAllPages = true;
@@ -545,24 +541,27 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
     ensureOrderScope(req, order);
 
     const scan = await scanReceiptImages(files);
-    const orderItems = ((order as any).items ?? []).map((item: any, index: number) => {
-        const ordered = Number(item.quantityOrdered ?? item.quantityRequested ?? 0);
-        const received = Number(item.quantityReceived ?? 0);
-        return {
-            ...item,
-            index,
-            ordered,
-            received,
-            remaining: Math.max(0, roundQty(ordered - received)),
-        };
-    });
+    const orderItems = ((order as any).items ?? [])
+        .map((item: any, index: number) => {
+            const ordered = Number(item.quantityOrdered ?? item.quantityRequested ?? 0);
+            const received = Number(item.quantityReceived ?? 0);
+            return {
+                ...item,
+                index,
+                ordered,
+                received,
+                remaining: Math.max(0, roundQty(ordered - received)),
+            };
+        })
+        .filter((item: any) => item.lineStatus !== 'cancelled');
 
     const supplierIds = [...new Set(orderItems.map((item: any) => String(item.supplierId || '')).filter(Boolean))];
     const shortageFilter: Record<string, any> = {
         isDeleted: { $ne: true },
         status: { $in: ['outstanding', 'partially_settled'] },
     };
-    if (supplierIds.length) shortageFilter.$or = [{ supplierId: { $in: supplierIds } }, { supplierId: { $exists: false } }];
+    if (supplierIds.length)
+        shortageFilter.$or = [{ supplierId: { $in: supplierIds } }, { supplierId: { $exists: false } }];
 
     const shortages = await PurchaseShortage.find(shortageFilter).sort('createdAt').limit(300).lean();
     const shortageState = (shortages as any[])
@@ -653,8 +652,7 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
         const candidates = orderItems
             .filter(
                 (item: any) =>
-                    (currentRemaining.get(item.index) ?? 0) > 0 &&
-                    compatibleWith(item.materialName, item.supplierName)
+                    (currentRemaining.get(item.index) ?? 0) > 0 && compatibleWith(item.materialName, item.supplierName)
             )
             .map((item: any) => ({
                 item,
@@ -698,10 +696,7 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
                           unitOk: sameUnit(line.unit, shortage.unit),
                       }))
                       .filter((candidate: any) => candidate.nameSim >= 0.62)
-                      .sort(
-                          (a: any, b: any) =>
-                              b.nameSim + (b.unitOk ? 0.05 : 0) - (a.nameSim + (a.unitOk ? 0.05 : 0))
-                      )
+                      .sort((a: any, b: any) => b.nameSim + (b.unitOk ? 0.05 : 0) - (a.nameSim + (a.unitOk ? 0.05 : 0)))
                 : [];
 
         for (const candidate of shortageCandidates) {
@@ -889,7 +884,10 @@ export const previewPurchaseReceiptScan = async (req: Request, res: Response) =>
     });
     const shortageById = new Map<string, number>();
     shortageAllocations.forEach((allocation) => {
-        shortageById.set(allocation.shortageId, roundQty((shortageById.get(allocation.shortageId) ?? 0) + allocation.quantity));
+        shortageById.set(
+            allocation.shortageId,
+            roundQty((shortageById.get(allocation.shortageId) ?? 0) + allocation.quantity)
+        );
     });
 
     const shortageMarks = orderItems

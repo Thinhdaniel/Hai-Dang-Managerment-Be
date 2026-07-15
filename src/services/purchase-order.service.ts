@@ -19,7 +19,19 @@ import { StatusCodes } from 'http-status-codes';
 
 const MAIN_PLANT_ID = process.env.MAIN_PLANT_ID || '';
 
+const isCancelledItem = (item: any) => item?.lineStatus === 'cancelled';
+
 const calcItem = (item: any) => {
+    if (isCancelledItem(item)) {
+        return {
+            ...item,
+            quantityMissing: 0,
+            receiveStatus: 'cancelled',
+            totalPrice: 0,
+            vatAmount: 0,
+            totalWithVat: 0,
+        };
+    }
     const qty = Number(item.quantityOrdered ?? 0);
     const price = Number(item.unitPrice ?? 0);
     const totalPrice = Number((qty * price).toFixed(2));
@@ -52,6 +64,7 @@ const deriveSingleSupplier = (items: any[]) => {
     const suppliers = new Map<string, { supplierId?: any; supplierName?: string }>();
 
     items.forEach((item) => {
+        if (isCancelledItem(item)) return;
         const supplierId = toId(item.supplierId);
         const supplierName = item.supplierName || item.supplierId?.name;
         const key = supplierId || supplierName;
@@ -64,9 +77,11 @@ const deriveSingleSupplier = (items: any[]) => {
 };
 
 const getOrderReceiveStatus = (items: any[], fallbackStatus = 'confirmed') => {
-    const hasReceipt = items.some((item) => Number(item.quantityReceived ?? 0) > 0);
+    const activeItems = items.filter((item) => !isCancelledItem(item));
+    if (!activeItems.length) return 'cancelled';
+    const hasReceipt = activeItems.some((item) => Number(item.quantityReceived ?? 0) > 0);
     if (!hasReceipt) return fallbackStatus;
-    return items.every((item) => Number(item.quantityReceived ?? 0) >= Number(item.quantityOrdered ?? 0))
+    return activeItems.every((item) => Number(item.quantityReceived ?? 0) >= Number(item.quantityOrdered ?? 0))
         ? 'received'
         : 'partially_received';
 };
@@ -178,6 +193,9 @@ const applyPendingInventoryForItem = async ({
     session: mongoose.ClientSession;
     performedBy?: string;
 }) => {
+    if (isCancelledItem(item)) {
+        return item;
+    }
     if (item.catalogStatus === 'ignored') {
         item.inventoryStatus = 'skipped';
         item.inventorySkipReason = item.inventorySkipReason || 'ignored';
@@ -232,6 +250,15 @@ const upsertShortageForItem = async ({
         originalItemIndex: itemIndex,
         isDeleted: { $ne: true },
     }).session(session);
+
+    if (isCancelledItem(item)) {
+        if (existing) {
+            existing.status = 'cancelled';
+            existing.note = item.cancelledReason || existing.note;
+            await existing.save({ session });
+        }
+        return;
+    }
 
     if (quantityMissing <= 0) {
         if (existing && existing.status !== 'settled') {
@@ -647,6 +674,7 @@ export const updatePurchaseOrder = async (req: Request, res: Response, next: Nex
         for (const upd of itemUpdates) {
             const idx = upd.index;
             if (idx < 0 || idx >= items.length) continue;
+            if (isCancelledItem(items[idx])) continue;
             const cur = { ...items[idx] };
             if (upd.quantityOrdered != null) cur.quantityOrdered = upd.quantityOrdered;
             if (upd.unitPrice != null) cur.unitPrice = upd.unitPrice;
@@ -672,6 +700,124 @@ export const updatePurchaseOrder = async (req: Request, res: Response, next: Nex
         customResponse({
             data: serializePurchaseOrder(updated),
             message: 'Cap nhat don dat hang thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const cancelPurchaseOrderItem = async (req: Request, res: Response, next: NextFunction) => {
+    const order = await purchaseOrderRepository.findById(String(req.params.id));
+    if (!order) throw new NotFoundError('Khong tim thay don dat hang');
+    ensureOrderMutationScope(req, order);
+
+    const currentStatus = getEffectiveOrderStatus(order);
+    if (!['confirmed', 'ordered', 'partially_received'].includes(currentStatus)) {
+        throw new BadRequestError('Chi co the huy dong vat tu cua don dang dat hoac dang nhan hang');
+    }
+
+    const itemIndex = Number(req.params.index);
+    if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+        throw new BadRequestError('Dong vat tu khong hop le');
+    }
+
+    const reason = String(req.body.reason || '').trim();
+    const session = await mongoose.startSession();
+    let updated: any;
+    try {
+        await session.withTransaction(async () => {
+            const freshOrder = await PurchaseOrder.findOne({
+                _id: req.params.id,
+                isDeleted: { $ne: true },
+            }).session(session);
+            if (!freshOrder) throw new NotFoundError('Khong tim thay don dat hang');
+
+            const items = [...((freshOrder as any).items ?? [])].map((item: any) =>
+                typeof item.toObject === 'function' ? item.toObject() : item
+            );
+            if (itemIndex >= items.length) throw new BadRequestError('Dong vat tu khong hop le');
+
+            const item = { ...items[itemIndex] };
+            if (isCancelledItem(item)) throw new BadRequestError('Dong vat tu da duoc huy truoc do');
+            if (Number(item.quantityReceived ?? 0) > 0 || Number(item.quantityInventoried ?? 0) > 0) {
+                throw new BadRequestError('Khong the huy dong da phat sinh nhan hang hoac nhap ton');
+            }
+
+            const cancelledQuantity = Number(item.quantityOrdered ?? item.quantityRequested ?? 0);
+            const cancelledAt = new Date();
+            const cancellationNote = `[Da huy NCC] ${reason}`;
+            items[itemIndex] = calcItem({
+                ...item,
+                lineStatus: 'cancelled',
+                cancelledQuantity,
+                cancelledAt,
+                cancelledBy: req.userId,
+                cancelledReason: reason,
+                quantityOrdered: 0,
+                quantityMissing: 0,
+                receiveStatus: 'cancelled',
+                note: item.note ? `${item.note} | ${cancellationNote}` : cancellationNote,
+            });
+
+            const totals = calcTotals(items);
+            const orderSupplier = deriveSingleSupplier(items);
+            const nextStatus = getOrderReceiveStatus(items, currentStatus);
+
+            updated = await purchaseOrderRepository.updateById(
+                String(req.params.id),
+                {
+                    items,
+                    status: nextStatus,
+                    supplierId: orderSupplier.supplierId,
+                    supplierName: orderSupplier.supplierName,
+                    ...totals,
+                },
+                session
+            );
+
+            await upsertShortageForItem({
+                order: freshOrder,
+                item: items[itemIndex],
+                itemIndex,
+                session,
+            });
+
+            if (nextStatus === 'received') {
+                await PurchaseRequest.updateMany(
+                    { _id: { $in: (freshOrder as any).purchaseRequestIds }, isDeleted: { $ne: true } },
+                    { $set: { status: 'received' } },
+                    { session }
+                );
+            } else if (nextStatus === 'cancelled') {
+                await PurchaseRequest.updateMany(
+                    { _id: { $in: (freshOrder as any).purchaseRequestIds }, isDeleted: { $ne: true } },
+                    { $set: { status: 'approved' } },
+                    { session }
+                );
+            }
+        });
+    } finally {
+        await session.endSession();
+    }
+
+    const actorName = await getActorName(req.userId);
+    const cancelledItem = (updated as any)?.items?.[itemIndex];
+    await notifyAdmins(
+        'notify:new',
+        {
+            type: 'warning',
+            actionType: 'purchase_order',
+            actionId: String(req.params.id),
+            title: 'Da huy mot dong dat hang',
+            message: `${actorName} da huy "${cancelledItem?.materialName || 'vat tu'}" trong don ${(updated as any)?.orderCode || ''}: ${reason}`,
+        },
+        { excludeUserIds: [req.userId] }
+    );
+
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: serializePurchaseOrder(updated),
+            message: 'Huy dong vat tu trong don dat hang thanh cong',
             status: StatusCodes.OK,
             success: true,
         })
@@ -750,6 +896,10 @@ export const receivePurchaseOrder = async (req: Request, res: Response, next: Ne
             const index = Number(receiptItem.index);
             if (index < 0 || index >= items.length) {
                 throw new BadRequestError(`Dong nhan hang ${index} khong hop le`);
+            }
+
+            if (isCancelledItem(items[index])) {
+                throw new BadRequestError(`Dong "${items[index].materialName}" da huy, khong the nhan hang`);
             }
 
             const quantity = Number(receiptItem.quantityReceived ?? 0);

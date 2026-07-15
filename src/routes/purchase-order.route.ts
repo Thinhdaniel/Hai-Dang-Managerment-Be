@@ -9,6 +9,7 @@ import validator from '@/middlewares/validator';
 import { imageUpload } from '@/middlewares/multerMiddleware';
 import * as ctrl from '@/controllers/purchase-order.controller';
 import {
+    cancelPurchaseOrderItemSchema,
     createPurchaseOrderSchema,
     createPurchaseOrderItemMaterialSchema,
     ignorePurchaseOrderItemInventorySchema,
@@ -58,6 +59,13 @@ router.patch(
     '/:id/items/:index/ignore-inventory',
     validator(ignorePurchaseOrderItemInventorySchema),
     ctrl.ignorePurchaseOrderItemInventory
+);
+router.patch(
+    '/:id/items/:index/cancel',
+    requireProcurementDirector,
+    validateObjectId,
+    validator(cancelPurchaseOrderItemSchema),
+    ctrl.cancelPurchaseOrderItem
 );
 router.get('/:id', validateObjectId, ctrl.getPurchaseOrderById);
 router.put('/:id', validateObjectId, validator(updatePurchaseOrderSchema), ctrl.updatePurchaseOrder);

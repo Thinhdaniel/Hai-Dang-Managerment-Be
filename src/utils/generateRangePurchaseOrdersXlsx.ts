@@ -269,11 +269,22 @@ export async function generateRangePurchaseOrdersXlsx(
     addCompanyHeader(s2, 'L', 'DANH SÁCH ĐƠN ĐẶT HÀNG', periodLabel);
 
     const s2Header = s2.getRow(7);
-    ['STT', 'Mã đơn', 'Ngày tạo', 'Nhà cung cấp', 'Cơ sở', 'Phiếu đề xuất', 'Số dòng', 'Tiền hàng', 'VAT', 'Tổng cộng', 'Trạng thái', 'Ngày nhận'].forEach(
-        (label, i) => {
-            s2Header.getCell(i + 1).value = label;
-        }
-    );
+    [
+        'STT',
+        'Mã đơn',
+        'Ngày tạo',
+        'Nhà cung cấp',
+        'Cơ sở',
+        'Phiếu đề xuất',
+        'Số dòng',
+        'Tiền hàng',
+        'VAT',
+        'Tổng cộng',
+        'Trạng thái',
+        'Ngày nhận',
+    ].forEach((label, i) => {
+        s2Header.getCell(i + 1).value = label;
+    });
     styleHeaderRow(s2Header);
     s2.autoFilter = { from: 'A7', to: 'L7' };
 
@@ -349,11 +360,26 @@ export async function generateRangePurchaseOrdersXlsx(
     addCompanyHeader(s3, 'P', 'CHI TIẾT VẬT TƯ ĐẶT HÀNG', periodLabel);
 
     const s3Header = s3.getRow(7);
-    ['STT', 'Mã đơn', 'Ngày', 'Nhà cung cấp', 'Tên vật tư', 'ĐVT', 'SL đặt', 'SL nhận', 'Còn thiếu', 'Đơn giá', 'Thành tiền', 'VAT %', 'Tổng có VAT', 'Cơ sở', 'Người ĐX', 'TT nhận'].forEach(
-        (label, i) => {
-            s3Header.getCell(i + 1).value = label;
-        }
-    );
+    [
+        'STT',
+        'Mã đơn',
+        'Ngày',
+        'Nhà cung cấp',
+        'Tên vật tư',
+        'ĐVT',
+        'SL đặt',
+        'SL nhận',
+        'Còn thiếu',
+        'Đơn giá',
+        'Thành tiền',
+        'VAT %',
+        'Tổng có VAT',
+        'Cơ sở',
+        'Người ĐX',
+        'TT nhận',
+    ].forEach((label, i) => {
+        s3Header.getCell(i + 1).value = label;
+    });
     styleHeaderRow(s3Header);
     s3.autoFilter = { from: 'A7', to: 'P7' };
 
@@ -361,6 +387,7 @@ export async function generateRangePurchaseOrdersXlsx(
         pending: 'Chưa nhận',
         partially_received: 'Nhận một phần',
         received: 'Đã nhận đủ',
+        cancelled: 'Đã hủy với NCC',
     };
     let s3Row = 8;
     let lineNo = 1;
@@ -454,11 +481,20 @@ export async function generateRangePurchaseOrdersXlsx(
     addCompanyHeader(s4, 'J', 'SỔ NỢ HÀNG NHÀ CUNG CẤP (PHÁT SINH TRONG KỲ)', periodLabel);
 
     const s4Header = s4.getRow(7);
-    ['STT', 'Nhà cung cấp', 'Tên vật tư', 'ĐVT', 'Đơn gốc', 'Ngày đơn', 'SL thiếu', 'Đã bù', 'Còn nợ', 'Trạng thái'].forEach(
-        (label, i) => {
-            s4Header.getCell(i + 1).value = label;
-        }
-    );
+    [
+        'STT',
+        'Nhà cung cấp',
+        'Tên vật tư',
+        'ĐVT',
+        'Đơn gốc',
+        'Ngày đơn',
+        'SL thiếu',
+        'Đã bù',
+        'Còn nợ',
+        'Trạng thái',
+    ].forEach((label, i) => {
+        s4Header.getCell(i + 1).value = label;
+    });
     styleHeaderRow(s4Header);
     s4.autoFilter = { from: 'A7', to: 'J7' };
 

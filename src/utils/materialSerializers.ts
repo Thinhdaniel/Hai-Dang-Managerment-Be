@@ -217,6 +217,11 @@ const serializePurchaseOrderItem = (input: any) => {
         quantityRequested: item?.quantityRequested ?? 0,
         quantityOrdered: item?.quantityOrdered ?? 0,
         quantityReceived: item?.quantityReceived ?? 0,
+        lineStatus: item?.lineStatus ?? 'active',
+        cancelledQuantity: item?.cancelledQuantity,
+        cancelledAt: toIso(item?.cancelledAt),
+        cancelledBy: toId(item?.cancelledBy),
+        cancelledReason: item?.cancelledReason,
         quantityMissing:
             item?.quantityMissing ??
             Math.max(0, Number(item?.quantityOrdered ?? 0) - Number(item?.quantityReceived ?? 0)),

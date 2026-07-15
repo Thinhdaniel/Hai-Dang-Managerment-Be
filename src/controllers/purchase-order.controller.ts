@@ -22,6 +22,9 @@ export const createPurchaseOrder = asyncHandler(async (req: Request, res: Respon
 export const updatePurchaseOrder = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.updatePurchaseOrder(req, res, next);
 });
+export const cancelPurchaseOrderItem = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await purchaseOrderService.cancelPurchaseOrderItem(req, res, next);
+});
 export const confirmPurchaseOrder = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.confirmPurchaseOrder(req, res, next);
 });
@@ -40,20 +43,22 @@ export const recordReceiptScanMappings = asyncHandler(async (req: Request, res: 
 export const linkPurchaseOrderItemMaterial = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.linkPurchaseOrderItemMaterial(req, res, next);
 });
-export const createMaterialForPurchaseOrderItem = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    return await purchaseOrderService.createMaterialForPurchaseOrderItem(req, res, next);
-});
-export const ignorePurchaseOrderItemInventory = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    return await purchaseOrderService.ignorePurchaseOrderItemInventory(req, res, next);
-});
+export const createMaterialForPurchaseOrderItem = asyncHandler(
+    async (req: Request, res: Response, next: NextFunction) => {
+        return await purchaseOrderService.createMaterialForPurchaseOrderItem(req, res, next);
+    }
+);
+export const ignorePurchaseOrderItemInventory = asyncHandler(
+    async (req: Request, res: Response, next: NextFunction) => {
+        return await purchaseOrderService.ignorePurchaseOrderItemInventory(req, res, next);
+    }
+);
 export const deletePurchaseOrder = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.deletePurchaseOrder(req, res, next);
 });
 export const exportPurchaseOrderXlsx = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await purchaseOrderService.exportPurchaseOrderXlsx(req, res, next);
 });
-export const exportRangePurchaseOrdersXlsx = asyncHandler(
-    async (req: Request, res: Response, next: NextFunction) => {
-        return await purchaseOrderService.exportRangePurchaseOrdersXlsx(req, res, next);
-    }
-);
+export const exportRangePurchaseOrdersXlsx = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await purchaseOrderService.exportRangePurchaseOrdersXlsx(req, res, next);
+});
