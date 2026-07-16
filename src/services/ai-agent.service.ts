@@ -833,8 +833,10 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
                         cacCoSo: d.plants,
                         trangThai: d.statusLabel,
                         tongTien: d.totalWithVat,
-                        soDongVatTu: d.itemCount,
+                        tongSoDongTrongHoSo: d.itemCount + d.cancelledItemCount,
+                        soDongConHieuLuc: d.itemCount,
                         soDongDaHuy: d.cancelledItemCount,
+                        quyTacDemDong: 'soDongConHieuLuc da loai soDongDaHuy; khong duoc tru soDongDaHuy them lan nua',
                         ...(d.items
                             ? {
                                   vatTu: d.items.map((it: any) => ({
@@ -1807,7 +1809,15 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
         if (o.detail && o.orders[0].items) {
             const d = o.orders[0];
             const cancelled = d.cancelledItemCount ? `; ${d.cancelledItemCount} dòng đã hủy không tính chi phí` : '';
-            return `Đơn ${d.orderCode} (${d.supplierName}, ${d.statusLabel}): ${d.itemCount} dòng còn hiệu lực${cancelled}, tổng ${fmtVnd(d.totalWithVat)}.`;
+            const cancelledDetail = d.cancelledItems?.length
+                ? ` Dòng đã hủy: ${d.cancelledItems
+                      .map(
+                          (item: any) =>
+                              `${item.materialName} (${item.cancelledQuantity} ${item.unit}${item.cancelledReason ? `; ${item.cancelledReason}` : ''})`
+                      )
+                      .join('; ')}.`
+                : '';
+            return `Đơn ${d.orderCode} (${d.supplierName}, ${d.statusLabel}): ${d.itemCount} dòng còn hiệu lực${cancelled}, tổng ${fmtVnd(d.totalWithVat)}.${cancelledDetail}`;
         }
         return `Có ${render.count} đơn hàng. Gần nhất: ${o.orders
             .slice(0, 3)
@@ -1985,6 +1995,13 @@ const enforceScopeDisclosure = (answer: string, render?: ToolOutcome['render']) 
     // xác định để loại bỏ hoàn toàn khả năng mô hình suy diễn chi phí mua bằng 0.
     if (costByPlant?.metric === 'total_cost') return buildDeterministicAnswer(render) || answer;
 
+    // Dòng PO đã hủy là dữ liệu kiểm toán, không phải dòng mua còn hiệu lực. Với đơn
+    // có hủy từng phần, dùng câu xác định để model không tự trừ lần hai hoặc cộng lại chi phí.
+    const purchaseOrders = aggregates.purchaseOrders;
+    if (purchaseOrders?.detail && purchaseOrders.orders?.some((order: any) => order.cancelledItemCount > 0)) {
+        return buildDeterministicAnswer(render) || answer;
+    }
+
     const countScope = aggregates.countScope || aggregates.summaryMetrics?.countScope;
     if (!countScope?.label) return answer;
     const normalizedAnswer = normalize(answer);
@@ -2059,6 +2076,7 @@ const BASE_SYSTEM_PROMPT = [
     '- purchase_analysis(args:{period:week|month, groupBy?:material|supplier, limit?}): chi phi MUA chi tiet ky nay vs ky truoc, phan ra theo VAT TU hoac NHA CUNG CAP.',
     '- purchase_analysis CHO 1 CO SO: truyen them plantName de loc chi phi mua cua RIENG co so do (loc o cap DONG vat tu). KHONG dung cost_variance(purchase_cost) cho 1 co so.',
     '- purchase_orders(args:{search?, orderCode?, supplierName?, plantName?, status?, period?:week|month, limit?}): tra cuu DON HANG. Truyen orderCode/search de SOI SAU 1 don (tung dong vat tu, SL dat/nhan).',
+    '  ⚠ VOI DON CO DONG HUY: soDongConHieuLuc DA LOAI soDongDaHuy. KHONG tru them lan nua. Chi tong tien va cac dong con hieu luc duoc tinh vao chi phi; dongDaHuy chi la lich su kiem toan.',
     '  ⚠ QUAN TRONG: MOI PO gom NHIEU dong vat tu, MOI dong co NHA CUNG CAP & CO SO RIENG (co the trung hoac khac nhau). 1 PO KHONG phai chi 1 NCC. Ket qua tra "danhSachNcc"/"soNcc" cho moi don; khi soNcc>1 phai noi "don X gom N nha cung cap: ..." chu KHONG gan ca don cho 1 NCC. Khi soi chi tiet, neu can thi nhom cac dong theo NCC.',
     '- material_price_history(args:{materialName, limit?}): LICH SU GIA mua 1 vat tu qua tung don + xu huong tang/giam. Dung khi hoi "gia ... thay doi the nao", "mua bao nhieu lan".',
     '- supplier_comparison(args:{materialName, limit?}): SO SANH GIA giua cac NHA CUNG CAP cho 1 vat tu. Dung khi hoi "mua cho nao re", "ncc nao gia tot".',
