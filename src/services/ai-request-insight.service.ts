@@ -274,10 +274,11 @@ const buildPurchaseLinks = async (requests: any[]) => {
         for (const key of relatedKeys) {
             const itemRows = (order.items || []).filter(
                 (item: any) =>
-                    String(item.purchaseRequestId || '') === key ||
-                    String(item.purchaseRequestCode || '') === key ||
-                    (order.purchaseRequestIds || []).some((id: any) => String(id) === key) ||
-                    (order.purchaseRequestCodes || []).some((code: string) => String(code) === key)
+                    item.lineStatus !== 'cancelled' &&
+                    (String(item.purchaseRequestId || '') === key ||
+                        String(item.purchaseRequestCode || '') === key ||
+                        (order.purchaseRequestIds || []).some((id: any) => String(id) === key) ||
+                        (order.purchaseRequestCodes || []).some((code: string) => String(code) === key))
             );
             const summary = ensure(key);
             summary.orderCount += 1;

@@ -834,6 +834,7 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
                         trangThai: d.statusLabel,
                         tongTien: d.totalWithVat,
                         soDongVatTu: d.itemCount,
+                        soDongDaHuy: d.cancelledItemCount,
                         ...(d.items
                             ? {
                                   vatTu: d.items.map((it: any) => ({
@@ -842,6 +843,16 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
                                       gia: it.totalWithVat,
                                       ncc: it.supplierName,
                                       coSo: it.plantName,
+                                  })),
+                              }
+                            : {}),
+                        ...(d.cancelledItems?.length
+                            ? {
+                                  dongDaHuy: d.cancelledItems.map((it: any) => ({
+                                      ten: it.materialName,
+                                      slHuy: `${it.cancelledQuantity} ${it.unit}`,
+                                      lyDo: it.cancelledReason,
+                                      tinhVaoChiPhi: false,
                                   })),
                               }
                             : {}),
@@ -1795,7 +1806,8 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
         if (!o.orders.length) return 'Không tìm thấy đơn hàng nào khớp.';
         if (o.detail && o.orders[0].items) {
             const d = o.orders[0];
-            return `Đơn ${d.orderCode} (${d.supplierName}, ${d.statusLabel}): ${d.itemCount} dòng vật tư, tổng ${fmtVnd(d.totalWithVat)}.`;
+            const cancelled = d.cancelledItemCount ? `; ${d.cancelledItemCount} dòng đã hủy không tính chi phí` : '';
+            return `Đơn ${d.orderCode} (${d.supplierName}, ${d.statusLabel}): ${d.itemCount} dòng còn hiệu lực${cancelled}, tổng ${fmtVnd(d.totalWithVat)}.`;
         }
         return `Có ${render.count} đơn hàng. Gần nhất: ${o.orders
             .slice(0, 3)

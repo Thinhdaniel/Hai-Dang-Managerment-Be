@@ -92,6 +92,7 @@ const groupPurchaseByPlant = async (s: Date, e: Date) => {
             },
         },
         { $unwind: '$items' },
+        { $match: { 'items.lineStatus': { $ne: 'cancelled' } } },
         {
             $group: {
                 _id: '$items.plantId',

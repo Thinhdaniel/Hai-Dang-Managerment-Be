@@ -315,6 +315,7 @@ const getPurchaseValue = async (start: Date, end: Date) => {
         },
         { $match: { effectiveDate: { $gte: start, $lte: end } } },
         { $unwind: { path: '$items', preserveNullAndEmptyArrays: true } },
+        { $match: { 'items.lineStatus': { $ne: 'cancelled' } } },
         {
             $group: {
                 _id: '$_id',
@@ -594,6 +595,7 @@ const getPurchaseValueByPlant = async (start: Date, end: Date) => {
         { $set: { effectiveDate: { $ifNull: ['$orderedAt', '$createdAt'] } } },
         { $match: { effectiveDate: { $gte: start, $lte: end } } },
         { $unwind: '$items' },
+        { $match: { 'items.lineStatus': { $ne: 'cancelled' } } },
         { $set: { effectivePlantId: { $ifNull: ['$items.plantId', '$plantId'] } } },
         { $group: { _id: '$effectivePlantId', total: { $sum: amountExpression('items') } } },
     ]);

@@ -44,7 +44,9 @@ const periodRange = (type: PeriodType) => {
 
 // Map id->tên cơ sở, và resolve tên->id (khớp bỏ dấu, tuyệt đối hoặc chứa nhau).
 const loadPlants = async () => {
-    const plants = await Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean();
+    const plants = await Plant.find({ isDeleted: { $ne: true } })
+        .select('_id name')
+        .lean();
     const nameById = new Map(plants.map((p: any) => [String(p._id), String(p.name)]));
     const resolve = (input?: string): string | undefined => {
         if (!input) return undefined;
@@ -65,6 +67,7 @@ const DIST_QTY = { $ifNull: ['$items.quantityDistributed', '$items.quantity'] };
 // Ngày hiệu lực của phiếu cấp phát — khớp report.service (distributedAt > confirmedAt > createdAt).
 const DIST_EFF = { $ifNull: ['$distributedAt', { $ifNull: ['$confirmedAt', '$createdAt'] }] };
 const PO_VALUE = { $ifNull: ['$items.totalWithVat', { $ifNull: ['$items.totalPrice', 0] }] };
+const ACTIVE_PO_ITEM_MATCH = { 'items.lineStatus': { $ne: 'cancelled' } };
 
 // ============================================================
 // 1) Vật tư cấp phát nhiều nhất, phân rã theo cơ sở nhận
@@ -144,7 +147,11 @@ export const materialUsageByPlant = async (args: {
         totalQty: Math.round(r.totalQty || 0),
         totalValue: Math.round(r.totalValue || 0),
         plants: (r.plants || [])
-            .map((p: any) => ({ plantName: nameById.get(String(p.plantId)) || 'Chưa gán cơ sở', qty: Math.round(p.qty || 0), value: Math.round(p.value || 0) }))
+            .map((p: any) => ({
+                plantName: nameById.get(String(p.plantId)) || 'Chưa gán cơ sở',
+                qty: Math.round(p.qty || 0),
+                value: Math.round(p.value || 0),
+            }))
             .sort((a: any, b: any) => b.value - a.value),
     }));
 
@@ -164,7 +171,12 @@ export const materialUsageByPlant = async (args: {
 // 2) Phân tích chi tiết chi phí MUA vật tư: kỳ này vs kỳ trước,
 //    phân rã theo vật tư hoặc nhà cung cấp.
 // ============================================================
-export const analyzePurchases = async (args: { period?: string; groupBy?: string; plantName?: string; limit?: number }) => {
+export const analyzePurchases = async (args: {
+    period?: string;
+    groupBy?: string;
+    plantName?: string;
+    limit?: number;
+}) => {
     const periodType: PeriodType = args.period === 'week' ? 'week' : 'month';
     const groupBy = args.groupBy === 'supplier' ? 'supplier' : 'material';
     const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 15);
@@ -184,6 +196,7 @@ export const analyzePurchases = async (args: { period?: string; groupBy?: string
         const rows = await PurchaseOrder.aggregate([
             { $match: baseMatch(s, e) },
             { $unwind: '$items' },
+            { $match: ACTIVE_PO_ITEM_MATCH },
             // Lọc theo cơ sở ở CẤP DÒNG (mỗi dòng vật tư có cơ sở riêng), KHÔNG dùng plantId cấp phiếu (thường rỗng).
             ...(plantId ? [{ $match: { 'items.plantId': new Types.ObjectId(plantId) } }] : []),
             {
@@ -265,7 +278,13 @@ export const listPurchaseOrders = async (args: {
 
     const rx = (v: string) => new RegExp(v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     const code = args.orderCode || args.search;
-    const wantDetail = Boolean(args.orderCode) || Boolean(args.search && /^[A-Za-z0-9._/-]+$/.test(String(args.search).trim()) && String(args.search).trim().length >= 4);
+    const wantDetail =
+        Boolean(args.orderCode) ||
+        Boolean(
+            args.search &&
+            /^[A-Za-z0-9._/-]+$/.test(String(args.search).trim()) &&
+            String(args.search).trim().length >= 4
+        );
 
     // Gộp nhiều điều kiện bằng $and (mỗi điều kiện là 1 nhóm $or) để không ghi đè nhau.
     const and: Record<string, any>[] = [];
@@ -280,11 +299,18 @@ export const listPurchaseOrders = async (args: {
         });
     }
     // NCC có thể nằm ở cấp phiếu HOẶC từng dòng -> khớp cả hai.
-    if (args.supplierName) and.push({ $or: [{ supplierName: rx(String(args.supplierName)) }, { 'items.supplierName': rx(String(args.supplierName)) }] });
+    if (args.supplierName)
+        and.push({
+            $or: [
+                { supplierName: rx(String(args.supplierName)) },
+                { 'items.supplierName': rx(String(args.supplierName)) },
+            ],
+        });
     if (args.status && PO_STATUS_LABEL[args.status]) filter.status = args.status;
     const plantId = resolve(args.plantName);
     // Cơ sở cũng nằm ở cấp phiếu hoặc từng dòng (dòng là chính xác nhất).
-    if (plantId) and.push({ $or: [{ plantId: new Types.ObjectId(plantId) }, { 'items.plantId': new Types.ObjectId(plantId) }] });
+    if (plantId)
+        and.push({ $or: [{ plantId: new Types.ObjectId(plantId) }, { 'items.plantId': new Types.ObjectId(plantId) }] });
     if (args.period === 'week' || args.period === 'month') {
         const r = periodRange(args.period);
         filter.createdAt = { $gte: r.start, $lte: r.end };
@@ -300,7 +326,9 @@ export const listPurchaseOrders = async (args: {
     const distinct = (vals: (string | undefined)[]) => [...new Set(vals.map((v) => (v || '').trim()).filter(Boolean))];
 
     const orders = docs.map((o: any) => {
-        const its = o.items || [];
+        const allItems = o.items || [];
+        const its = allItems.filter((item: any) => item.lineStatus !== 'cancelled');
+        const cancelledItems = allItems.filter((item: any) => item.lineStatus === 'cancelled');
         const suppliers = distinct([o.supplierName, ...its.map((it: any) => it.supplierName)]);
         const plants = distinct(its.map((it: any) => nameById.get(String(it.plantId)) || it.plantName)).concat(
             o.plantId && nameById.get(String(o.plantId)) ? [nameById.get(String(o.plantId))!] : []
@@ -319,6 +347,7 @@ export const listPurchaseOrders = async (args: {
             statusLabel: PO_STATUS_LABEL[o.status] || o.status,
             totalWithVat: Math.round(o.totalWithVat || o.totalAmount || 0),
             itemCount: its.length,
+            cancelledItemCount: cancelledItems.length,
             createdAt: o.createdAt,
         };
         if (!detail) return base;
@@ -333,6 +362,12 @@ export const listPurchaseOrders = async (args: {
                 totalWithVat: Math.round(it.totalWithVat || it.totalPrice || 0),
                 supplierName: it.supplierName || o.supplierName || undefined,
                 plantName: nameById.get(String(it.plantId)) || it.plantName || undefined,
+            })),
+            cancelledItems: cancelledItems.map((it: any) => ({
+                materialName: it.materialName || 'Vật tư',
+                unit: it.unit || '',
+                cancelledQuantity: Math.round(it.cancelledQuantity || 0),
+                cancelledReason: it.cancelledReason || undefined,
             })),
         };
     });
@@ -353,7 +388,7 @@ export const materialPriceHistory = async (args: { materialName?: string; limit?
     const rows = await PurchaseOrder.aggregate([
         { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] } } },
         { $unwind: '$items' },
-        { $match: { 'items.materialName': rxOf(q) } },
+        { $match: { ...ACTIVE_PO_ITEM_MATCH, 'items.materialName': rxOf(q) } },
         {
             $project: {
                 orderCode: 1,
@@ -382,7 +417,10 @@ export const materialPriceHistory = async (args: { materialName?: string; limit?
     const minPrice = prices.length ? Math.min(...prices) : 0;
     const maxPrice = prices.length ? Math.max(...prices) : 0;
     const avgPrice = prices.length ? Math.round(prices.reduce((s, v) => s + v, 0) / prices.length) : 0;
-    const trendPct = prices.length >= 2 && prices[0] > 0 ? Math.round(((prices[prices.length - 1] - prices[0]) / prices[0]) * 100) : 0;
+    const trendPct =
+        prices.length >= 2 && prices[0] > 0
+            ? Math.round(((prices[prices.length - 1] - prices[0]) / prices[0]) * 100)
+            : 0;
 
     return {
         materialName: rows[0]?.materialName || q,
@@ -407,7 +445,7 @@ export const supplierComparison = async (args: { materialName?: string; limit?: 
     const rows = await PurchaseOrder.aggregate([
         { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] } } },
         { $unwind: '$items' },
-        { $match: { 'items.materialName': rxOf(q), 'items.unitPrice': { $gt: 0 } } },
+        { $match: { ...ACTIVE_PO_ITEM_MATCH, 'items.materialName': rxOf(q), 'items.unitPrice': { $gt: 0 } } },
         {
             $group: {
                 _id: { $ifNull: ['$items.supplierName', { $ifNull: ['$supplierName', 'Chưa rõ NCC'] }] },
@@ -490,7 +528,11 @@ export const distributionAnalysis = async (args: { plantName?: string; period?: 
         .filter((r: any) => (r.shortageQty || 0) > 0)
         .sort((a: any, b: any) => b.shortageQty - a.shortageQty)
         .slice(0, limit)
-        .map((r: any) => ({ materialName: r._id || 'Vật tư', unit: r.unit || '', shortageQty: Math.round(r.shortageQty || 0) }));
+        .map((r: any) => ({
+            materialName: r._id || 'Vật tư',
+            unit: r.unit || '',
+            shortageQty: Math.round(r.shortageQty || 0),
+        }));
 
     return {
         periodLabel,
@@ -520,14 +562,24 @@ export const purchaseSuggestion = async (args: { limit?: number }) => {
 
     // Tiêu hao 30 ngày (đã cấp phát).
     const usageRows = await DistributionRecord.aggregate([
-        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] }, createdAt: { $gte: since } } },
+        {
+            $match: {
+                isDeleted: { $ne: true },
+                status: { $in: ['distributed', 'confirmed'] },
+                createdAt: { $gte: since },
+            },
+        },
         { $unwind: '$items' },
         { $match: { 'items.materialId': { $ne: null } } },
         { $group: { _id: '$items.materialId', used: { $sum: DIST_QTY } } },
     ]);
     const usageByMaterial = new Map<string, number>(usageRows.map((r: any) => [String(r._id), Number(r.used) || 0]));
 
-    const materials = await Material.find({ isDeleted: { $ne: true }, isActive: { $ne: false }, trackInventory: { $ne: false } })
+    const materials = await Material.find({
+        isDeleted: { $ne: true },
+        isActive: { $ne: false },
+        trackInventory: { $ne: false },
+    })
         .select('_id name code unit minStockLevel')
         .lean();
 
@@ -565,8 +617,15 @@ export const purchaseSuggestion = async (args: { limit?: number }) => {
 // Chi phí MUA: tổng item-level (totalWithVat/totalPrice) của PO đã đặt/nhận trong kỳ.
 const purchaseTotal = async (s: Date, e: Date): Promise<number> => {
     const rows = await PurchaseOrder.aggregate([
-        { $match: { isDeleted: { $ne: true }, status: { $in: ['ordered', 'partially_received', 'received'] }, createdAt: { $gte: s, $lte: e } } },
+        {
+            $match: {
+                isDeleted: { $ne: true },
+                status: { $in: ['ordered', 'partially_received', 'received'] },
+                createdAt: { $gte: s, $lte: e },
+            },
+        },
         { $unwind: '$items' },
+        { $match: ACTIVE_PO_ITEM_MATCH },
         { $group: { _id: null, v: { $sum: PO_VALUE } } },
     ]);
     return Math.round(rows[0]?.v || 0);
@@ -588,15 +647,41 @@ const distributionTotal = async (s: Date, e: Date): Promise<number> => {
                 },
             },
         },
-        { $match: { isDeleted: { $ne: true }, status: { $in: ['distributed', 'confirmed'] }, _eff: { $gte: s, $lte: e } } },
-        { $group: { _id: null, v: { $sum: { $cond: [{ $gt: ['$_items', 0] }, '$_items', { $ifNull: ['$totalWithVat', { $ifNull: ['$totalAmount', 0] }] }] } } } },
+        {
+            $match: {
+                isDeleted: { $ne: true },
+                status: { $in: ['distributed', 'confirmed'] },
+                _eff: { $gte: s, $lte: e },
+            },
+        },
+        {
+            $group: {
+                _id: null,
+                v: {
+                    $sum: {
+                        $cond: [
+                            { $gt: ['$_items', 0] },
+                            '$_items',
+                            { $ifNull: ['$totalWithVat', { $ifNull: ['$totalAmount', 0] }] },
+                        ],
+                    },
+                },
+            },
+        },
     ]);
     return Math.round(rows[0]?.v || 0);
 };
 // Chi phí SỬA NGOÀI: tổng cost của phiếu bảo trì sửa ngoài đã hoàn tất trong kỳ.
 const repairTotal = async (s: Date, e: Date): Promise<number> => {
     const rows = await Maintenance.aggregate([
-        { $match: { isDeleted: { $ne: true }, repairMode: 'external', status: 'completed', endDate: { $gte: s, $lte: e } } },
+        {
+            $match: {
+                isDeleted: { $ne: true },
+                repairMode: 'external',
+                status: 'completed',
+                endDate: { $gte: s, $lte: e },
+            },
+        },
         { $group: { _id: null, v: { $sum: { $ifNull: ['$cost', 0] } } } },
     ]);
     return Math.round(rows[0]?.v || 0);

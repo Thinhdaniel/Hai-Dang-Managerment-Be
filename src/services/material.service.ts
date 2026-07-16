@@ -284,8 +284,10 @@ const itemMatchesReportFilters = (
 };
 
 const getReportOrderItems = (order: any, filters: MaterialReportFilters, materialIds?: Set<string>) =>
-    ((order.items ?? []) as any[]).filter((item) =>
-        itemMatchesReportFilters(item, filters, materialIds, toId(order.supplierId), order)
+    ((order.items ?? []) as any[]).filter(
+        (item) =>
+            item?.lineStatus !== 'cancelled' &&
+            itemMatchesReportFilters(item, filters, materialIds, toId(order.supplierId), order)
     );
 
 const sumItemsAmount = (items: any[], key: 'totalWithVat' | 'totalPrice' = 'totalWithVat') =>
@@ -788,7 +790,9 @@ export const getMaterialCostByPeriodReport = async (req: Request, res: Response,
 
     // Tách OPEX/CAPEX theo Material.costType để chart mua không bị "độn" tiền mua máy/CCDC.
     const capexTypeSet = new Set<string>(CAPEX_COST_TYPES);
-    const costTypeDocs = await Material.find({ isDeleted: { $ne: true } }).select('_id costType').lean();
+    const costTypeDocs = await Material.find({ isDeleted: { $ne: true } })
+        .select('_id costType')
+        .lean();
     const costTypeMap = new Map<string, string | undefined>(
         costTypeDocs.map((m: any) => [String(m._id), m.costType || undefined])
     );
@@ -1620,10 +1624,7 @@ const getPurchaseItemPlantName = (order: any, item: any, plantNameById: Map<stri
     const sourceItem = getSourcePurchaseRequestItem(order, item);
 
     return (
-        item.plantName ||
-        sourceItem?.plantName ||
-        (plantId ? plantNameById.get(plantId) : undefined) ||
-        'Chưa xác định'
+        item.plantName || sourceItem?.plantName || (plantId ? plantNameById.get(plantId) : undefined) || 'Chưa xác định'
     );
 };
 
@@ -1637,7 +1638,14 @@ export const getPurchaseCostEntriesByPlant = async (opts: {
     startDate?: Date;
     endDate?: Date;
 }): Promise<
-    Array<{ plantId: string; plantName: string; cost: number; effectiveDate: Date; orderId: string; materialId?: string }>
+    Array<{
+        plantId: string;
+        plantName: string;
+        cost: number;
+        effectiveDate: Date;
+        orderId: string;
+        materialId?: string;
+    }>
 > => {
     const filters: MaterialReportFilters = {
         startDate: opts.startDate,
@@ -1647,7 +1655,9 @@ export const getPurchaseCostEntriesByPlant = async (opts: {
 
     const [purchaseOrders, plants] = await Promise.all([
         getPurchaseOrdersForReport(filters),
-        Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
+        Plant.find({ isDeleted: { $ne: true } })
+            .select('_id name')
+            .lean(),
     ]);
     const plantNameById = new Map(plants.map((plant: any) => [String(plant._id), plant.name || 'Chưa xác định']));
 
@@ -1685,7 +1695,9 @@ export const getMaterialCostFlowByPlantReport = async (req: Request, res: Respon
 
     const [purchaseOrders, plants] = await Promise.all([
         getPurchaseOrdersForReport(filters, materialIds),
-        Plant.find({ isDeleted: { $ne: true } }).select('_id name').lean(),
+        Plant.find({ isDeleted: { $ne: true } })
+            .select('_id name')
+            .lean(),
     ]);
 
     const plantNameById = new Map(plants.map((plant: any) => [String(plant._id), plant.name || 'Chưa xác định']));
@@ -1728,7 +1740,8 @@ export const getMaterialCostFlowByPlantReport = async (req: Request, res: Respon
     const distributions = await DistributionRecord.find(distributionMatch).populate('toPlantId').lean();
     distributions.forEach((record: any) => {
         const plantId = record.toPlantId?._id ? String(record.toPlantId._id) : undefined;
-        const plantName = record.toPlantId?.name || (plantId ? plantNameById.get(plantId) : undefined) || 'Chưa xác định';
+        const plantName =
+            record.toPlantId?.name || (plantId ? plantNameById.get(plantId) : undefined) || 'Chưa xác định';
         const row = getCostFlowPlantRow(rows, procurementPlantIds, plantId, plantName);
         const items = (record.items ?? []).filter((item: any) => {
             if (!materialIds) return true;
