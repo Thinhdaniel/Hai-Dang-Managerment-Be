@@ -364,7 +364,8 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
         .filter((line) => line.targetQuantity > 0)
         .sort((left, right) => left.achievementPercent - right.achievementPercent)[0];
     const topItem = current.items[0];
-    const exceptionLimit = Number.isFinite(options.exceptionLimit) ? Math.max(0, Number(options.exceptionLimit)) : 200;
+    // Không dùng Number.isFinite: export truyền Infinity với nghĩa "xuất toàn bộ ngoại lệ".
+    const exceptionLimit = Math.max(0, options.exceptionLimit ?? 200);
 
     return {
         meta: {

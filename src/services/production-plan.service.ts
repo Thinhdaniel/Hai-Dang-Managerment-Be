@@ -418,11 +418,20 @@ const applyPlanToDay = async (plan: any, actorId: string, session?: mongoose.Cli
             (left, right) => Number(slotIndex.get(left.startSlotKey)) - Number(slotIndex.get(right.startSlotKey))
         );
         if (!record.entries.length) {
-            record.set(
-                'runs',
-                allocations.map((allocation) => runFromAllocation(allocation, actorId))
-            );
-            synchronizedLines += allocations.length ? 1 : 0;
+            if (allocations.length) {
+                record.set(
+                    'runs',
+                    allocations.map((allocation) => runFromAllocation(allocation, actorId))
+                );
+                synchronizedLines += 1;
+            } else {
+                // Chuyền không nằm trong kế hoạch: chỉ gỡ runs do bản plan trước sinh ra,
+                // giữ nguyên mã hàng + khoán mà tổ trưởng đã cấu hình thủ công đầu ngày.
+                record.set(
+                    'runs',
+                    record.runs.filter((run: any) => run.source !== 'plan')
+                );
+            }
         } else {
             const entryRunIds = new Set(record.entries.map((entry: any) => String(entry.runId)));
             const allocationIds = new Set(allocations.map((allocation) => String(allocation._id)));

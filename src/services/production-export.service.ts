@@ -44,7 +44,7 @@ const configureSheet = (sheet: ExcelJS.Worksheet, orientation: 'portrait' | 'lan
 const styleTitle = (sheet: ExcelJS.Worksheet, lastColumn: number, title: string, subtitle?: string) => {
     sheet.mergeCells(1, 1, 1, lastColumn);
     const companyCell = sheet.getCell(1, 1);
-    companyCell.value = 'CÔNG TY TNHH XUẤT KHẨU MAY HẢI ĐĂNG';
+    companyCell.value = 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG';
     companyCell.font = { bold: true, size: 12, color: { argb: COLORS.primaryDark } };
     companyCell.alignment = { horizontal: 'center', vertical: 'middle' };
     sheet.getRow(1).height = 23;
@@ -530,7 +530,7 @@ export const buildProductionWorkbook = async ({
 }) => {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Hải Đăng Production';
-    workbook.company = 'Công ty TNHH Xuất Khẩu May Hải Đăng';
+    workbook.company = 'Công ty TNHH May Xuất Khẩu Hải Đăng';
     workbook.created = new Date();
     workbook.modified = new Date();
     workbook.calcProperties.fullCalcOnLoad = true;

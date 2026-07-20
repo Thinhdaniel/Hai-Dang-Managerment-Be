@@ -136,10 +136,12 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             });
 
             const slotValues = slots.map((slot: any) => {
-                const run = resolveRunForSlot(runs, String(slot.key), slots);
+                // Slot đã tắt không được mang runId: API nhập liệu từ chối slot tắt, nên nếu vẫn gán
+                // runId thì validate gửi duyệt + báo cáo sẽ đòi số liệu ở ô không bao giờ nhập được.
+                const run = slot.isActive === false ? undefined : resolveRunForSlot(runs, String(slot.key), slots);
                 const slotEntries = entries.filter((entry: any) => entry.slotKey === slot.key);
                 const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
-                const target = slot.isActive === false ? 0 : Number(run?.hourlyQuota || 0) * durationHours;
+                const target = Number(run?.hourlyQuota || 0) * durationHours;
                 return {
                     key: slot.key,
                     target: round(target),
@@ -188,15 +190,20 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
 
     const slotSummaries = slots.map((slot: any) => {
         const values = lines.map((line: any) => line.slotValues.find((value: any) => value.key === slot.key));
-        const configuredLines = lines.filter((line: any) => line.configured);
+        // Mẫu số chỉ tính chuyền CÓ mã chạy trong khung giờ này — khớp logic validate gửi duyệt,
+        // tránh khung chiều báo "3/12 chuyền" khi 9 chuyền đã kết thúc allocation từ trưa.
+        const dueLines = lines.filter(
+            (line: any) =>
+                line.configured && line.slotValues.some((value: any) => value.key === slot.key && value.runId)
+        );
         return {
             key: slot.key,
             target: round(values.reduce((sum: number, value: any) => sum + Number(value?.target || 0), 0)),
             actual: values.reduce((sum: number, value: any) => sum + Number(value?.actual || 0), 0),
-            reportedLines: configuredLines.filter((line: any) =>
+            reportedLines: dueLines.filter((line: any) =>
                 line.slotValues.some((value: any) => value.key === slot.key && value.reported)
             ).length,
-            totalLines: configuredLines.length,
+            totalLines: dueLines.length,
         };
     });
 

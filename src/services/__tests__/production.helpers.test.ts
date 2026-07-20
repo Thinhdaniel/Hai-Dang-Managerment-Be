@@ -151,6 +151,46 @@ test('cho gửi duyệt khi tất cả khung giờ đang chạy đã được b�
     assert.equal(result.valid, true);
 });
 
+test('khung giờ đã tắt không mang runId và không chặn gửi duyệt (ngày không tăng ca)', () => {
+    const slotsWithInactiveOvertime = [
+        ...slots,
+        { key: '18:00', label: '18h', startMinute: 1080, endMinute: 1140, kind: 'overtime', isActive: false },
+    ];
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-1',
+            plantId: 'plant-1',
+            productionDate: '2026-07-20',
+            timeSlots: slotsWithInactiveOvertime,
+        },
+        [
+            {
+                _id: 'record-1',
+                dayId: 'day-1',
+                plantId: 'plant-1',
+                productionDate: '2026-07-20',
+                lineId: 'line-1',
+                lineCode: 'CM1',
+                workerCount: 20,
+                workerCountConfirmedAt: new Date('2026-07-20T00:30:00.000Z'),
+                runs, // run-b active, open-ended -> phủ đến hết ngày, kể cả khung 18h đã tắt
+                entries: [
+                    { _id: 'entry-a', slotKey: '08:00', runId: 'run-a', quantity: 90 },
+                    { _id: 'entry-b', slotKey: '09:00', runId: 'run-b', quantity: 80 },
+                ],
+            },
+        ]
+    );
+
+    const line = detail.lines[0];
+    const inactiveSlot = line.slotValues.find((slot: any) => slot.key === '18:00');
+    assert.equal(inactiveSlot?.runId, undefined);
+    assert.equal(inactiveSlot?.target, 0);
+
+    const result = validateProductionDayForSubmission(detail);
+    assert.equal(result.valid, true, result.message);
+});
+
 test('ẩn đơn giá và giá trị sản lượng khỏi payload của nhân viên nhập liệu', () => {
     const redacted = redactProductionFinancials({
         lines: [
