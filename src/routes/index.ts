@@ -38,6 +38,7 @@ import stocktakeRoutes from './stocktake.route';
 import floorMapRoutes from './floor-map.route';
 import luckyWheelRoutes from './lucky-wheel.route';
 import aiAssistantQualityRoutes from './ai-assistant-quality.route';
+import productionRoutes from './production.route';
 
 const router = Router();
 
@@ -80,5 +81,6 @@ router.use('/stocktakes', stocktakeRoutes);
 router.use('/floor-map', floorMapRoutes);
 router.use('/lucky-wheel', luckyWheelRoutes);
 router.use('/ai-assistant-quality', aiAssistantQualityRoutes);
+router.use('/production', productionRoutes);
 
 export default router;

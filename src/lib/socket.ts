@@ -43,6 +43,7 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
                 socket.data.userId = '000000000000000000000000';
                 socket.data.role = 'admin';
                 socket.data.name = 'Admin';
+                socket.data.plantId = process.env.BYPASS_PLANT_ID || '';
                 return next();
             }
 
@@ -73,6 +74,7 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
             socket.data.userId = String(user._id);
             socket.data.role = user.role;
             socket.data.name = user.fullname || user.username || user.email || 'Người dùng';
+            socket.data.plantId = user.plantId ? String(user.plantId) : '';
             next();
         } catch (err: any) {
             next(new Error('Authentication failed'));
@@ -85,6 +87,8 @@ export const initSocketServer = (httpServer: HttpServer): SocketServer => {
 
         // Join a user-specific room so we can target notifications
         void socket.join(`user:${userId}`);
+        if (socket.data.plantId) void socket.join(`plant:${socket.data.plantId}`);
+        if (socket.data.role) void socket.join(`role:${socket.data.role}`);
 
         // ── Presence: cập nhật online/offline ──────────────────────────────
         const prevCount = onlineCounts.get(userId) ?? 0;
@@ -164,6 +168,15 @@ export const emitToAll = (event: string, data: unknown): void => {
         return;
     }
     io.emit(event, data);
+};
+
+/** Emit dữ liệu vận hành tới đúng cơ sở và nhóm giám sát toàn hệ thống. */
+export const emitToPlant = (plantId: string, event: string, data: unknown): void => {
+    if (!io) {
+        console.warn('[Socket.io] emitToPlant called before server initialization');
+        return;
+    }
+    io.to(`plant:${plantId}`).to('role:admin').to('role:director').emit(event, data);
 };
 
 export const getSocketServer = (): SocketServer | null => io;
