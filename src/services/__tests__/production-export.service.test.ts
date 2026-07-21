@@ -8,7 +8,8 @@ const detail = {
     productionDate: '2026-07-18',
     status: 'locked',
     updatedAt: '2026-07-18T11:00:00.000Z',
-    timeSlots: [{ key: '08:00', label: '8h', startMinute: 480, endMinute: 540, kind: 'regular', isActive: true }],
+    // Nhãn "8h" nhưng ca thật là 7h-8h — đúng cách xưởng đặt tên (báo lúc 8h cho giờ vừa xong).
+    timeSlots: [{ key: '08:00', label: '8h', startMinute: 420, endMinute: 480, kind: 'regular', isActive: true }],
     lines: [
         {
             lineId: 'line-1',
@@ -76,4 +77,22 @@ test('xuất workbook báo cáo ngày khớp mẫu công ty và đúng khổ in'
 
     assert.equal(workbook.getWorksheet('NHAP LIEU')?.pageSetup.fitToWidth, 1);
     assert.ok((await workbook.xlsx.writeBuffer()).byteLength > 5_000);
+});
+
+test('cột khung giờ dùng dải "7-8h" tính từ mốc phút, không dùng nhãn điểm đã lưu', async () => {
+    const workbook = await buildProductionWorkbook({ detail });
+
+    // Khối "SẢN LƯỢNG THỰC TẾ TOÀN XƯỞNG THEO KHUNG GIỜ": hàng ngay dưới tiêu đề khối
+    const bc = workbook.getWorksheet('BC NGAY');
+    const values = (bc?.getSheetValues() as any[]) || [];
+    const titleRow = values.findIndex(
+        (row) => Array.isArray(row) && row.includes('SẢN LƯỢNG THỰC TẾ TOÀN XƯỞNG THEO KHUNG GIỜ')
+    );
+    assert.ok(titleRow > 0, 'phải có khối sản lượng theo khung giờ');
+    assert.equal(bc?.getCell(titleRow + 1, 1).value, '7-8h');
+    assert.equal(bc?.getCell(titleRow + 1, 2).value, 'Tổng');
+
+    // Sổ NHAP LIEU cũng dùng cùng nhãn dải
+    const ledger = workbook.getWorksheet('NHAP LIEU');
+    assert.equal(ledger?.getCell(5, 9).value, '7-8h');
 });

@@ -18,6 +18,23 @@ const COLORS = {
 const COMPANY_NAME = 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG';
 const COMPANY_ADDRESS = 'Địa chỉ: Khu 23, Xã Thanh Ba, Tỉnh Phú Thọ';
 
+/**
+ * Nhãn khung giờ dạng dải "7-8h" tính từ mốc phút — khớp mẫu Excel của xưởng và
+ * đồng bộ với FE. Không dùng `slot.label` vì đó là nhãn điểm ("8h") chỉ mốc BÁO
+ * CÁO, không phải khoảng làm việc; nhãn cũ còn nằm trong dữ liệu đã lưu.
+ */
+const slotRangeLabel = (slot: any) => {
+    const start = Number(slot?.startMinute);
+    const end = Number(slot?.endMinute);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return slot?.label || '';
+    const text = (minute: number) => {
+        const hour = Math.floor(minute / 60);
+        const rest = minute % 60;
+        return rest === 0 ? `${hour}` : `${hour}h${String(rest).padStart(2, '0')}`;
+    };
+    return start % 60 === 0 && end % 60 === 0 ? `${text(start)}-${text(end)}h` : `${text(start)}-${text(end)}`;
+};
+
 const thinBorder: Partial<ExcelJS.Borders> = {
     top: { style: 'thin', color: { argb: COLORS.border } },
     left: { style: 'thin', color: { argb: COLORS.border } },
@@ -241,7 +258,7 @@ const addDailyReportSheet = (workbook: ExcelJS.Workbook, detail: any) => {
 
     const slotHeaderRowIndex = slotTitleRowIndex + 1;
     const slotHeaderRow = sheet.getRow(slotHeaderRowIndex);
-    slotHeaderRow.values = [...activeSlots.map((slot: any) => slot.label), 'Tổng'];
+    slotHeaderRow.values = [...activeSlots.map((slot: any) => slotRangeLabel(slot)), 'Tổng'];
     slotHeaderRow.height = 18;
     slotHeaderRow.eachCell({ includeEmpty: true }, (cell, column) => {
         if (column > slotSectionWidth) return;
@@ -319,7 +336,7 @@ const addEntryLedgerSheet = (workbook: ExcelJS.Workbook, detail: any) => {
         'Số CN',
         'Đơn giá (đ)',
         'Khoán/giờ',
-        ...activeSlots.map((slot: any) => slot.label),
+        ...activeSlots.map((slot: any) => slotRangeLabel(slot)),
         'Tổng khoán',
         'Tổng thực tế',
         '% đạt',
