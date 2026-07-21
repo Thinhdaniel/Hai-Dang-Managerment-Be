@@ -628,14 +628,14 @@ export const consolidatePurchaseRequests = async (req: Request, res: Response, n
                     })
                 ),
             ];
-            if (requestPlantIds.length !== 1) {
-                throw new BadRequestError('Chi co the tong hop cac phieu cung mot co so');
+            // Cho phép gộp phiếu của NHIỀU cơ sở vào một đơn: mỗi dòng vật tư giữ
+            // plantId của cơ sở đề xuất nên chi phí vẫn quy đúng về từng cơ sở.
+            // plantId của đơn là cơ sở NHẬN HÀNG (kho người lên đơn), không phải cơ sở đề xuất.
+            const orderPlantId = getUserPlantId(req) || requestPlantIds[0] || process.env.MAIN_PLANT_ID || '';
+            if (!orderPlantId) {
+                throw new BadRequestError('Chua xac dinh duoc co so nhan hang');
             }
-            const orderPlantId = requestPlantIds[0];
             await ensurePlantExists(orderPlantId, session);
-            if (req.role !== 'admin' && getUserPlantId(req) !== orderPlantId) {
-                throw new BadRequestError('Ban chi co the tao don hang cho co so cua minh');
-            }
 
             const resolvedSupplierId = ensureSingleSupplierForItems(
                 requests,

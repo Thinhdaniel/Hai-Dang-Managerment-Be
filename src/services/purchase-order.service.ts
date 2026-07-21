@@ -391,8 +391,16 @@ const buildFilter = (query: Request['query'], req: Request) => {
     } else if (query.status) {
         filter.status = query.status;
     }
+    // Đơn gom được đề xuất của nhiều cơ sở, nên cơ sở đề xuất phải thấy đơn có chứa
+    // vật tư của mình, kể cả khi đơn do cơ sở mua hàng khác đứng tên nhận.
+    if (query.plantId) {
+        andConditions.push({ $or: [{ plantId: query.plantId }, { 'items.plantId': query.plantId }] });
+    }
+    if (req.role !== 'admin') {
+        const userPlantId = getUserPlantId(req);
+        andConditions.push({ $or: [{ plantId: userPlantId }, { 'items.plantId': userPlantId }] });
+    }
     if (andConditions.length) filter.$and = andConditions;
-    if (query.plantId) filter.plantId = query.plantId;
     if (query.startDate || query.endDate) {
         filter.createdAt = {};
         if (query.startDate) filter.createdAt.$gte = new Date(String(query.startDate));
@@ -401,9 +409,6 @@ const buildFilter = (query: Request['query'], req: Request) => {
             d.setHours(23, 59, 59, 999);
             filter.createdAt.$lte = d;
         }
-    }
-    if (req.role !== 'admin') {
-        filter.plantId = getUserPlantId(req);
     }
     return filter;
 };
@@ -509,15 +514,18 @@ export const createPurchaseOrder = async (req: Request, res: Response, next: Nex
             .filter(Boolean);
         return [...new Set<string>(ids.length ? ids : headerId ? [headerId] : [])];
     };
+    // Một đơn được gom đề xuất từ NHIỀU cơ sở: mỗi dòng vật tư đã mang plantId của
+    // cơ sở đề xuất (xem items bên dưới) nên chi phí vẫn quy đúng về từng cơ sở —
+    // báo cáo tính theo dòng, không theo header (getReportOrderItemPlantId).
+    // plantId của ĐƠN là cơ sở NHẬN HÀNG (kho của người lên đơn, luôn thuộc nhóm
+    // mua hàng do route đã chặn), không phải cơ sở đề xuất. Hàng về kho này rồi mới
+    // cấp phát đi các cơ sở.
     const requestPlantIds = [...new Set<string>(requests.flatMap((r: any) => getEffectivePlantIds(r)))];
-    if (requestPlantIds.length !== 1) {
-        throw new BadRequestError('Chi co the tao don hang tu cac phieu cung mot co so');
+    const orderPlantId = getUserPlantId(req) || requestPlantIds[0] || MAIN_PLANT_ID;
+    if (!orderPlantId) {
+        throw new BadRequestError('Chua xac dinh duoc co so nhan hang');
     }
-    const orderPlantId = requestPlantIds[0];
     await ensurePlantExists(orderPlantId);
-    if (req.role !== 'admin' && getUserPlantId(req) !== orderPlantId) {
-        throw new BadRequestError('Ban chi co the tao don hang cho co so cua minh');
-    }
 
     // Kiá»ƒm tra phiáº¿u Ä‘Ã£ dÃ¹ng trong PO khÃ¡c chÆ°a
     const existingPO = await PurchaseOrder.findOne({
