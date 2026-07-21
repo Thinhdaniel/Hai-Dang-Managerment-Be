@@ -20,6 +20,7 @@ import {
     validateProductionDayForSubmission,
 } from './production.helpers';
 import { buildProductionWorkbook } from './production-export.service';
+import { buildProductionBoard } from './production-board.helpers';
 import { buildProductionForecast } from './production-forecast.helpers';
 import { buildProductionMonitor } from './production-monitor.helpers';
 import { serializeProductionPlan } from './production-plan.service';
@@ -426,6 +427,17 @@ export const getProductionMonitor = async (req: Request, res: Response) => {
             ? `Đã đối chiếu với ${baselineDetails.length} ngày khóa sổ gần nhất`
             : 'Chưa có ngày khóa sổ trước đó để làm đường chuẩn'
     );
+};
+
+export const getProductionBoard = async (req: Request, res: Response) => {
+    const plantId = resolvePlantId(req, req.query.plantId);
+    const productionDate = assertValidDate(req.query.date);
+    const day = await ProductionDay.findOne({ plantId, productionDate });
+    if (!day) return sendSuccess(res, null, 'Ngày sản xuất chưa được khởi tạo');
+
+    // Endpoint bảng chuyền chỉ trả số liệu tổng hợp, không lộ người nhập hoặc lịch sử thao tác.
+    const detail = await loadDayDetail(day);
+    return sendSuccess(res, buildProductionBoard(detail, getVietnamClock()), 'Lấy bảng nhịp chuyền thành công');
 };
 
 export const createProductionItem = async (req: Request, res: Response) => {

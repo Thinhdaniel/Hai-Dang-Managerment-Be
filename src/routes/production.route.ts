@@ -113,6 +113,7 @@ router.post(
 );
 
 router.get('/monitor', authorize(...ROLE_GROUPS.MANAGEMENT), asyncHandler(productionService.getProductionMonitor));
+router.get('/board', authorize(...ROLE_GROUPS.MANAGEMENT), asyncHandler(productionService.getProductionBoard));
 router.get('/days/lookup', asyncHandler(productionService.lookupProductionDay));
 router.get('/days', asyncHandler(productionService.listProductionDays));
 router.post('/days', validator(createProductionDaySchema), asyncHandler(productionService.createProductionDay));
