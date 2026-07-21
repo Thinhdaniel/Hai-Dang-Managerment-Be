@@ -13,6 +13,7 @@ import { StatusCodes } from 'http-status-codes';
 import { sendSuccess } from './service.helpers';
 import {
     buildProductionDayDetail,
+    buildTimeSlotLabel,
     DEFAULT_PRODUCTION_TIME_SLOTS,
     redactProductionFinancials,
     serializeProductionItem,
@@ -97,14 +98,20 @@ const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$
 
 const normalizeTimeSlots = (input: any[]) => {
     const slots = input
-        .map((slot) => ({
-            key: String(slot.key),
-            label: String(slot.label),
-            startMinute: Number(slot.startMinute),
-            endMinute: Number(slot.endMinute),
-            kind: slot.kind || 'regular',
-            isActive: slot.isActive !== false,
-        }))
+        .map((slot) => {
+            const startMinute = Number(slot.startMinute);
+            const endMinute = Number(slot.endMinute);
+            return {
+                key: String(slot.key),
+                // Nhãn luôn do server sinh từ mốc phút — client gửi gì cũng bỏ qua,
+                // nhờ vậy nhãn không bao giờ lệch với giờ thực.
+                label: buildTimeSlotLabel(startMinute, endMinute),
+                startMinute,
+                endMinute,
+                kind: slot.kind || 'regular',
+                isActive: slot.isActive !== false,
+            };
+        })
         .sort((left, right) => left.startMinute - right.startMinute);
 
     const activeSlots = slots.filter((slot) => slot.isActive);

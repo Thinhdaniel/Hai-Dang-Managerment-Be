@@ -17,7 +17,9 @@ const timeSlotSchema = z
             .min(1)
             .max(24)
             .regex(/^[A-Za-z0-9:_-]+$/, 'Mã khung giờ không hợp lệ'),
-        label: z.string().trim().min(1).max(30),
+        // Nhãn do server sinh từ mốc phút (buildTimeSlotLabel); nhận vào chỉ để
+        // tương thích client cũ, giá trị gửi lên bị bỏ qua.
+        label: z.string().trim().max(30).optional(),
         startMinute: z.number().int().min(0).max(1439),
         endMinute: z.number().int().min(1).max(1440),
         kind: z.enum(['regular', 'overtime']).default('regular'),

@@ -17,17 +17,37 @@ const serializeActor = (value: any) => {
     return id ? { id, name: actorName(value) } : undefined;
 };
 
+/**
+ * Nhãn khung giờ luôn được sinh từ mốc phút, không nhận từ client.
+ * Nhờ vậy nhãn không bao giờ lệch với giờ thực và mọi màn hình + Excel đọc
+ * cùng một dạng "7-8h". Người dùng chỉ nhập giờ bắt đầu/kết thúc.
+ */
+export const buildTimeSlotLabel = (startMinute: number, endMinute: number) => {
+    // Cả hai tròn giờ thì viết gọn "7-8h"; còn lại ghi đủ đơn vị hai vế
+    // ("8h-8h30") để không ra dạng cụt "8-8h30".
+    if (startMinute % 60 === 0 && endMinute % 60 === 0) {
+        return `${Math.floor(startMinute / 60)}-${Math.floor(endMinute / 60)}h`;
+    }
+    const full = (minute: number) => {
+        const hour = Math.floor(minute / 60);
+        const rest = minute % 60;
+        return rest === 0 ? `${hour}h` : `${hour}h${String(rest).padStart(2, '0')}`;
+    };
+    return `${full(startMinute)}-${full(endMinute)}`;
+};
+
+// Nhãn ở đây chỉ là giá trị mồi; normalizeTimeSlots luôn sinh lại từ mốc phút.
 export const DEFAULT_PRODUCTION_TIME_SLOTS = [
-    { key: '08:00', label: '8h', startMinute: 480, endMinute: 540, kind: 'regular', isActive: true },
-    { key: '09:00', label: '9h', startMinute: 540, endMinute: 600, kind: 'regular', isActive: true },
-    { key: '10:00', label: '10h', startMinute: 600, endMinute: 660, kind: 'regular', isActive: true },
-    { key: '11:00', label: '11h', startMinute: 660, endMinute: 720, kind: 'regular', isActive: true },
-    { key: '13:00', label: '13h', startMinute: 780, endMinute: 840, kind: 'regular', isActive: true },
-    { key: '14:00', label: '14h', startMinute: 840, endMinute: 900, kind: 'regular', isActive: true },
-    { key: '15:00', label: '15h', startMinute: 900, endMinute: 960, kind: 'regular', isActive: true },
-    { key: '16:00', label: '16h', startMinute: 960, endMinute: 1020, kind: 'regular', isActive: true },
-    { key: '17:00', label: '17h', startMinute: 1020, endMinute: 1080, kind: 'regular', isActive: true },
-    { key: '18:00', label: '18h', startMinute: 1080, endMinute: 1140, kind: 'overtime', isActive: true },
+    { key: '08:00', label: '8-9h', startMinute: 480, endMinute: 540, kind: 'regular', isActive: true },
+    { key: '09:00', label: '9-10h', startMinute: 540, endMinute: 600, kind: 'regular', isActive: true },
+    { key: '10:00', label: '10-11h', startMinute: 600, endMinute: 660, kind: 'regular', isActive: true },
+    { key: '11:00', label: '11-12h', startMinute: 660, endMinute: 720, kind: 'regular', isActive: true },
+    { key: '13:00', label: '13-14h', startMinute: 780, endMinute: 840, kind: 'regular', isActive: true },
+    { key: '14:00', label: '14-15h', startMinute: 840, endMinute: 900, kind: 'regular', isActive: true },
+    { key: '15:00', label: '15-16h', startMinute: 900, endMinute: 960, kind: 'regular', isActive: true },
+    { key: '16:00', label: '16-17h', startMinute: 960, endMinute: 1020, kind: 'regular', isActive: true },
+    { key: '17:00', label: '17-18h', startMinute: 1020, endMinute: 1080, kind: 'regular', isActive: true },
+    { key: '18:00', label: '18-19h', startMinute: 1080, endMinute: 1140, kind: 'overtime', isActive: true },
 ] as const;
 
 export const serializeProductionLine = (input: any) => {

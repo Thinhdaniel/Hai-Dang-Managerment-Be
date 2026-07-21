@@ -2,10 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     buildProductionDayDetail,
+    buildTimeSlotLabel,
     redactProductionFinancials,
     resolveRunForSlot,
     validateProductionDayForSubmission,
 } from '@/services/production.helpers';
+
+test('nhãn khung giờ sinh từ mốc phút, có xử lý ca lẻ phút', () => {
+    assert.equal(buildTimeSlotLabel(420, 480), '7-8h');
+    assert.equal(buildTimeSlotLabel(780, 840), '13-14h');
+    assert.equal(buildTimeSlotLabel(1080, 1140), '18-19h');
+    // Ca lẻ phút phải ghi rõ phút, không được làm tròn mất thông tin
+    assert.equal(buildTimeSlotLabel(450, 510), '7h30-8h30');
+    assert.equal(buildTimeSlotLabel(480, 510), '8h-8h30');
+});
 
 const slots = [
     { key: '08:00', label: '8h', startMinute: 480, endMinute: 540, kind: 'regular', isActive: true },

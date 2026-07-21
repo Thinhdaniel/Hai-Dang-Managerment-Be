@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { buildTimeSlotLabel } from './production.helpers';
 
 const COLORS = {
     ink: 'FF17211B',
@@ -19,20 +20,14 @@ const COMPANY_NAME = 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG';
 const COMPANY_ADDRESS = 'Địa chỉ: Khu 23, Xã Thanh Ba, Tỉnh Phú Thọ';
 
 /**
- * Nhãn khung giờ dạng dải "7-8h" tính từ mốc phút — khớp mẫu Excel của xưởng và
- * đồng bộ với FE. Không dùng `slot.label` vì đó là nhãn điểm ("8h") chỉ mốc BÁO
- * CÁO, không phải khoảng làm việc; nhãn cũ còn nằm trong dữ liệu đã lưu.
+ * Nhãn khung giờ dạng dải "7-8h" tính từ mốc phút. Ngày cũ (trước khi server tự
+ * sinh nhãn) còn giữ nhãn điểm "8h" trong DB nên vẫn phải tính lại ở đây.
  */
 const slotRangeLabel = (slot: any) => {
     const start = Number(slot?.startMinute);
     const end = Number(slot?.endMinute);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return slot?.label || '';
-    const text = (minute: number) => {
-        const hour = Math.floor(minute / 60);
-        const rest = minute % 60;
-        return rest === 0 ? `${hour}` : `${hour}h${String(rest).padStart(2, '0')}`;
-    };
-    return start % 60 === 0 && end % 60 === 0 ? `${text(start)}-${text(end)}h` : `${text(start)}-${text(end)}`;
+    return buildTimeSlotLabel(start, end);
 };
 
 const thinBorder: Partial<ExcelJS.Borders> = {
