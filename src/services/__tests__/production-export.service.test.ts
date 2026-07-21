@@ -45,39 +45,35 @@ const detail = {
     },
 };
 
-test('xuất workbook sản lượng kèm kế hoạch và đúng khổ in', async () => {
-    const workbook = await buildProductionWorkbook({
-        detail,
-        monthDetails: [detail],
-        lines: [{ code: 'CM1', leaderName: 'Nguyệt', sortOrder: 1, isActive: true }],
-        items: [{ code: '416', name: 'Mã 416', unit: 'SP', unitPrice: 10_000, isActive: true }],
-        plan: {
-            revision: 3,
-            allocations: [
-                {
-                    id: 'allocation-1',
-                    lineId: 'line-1',
-                    lineCode: 'CM1',
-                    itemCode: '416',
-                    plannedQuantity: 100,
-                    hourlyQuota: 100,
-                    startSlotKey: '08:00',
-                    endSlotKey: '08:00',
-                    priority: 'high',
-                    sourceType: 'manual',
-                },
-            ],
-        },
-    });
+test('xuất workbook báo cáo ngày khớp mẫu công ty và đúng khổ in', async () => {
+    const workbook = await buildProductionWorkbook({ detail });
 
     assert.deepEqual(
         workbook.worksheets.map((sheet) => sheet.name),
-        ['BC NGAY', 'KE HOACH NGAY', 'NHAP LIEU', 'TONG HOP THANG', 'TH MA HANG', 'DANH MUC']
+        ['BC NGAY', 'NHAP LIEU']
     );
-    assert.equal(workbook.getWorksheet('BC NGAY')?.pageSetup.paperSize, 9);
+    const bc = workbook.getWorksheet('BC NGAY');
+    assert.equal(bc?.pageSetup.paperSize, 9);
+    // Letterhead + tiêu đề đúng vị trí mẫu
+    assert.ok(String(bc?.getCell('A1').value).includes('MAY XUẤT KHẨU HẢI ĐĂNG'));
+    assert.equal(bc?.getCell('A4').value, 'BÁO CÁO SẢN LƯỢNG NGÀY');
+    assert.equal(bc?.getCell('B6').value, '18/07/2026');
+    // Header bảng chuyền
+    assert.equal(bc?.getCell('A8').value, 'Chuyền');
+    assert.equal(bc?.getCell('H8').value, 'TN BQ (đ/người)');
+    // Dòng dữ liệu + TỔNG
+    assert.equal(bc?.getCell('A9').value, 'CM1');
+    assert.equal(bc?.getCell('E9').value, 90);
+    assert.equal(bc?.getCell('A10').value, 'TỔNG');
+    assert.equal(bc?.getCell('E10').value, 90);
+    // Khối theo khung giờ + chữ ký phải có mặt
+    const flat = (bc?.getSheetValues() as any[])
+        .flat()
+        .filter((v) => typeof v === 'string');
+    assert.ok(flat.includes('SẢN LƯỢNG THỰC TẾ TOÀN XƯỞNG THEO KHUNG GIỜ'));
+    assert.ok(flat.includes('NGƯỜI LẬP BIỂU'));
+    assert.ok(flat.includes('GIÁM ĐỐC CƠ SỞ'));
+
     assert.equal(workbook.getWorksheet('NHAP LIEU')?.pageSetup.fitToWidth, 1);
-    assert.equal(workbook.getWorksheet('KE HOACH NGAY')?.getCell('G6').value, 100);
-    assert.equal(workbook.getWorksheet('DANH MUC')?.getCell('A5').value, 'Mã chuyền');
-    assert.equal(workbook.getWorksheet('DANH MUC')?.getCell('A9').value, 'Mã hàng');
     assert.ok((await workbook.xlsx.writeBuffer()).byteLength > 5_000);
 });

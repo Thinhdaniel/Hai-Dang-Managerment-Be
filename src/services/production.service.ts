@@ -519,27 +519,7 @@ export const exportProductionDay = async (req: Request, res: Response) => {
     if (!day) throw new NotFoundError('Không tìm thấy ngày sản xuất');
     assertPlantAccess(req, String(day.plantId));
     const detail = await loadDayDetail(day);
-
-    const monthKey = String(day.productionDate).slice(0, 7);
-    const [year, month] = monthKey.split('-').map(Number);
-    const monthEnd = `${monthKey}-${String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, '0')}`;
-    const [monthDays, lines, items, plan] = await Promise.all([
-        ProductionDay.find({
-            plantId: day.plantId,
-            productionDate: { $gte: `${monthKey}-01`, $lte: monthEnd },
-        }).sort({ productionDate: 1 }),
-        ProductionLine.find({ plantId: day.plantId }).sort({ sortOrder: 1, code: 1 }).lean(),
-        ProductionItem.find({ plantId: day.plantId }).sort({ code: 1 }).lean(),
-        ProductionPlan.findOne({ plantId: day.plantId, productionDate: day.productionDate }),
-    ]);
-    const monthDetails = await buildDetailsForDays(monthDays);
-    const workbook = await buildProductionWorkbook({
-        detail,
-        monthDetails,
-        lines,
-        items,
-        plan: plan ? serializeProductionPlan(plan) : undefined,
-    });
+    const workbook = await buildProductionWorkbook({ detail });
     const buffer = await workbook.xlsx.writeBuffer();
     const filename = `bao-cao-san-luong-${day.productionDate}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

@@ -2,15 +2,21 @@ import ExcelJS from 'exceljs';
 
 const COLORS = {
     ink: 'FF17211B',
-    muted: 'FF66736B',
-    primary: 'FF147A4B',
-    primaryDark: 'FF0E5D39',
-    primarySoft: 'FFE8F4ED',
-    border: 'FFD8E2DB',
+    muted: 'FF404040',
+    caption: 'FF808080',
+    primary: 'FF2E5FA3', // xanh header (khớp mẫu công ty)
+    primaryDark: 'FF1F3864', // navy tiêu đề + dòng tổng
+    primarySoft: 'FFDCE6F1', // nền dòng TỔNG
+    zebra: 'FFF2F6FC', // nền dòng chẵn
+    highlight: 'FFFFF2A8', // ô nhấn (ngày)
+    border: 'FFC9D3E0',
     white: 'FFFFFFFF',
     warning: 'FFFFF3D8',
     danger: 'FFFDE8E8',
 };
+
+const COMPANY_NAME = 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG';
+const COMPANY_ADDRESS = 'Địa chỉ: Khu 23, Xã Thanh Ba, Tỉnh Phú Thọ';
 
 const thinBorder: Partial<ExcelJS.Borders> = {
     top: { style: 'thin', color: { argb: COLORS.border } },
@@ -44,7 +50,7 @@ const configureSheet = (sheet: ExcelJS.Worksheet, orientation: 'portrait' | 'lan
 const styleTitle = (sheet: ExcelJS.Worksheet, lastColumn: number, title: string, subtitle?: string) => {
     sheet.mergeCells(1, 1, 1, lastColumn);
     const companyCell = sheet.getCell(1, 1);
-    companyCell.value = 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG';
+    companyCell.value = COMPANY_NAME;
     companyCell.font = { bold: true, size: 12, color: { argb: COLORS.primaryDark } };
     companyCell.alignment = { horizontal: 'center', vertical: 'middle' };
     sheet.getRow(1).height = 23;
@@ -115,19 +121,53 @@ const runRowsForDay = (detail: any) =>
 const addDailyReportSheet = (workbook: ExcelJS.Workbook, detail: any) => {
     const sheet = workbook.addWorksheet('BC NGAY');
     configureSheet(sheet, 'landscape');
-    styleTitle(
-        sheet,
-        8,
-        'BÁO CÁO SẢN LƯỢNG NGÀY',
-        `${detail.plantName || 'Cơ sở'} · Ngày ${formatProductionDate(detail.productionDate)}`
-    );
-    sheet.mergeCells('A5:H5');
-    sheet.getCell('A5').value = `Trạng thái: ${statusLabel(detail.status)} · Cập nhật: ${new Date(
-        detail.updatedAt || Date.now()
-    ).toLocaleString('vi-VN')}`;
-    sheet.getCell('A5').font = { size: 10, color: { argb: COLORS.muted } };
-    sheet.getCell('A5').alignment = { horizontal: 'center' };
+    const facility = detail.plantName || 'Cơ sở';
 
+    // Khung giờ dùng cho khối tổng theo giờ (chỉ các khung đang bật)
+    const activeSlots = (detail.timeSlots || []).filter((slot: any) => slot.isActive);
+    const slotSectionWidth = Math.max(8, activeSlots.length + 1);
+
+    // ----- Letterhead -----
+    sheet.mergeCells(1, 1, 1, slotSectionWidth);
+    const companyCell = sheet.getCell(1, 1);
+    companyCell.value = `${COMPANY_NAME} – ${facility.toUpperCase()}`;
+    companyCell.font = { bold: true, size: 13, color: { argb: COLORS.primaryDark } };
+    companyCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    sheet.getRow(1).height = 20;
+
+    sheet.mergeCells(2, 1, 2, slotSectionWidth);
+    const addressCell = sheet.getCell(2, 1);
+    addressCell.value = COMPANY_ADDRESS;
+    addressCell.font = { italic: true, size: 10, color: { argb: COLORS.muted } };
+    addressCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    sheet.getRow(2).height = 18;
+
+    // ----- Tiêu đề -----
+    sheet.mergeCells(4, 1, 4, slotSectionWidth);
+    const titleCell = sheet.getCell(4, 1);
+    titleCell.value = 'BÁO CÁO SẢN LƯỢNG NGÀY';
+    titleCell.font = { bold: true, size: 16, color: { argb: COLORS.primaryDark } };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(4).height = 26;
+
+    // ----- Dòng ngày báo cáo (nhấn vàng như mẫu) -----
+    sheet.getRow(6).height = 20;
+    const dateLabel = sheet.getCell(6, 1);
+    dateLabel.value = 'Ngày báo cáo:';
+    dateLabel.font = { bold: true, size: 11, color: { argb: COLORS.ink } };
+    dateLabel.alignment = { horizontal: 'right', vertical: 'middle' };
+    const dateCell = sheet.getCell(6, 2);
+    dateCell.value = formatProductionDate(detail.productionDate);
+    dateCell.font = { bold: true, size: 11, color: { argb: 'FF0000FF' } };
+    dateCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.highlight } };
+    dateCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    dateCell.border = thinBorder;
+    const statusCell = sheet.getCell(6, 4);
+    statusCell.value = `Trạng thái: ${statusLabel(detail.status)}`;
+    statusCell.font = { italic: true, size: 10, color: { argb: COLORS.muted } };
+    statusCell.alignment = { horizontal: 'left', vertical: 'middle' };
+
+    // ----- Bảng tổng hợp theo chuyền -----
     const headers = [
         'Chuyền',
         'Tổ trưởng',
@@ -138,12 +178,13 @@ const addDailyReportSheet = (workbook: ExcelJS.Workbook, detail: any) => {
         'Thành tiền (đ)',
         'TN BQ (đ/người)',
     ];
-    const headerRow = sheet.getRow(7);
+    const headerRowIndex = 8;
+    const headerRow = sheet.getRow(headerRowIndex);
     headerRow.values = headers;
     styleHeader(headerRow);
 
-    detail.lines.forEach((line: any) => {
-        sheet.addRow([
+    detail.lines.forEach((line: any, index: number) => {
+        const row = sheet.addRow([
             line.lineCode,
             line.leaderName || '',
             line.runs.length,
@@ -153,7 +194,17 @@ const addDailyReportSheet = (workbook: ExcelJS.Workbook, detail: any) => {
             line.totalAmount,
             line.averageIncome,
         ]);
+        row.height = 18;
+        row.getCell(1).font = { bold: true, size: 10, color: { argb: COLORS.ink } };
+        if (index % 2 === 1) {
+            row.eachCell({ includeEmpty: true }, (cell, column) => {
+                if (column > headers.length) return;
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.zebra } };
+            });
+        }
+        [5, 6].forEach((column) => (row.getCell(column).font = { bold: true, size: 10, color: { argb: COLORS.ink } }));
     });
+
     const totalRow = sheet.addRow([
         'TỔNG',
         '',
@@ -162,118 +213,99 @@ const addDailyReportSheet = (workbook: ExcelJS.Workbook, detail: any) => {
         detail.summary.totalActual,
         detail.summary.totalTarget > 0 ? detail.summary.totalActual / detail.summary.totalTarget : 0,
         detail.summary.totalAmount,
-        detail.summary.averageIncome,
+        '',
     ]);
-    totalRow.font = { bold: true, color: { argb: COLORS.primaryDark } };
-    totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.primarySoft } };
-
-    styleDataArea(sheet, 8, totalRow.number, headers.length);
-    sheet.getColumn(1).width = 14;
-    sheet.getColumn(2).width = 22;
-    sheet.getColumn(3).width = 14;
-    sheet.getColumn(4).width = 18;
-    sheet.getColumn(5).width = 18;
-    sheet.getColumn(6).width = 12;
-    sheet.getColumn(7).width = 20;
-    sheet.getColumn(8).width = 21;
-    sheet.getColumn(6).numFmt = '0.0%';
-    [4, 5, 7, 8].forEach((column) => {
-        sheet.getColumn(column).numFmt = '#,##0';
+    totalRow.height = 20;
+    totalRow.font = { bold: true, size: 11, color: { argb: COLORS.primaryDark } };
+    totalRow.eachCell({ includeEmpty: true }, (cell, column) => {
+        if (column > headers.length) return;
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.primarySoft } };
     });
-    sheet.views = [{ state: 'frozen', ySplit: 7 }];
-    sheet.autoFilter = { from: { row: 7, column: 1 }, to: { row: totalRow.number - 1, column: 8 } };
-    sheet.pageSetup.printArea = `A1:H${totalRow.number}`;
-};
 
-const addPlanSheet = (workbook: ExcelJS.Workbook, detail: any, plan: any) => {
-    if (!plan?.allocations?.length) return;
-    const sheet = workbook.addWorksheet('KE HOACH NGAY');
-    configureSheet(sheet, 'landscape');
-    styleTitle(
-        sheet,
-        11,
-        'KẾ HOẠCH SẢN XUẤT NGÀY',
-        `${detail.plantName || 'Cơ sở'} · ${formatProductionDate(detail.productionDate)} · Phiên bản ${plan.revision}`
+    styleDataArea(sheet, headerRowIndex + 1, totalRow.number, headers.length);
+    // Bảng chuyền căn giữa toàn bộ để khớp mẫu (ghi đè căn trái mặc định)
+    for (let rowIndex = headerRowIndex + 1; rowIndex <= totalRow.number; rowIndex += 1) {
+        sheet.getRow(rowIndex).eachCell({ includeEmpty: true }, (cell, column) => {
+            if (column > headers.length) return;
+            cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: column <= 2 };
+        });
+    }
+
+    // ----- Khối sản lượng toàn xưởng theo khung giờ -----
+    const slotTitleRowIndex = totalRow.number + 2;
+    sheet.mergeCells(slotTitleRowIndex, 1, slotTitleRowIndex, slotSectionWidth);
+    const slotTitleCell = sheet.getCell(slotTitleRowIndex, 1);
+    slotTitleCell.value = 'SẢN LƯỢNG THỰC TẾ TOÀN XƯỞNG THEO KHUNG GIỜ';
+    slotTitleCell.font = { bold: true, size: 11, color: { argb: COLORS.primaryDark } };
+    slotTitleCell.alignment = { horizontal: 'left', vertical: 'middle' };
+
+    const slotHeaderRowIndex = slotTitleRowIndex + 1;
+    const slotHeaderRow = sheet.getRow(slotHeaderRowIndex);
+    slotHeaderRow.values = [...activeSlots.map((slot: any) => slot.label), 'Tổng'];
+    slotHeaderRow.height = 18;
+    slotHeaderRow.eachCell({ includeEmpty: true }, (cell, column) => {
+        if (column > slotSectionWidth) return;
+        cell.font = { bold: true, size: 10, color: { argb: COLORS.white } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.primary } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = thinBorder;
+    });
+
+    const slotTotals = activeSlots.map((slot: any) =>
+        detail.lines.reduce(
+            (sum: number, line: any) =>
+                sum +
+                (line.entries || [])
+                    .filter((entry: any) => entry.slotKey === slot.key)
+                    .reduce((acc: number, entry: any) => acc + Number(entry.quantity || 0), 0),
+            0
+        )
     );
-    const header = sheet.getRow(5);
-    header.values = [
-        'STT',
-        'Chuyền',
-        'Mã hàng',
-        'Mã đơn / LSX',
-        'Mức ưu tiên',
-        'Khung chạy',
-        'Kế hoạch (SP)',
-        'Khoán/giờ',
-        'Thực tế (SP)',
-        'Còn thiếu (SP)',
-        'Nguồn',
-    ];
-    styleHeader(header);
-    const lineById = new Map(detail.lines.map((line: any) => [String(line.lineId), line]));
-    plan.allocations.forEach((allocation: any, index: number) => {
-        const line: any = lineById.get(String(allocation.lineId));
-        const runs = (line?.runs || []).filter(
-            (run: any) => String(run.planAllocationId || '') === String(allocation.id)
-        );
-        const runIds = new Set(runs.map((run: any) => String(run.id)));
-        const actual = (line?.entries || [])
-            .filter((entry: any) => runIds.has(String(entry.runId)))
-            .reduce((sum: number, entry: any) => sum + Number(entry.quantity || 0), 0);
-        const row = sheet.addRow([
-            index + 1,
-            allocation.lineCode,
-            allocation.itemCode,
-            allocation.orderCode || '',
-            ({ urgent: 'Khẩn', high: 'Cao', normal: 'Thường', low: 'Thấp' } as Record<string, string>)[
-                allocation.priority
-            ] || 'Thường',
-            `${allocation.startSlotKey} - ${allocation.endSlotKey}`,
-            allocation.plannedQuantity,
-            allocation.hourlyQuota,
-            actual,
-            Math.max(0, Number(allocation.plannedQuantity || 0) - actual),
-            allocation.sourceType === 'carry_over'
-                ? `Chuyển từ ${formatProductionDate(allocation.sourceProductionDate || detail.productionDate)}`
-                : 'Kế hoạch ngày',
-        ]);
-        if (actual < Number(allocation.plannedQuantity || 0)) {
-            row.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.warning } };
+    const slotGrandTotal = slotTotals.reduce((sum: number, value: number) => sum + value, 0);
+    const slotValueRowIndex = slotHeaderRowIndex + 1;
+    const slotValueRow = sheet.getRow(slotValueRowIndex);
+    slotValueRow.values = [...slotTotals, slotGrandTotal];
+    slotValueRow.height = 18;
+    slotValueRow.eachCell({ includeEmpty: true }, (cell, column) => {
+        if (column > slotSectionWidth) return;
+        cell.numFmt = '#,##0';
+        cell.border = thinBorder;
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        if (column === slotSectionWidth) {
+            cell.font = { bold: true, size: 10, color: { argb: COLORS.primaryDark } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.primarySoft } };
+        } else {
+            cell.font = { size: 10, color: { argb: COLORS.ink } };
         }
     });
-    const totalRow = sheet.addRow([
-        '',
-        '',
-        '',
-        '',
-        '',
-        'TỔNG',
-        { formula: `SUM(G6:G${sheet.rowCount})` },
-        '',
-        { formula: `SUM(I6:I${sheet.rowCount})` },
-        { formula: `SUM(J6:J${sheet.rowCount})` },
-        '',
-    ]);
-    totalRow.font = { bold: true, color: { argb: COLORS.primaryDark } };
-    totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.primarySoft } };
-    styleDataArea(sheet, 6, totalRow.number, 11);
-    sheet.columns = [
-        { width: 6 },
-        { width: 12 },
-        { width: 16 },
-        { width: 18 },
-        { width: 12 },
-        { width: 16 },
-        { width: 17 },
-        { width: 14 },
-        { width: 16 },
-        { width: 17 },
-        { width: 20 },
+
+    // ----- Khối chữ ký -----
+    const signRowIndex = slotValueRowIndex + 3;
+    const signBlocks: Array<[string, number, number]> = [
+        ['NGƯỜI LẬP BIỂU', 2, 3],
+        ['QUẢN ĐỐC XƯỞNG', 4, 5],
+        ['GIÁM ĐỐC CƠ SỞ', 7, 8],
     ];
-    [7, 8, 9, 10].forEach((column) => (sheet.getColumn(column).numFmt = '#,##0'));
-    sheet.views = [{ state: 'frozen', ySplit: 5 }];
-    sheet.autoFilter = { from: 'A5', to: `K${Math.max(6, totalRow.number - 1)}` };
-    sheet.pageSetup.printArea = `A1:K${totalRow.number}`;
+    signBlocks.forEach(([label, from, to]) => {
+        sheet.mergeCells(signRowIndex, from, signRowIndex, to);
+        const cell = sheet.getCell(signRowIndex, from);
+        cell.value = label;
+        cell.font = { bold: true, size: 11, color: { argb: COLORS.ink } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        sheet.mergeCells(signRowIndex + 1, from, signRowIndex + 1, to);
+        const note = sheet.getCell(signRowIndex + 1, from);
+        note.value = '(Ký, họ tên)';
+        note.font = { italic: true, size: 9, color: { argb: COLORS.caption } };
+        note.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+
+    // ----- Kích thước cột & định dạng số -----
+    const widths = [10, 16, 11, 13, 13, 9, 16, 15];
+    widths.forEach((width, index) => (sheet.getColumn(index + 1).width = width));
+    for (let column = 9; column <= slotSectionWidth; column += 1) sheet.getColumn(column).width = 8;
+    sheet.getColumn(6).numFmt = '0.0%';
+    [4, 5, 7, 8].forEach((column) => (sheet.getColumn(column).numFmt = '#,##0'));
+    sheet.pageSetup.printArea = `A1:${sheet.getColumn(slotSectionWidth).letter}${signRowIndex + 1}`;
 };
 
 const addEntryLedgerSheet = (workbook: ExcelJS.Workbook, detail: any) => {
@@ -338,209 +370,16 @@ const addEntryLedgerSheet = (workbook: ExcelJS.Workbook, detail: any) => {
     sheet.pageSetup.printArea = `A1:${sheet.getColumn(headers.length).letter}${lastRow}`;
 };
 
-const monthDateKeys = (monthKey: string) => {
-    const [year, month] = monthKey.split('-').map(Number);
-    const count = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    return Array.from({ length: count }, (_, index) => `${monthKey}-${String(index + 1).padStart(2, '0')}`);
-};
-
-const addMonthlySummarySheet = (workbook: ExcelJS.Workbook, selectedDetail: any, monthDetails: any[]) => {
-    const lineCodes = [
-        ...new Set(
-            monthDetails
-                .flatMap((detail) => detail.lines)
-                .sort((left: any, right: any) => left.sortOrder - right.sortOrder)
-                .map((line: any) => line.lineCode)
-        ),
-    ];
-    const monthKey = selectedDetail.productionDate.slice(0, 7);
-    const headers = ['Ngày', 'Trạng thái', ...lineCodes, 'Tổng ngày', 'Lũy kế'];
-    const sheet = workbook.addWorksheet('TONG HOP THANG');
-    configureSheet(sheet, 'landscape');
-    styleTitle(
-        sheet,
-        headers.length,
-        'TỔNG HỢP SẢN LƯỢNG THÁNG',
-        `${selectedDetail.plantName || 'Cơ sở'} · Tháng ${monthKey.slice(5, 7)}/${monthKey.slice(0, 4)} · Trạng thái được ghi rõ từng ngày`
-    );
-    const headerRow = sheet.getRow(5);
-    headerRow.values = headers;
-    styleHeader(headerRow);
-
-    const detailByDate = new Map(monthDetails.map((detail) => [detail.productionDate, detail]));
-    let cumulative = 0;
-    monthDateKeys(monthKey).forEach((dateKey) => {
-        const detail: any = detailByDate.get(dateKey);
-        const quantities = lineCodes.map(
-            (code) => detail?.lines.find((line: any) => line.lineCode === code)?.totalActual || 0
-        );
-        const total = quantities.reduce((sum, value) => sum + Number(value || 0), 0);
-        cumulative += total;
-        sheet.addRow([
-            formatProductionDate(dateKey).slice(0, 5),
-            detail ? statusLabel(detail.status) : '',
-            ...quantities,
-            total,
-            cumulative,
-        ]);
-    });
-    const totalRow = sheet.addRow([
-        'TỔNG',
-        '',
-        ...lineCodes.map((code) =>
-            monthDetails.reduce(
-                (sum, detail) =>
-                    sum + Number(detail.lines.find((line: any) => line.lineCode === code)?.totalActual || 0),
-                0
-            )
-        ),
-        monthDetails.reduce((sum, detail) => sum + Number(detail.summary.totalActual || 0), 0),
-        '',
-    ]);
-    totalRow.font = { bold: true, color: { argb: COLORS.primaryDark } };
-    totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.primarySoft } };
-    styleDataArea(sheet, 6, totalRow.number, headers.length);
-    sheet.getColumn(1).width = 11;
-    sheet.getColumn(2).width = 14;
-    for (let column = 3; column <= headers.length; column += 1) sheet.getColumn(column).width = 12;
-    sheet.getColumn(headers.length - 1).width = 15;
-    sheet.getColumn(headers.length).width = 15;
-    for (let column = 3; column <= headers.length; column += 1) sheet.getColumn(column).numFmt = '#,##0';
-    sheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 5 }];
-    sheet.pageSetup.printArea = `A1:${sheet.getColumn(headers.length).letter}${totalRow.number}`;
-};
-
-const addItemSummarySheet = (workbook: ExcelJS.Workbook, selectedDetail: any, monthDetails: any[]) => {
-    const byItem = new Map<string, any>();
-    monthDetails.forEach((detail) => {
-        detail.lines.forEach((line: any) => {
-            const runs = new Map(line.runs.map((run: any) => [run.id, run]));
-            line.entries.forEach((entry: any) => {
-                const run: any = runs.get(entry.runId);
-                if (!run) return;
-                const current = byItem.get(run.itemCode) || {
-                    code: run.itemCode,
-                    name: run.itemName || '',
-                    unit: run.unit || 'SP',
-                    quantity: 0,
-                    amount: 0,
-                    days: new Set<string>(),
-                };
-                current.quantity += Number(entry.quantity || 0);
-                current.amount += Number(entry.amount || 0);
-                current.days.add(detail.productionDate);
-                byItem.set(run.itemCode, current);
-            });
-        });
-    });
-
-    const sheet = workbook.addWorksheet('TH MA HANG');
-    configureSheet(sheet, 'portrait');
-    styleTitle(
-        sheet,
-        7,
-        'TỔNG HỢP THEO MÃ HÀNG',
-        `${selectedDetail.plantName || 'Cơ sở'} · Tháng ${selectedDetail.productionDate.slice(5, 7)}/${selectedDetail.productionDate.slice(0, 4)} · Đối chiếu trạng thái tại sheet TONG HOP THANG`
-    );
-    const headers = ['Mã hàng', 'Tên hàng', 'Đơn vị', 'Số ngày chạy', 'SL thực tế', 'Đơn giá BQ (đ)', 'Thành tiền (đ)'];
-    const headerRow = sheet.getRow(5);
-    headerRow.values = headers;
-    styleHeader(headerRow);
-    [...byItem.values()]
-        .sort((left, right) => right.amount - left.amount || left.code.localeCompare(right.code))
-        .forEach((item) => {
-            sheet.addRow([
-                item.code,
-                item.name,
-                item.unit,
-                item.days.size,
-                item.quantity,
-                item.quantity > 0 ? item.amount / item.quantity : 0,
-                item.amount,
-            ]);
-        });
-    const totalQuantity = [...byItem.values()].reduce((sum, item) => sum + item.quantity, 0);
-    const totalAmount = [...byItem.values()].reduce((sum, item) => sum + item.amount, 0);
-    const totalRow = sheet.addRow(['TỔNG', '', '', '', totalQuantity, '', totalAmount]);
-    totalRow.font = { bold: true, color: { argb: COLORS.primaryDark } };
-    totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.primarySoft } };
-    styleDataArea(sheet, 6, totalRow.number, headers.length);
-    sheet.columns = [
-        { width: 16 },
-        { width: 28 },
-        { width: 11 },
-        { width: 14 },
-        { width: 17 },
-        { width: 18 },
-        { width: 20 },
-    ];
-    [4, 5, 6, 7].forEach((column) => (sheet.getColumn(column).numFmt = '#,##0'));
-    sheet.views = [{ state: 'frozen', ySplit: 5 }];
-    sheet.pageSetup.printArea = `A1:G${totalRow.number}`;
-};
-
-const addCatalogSheet = (workbook: ExcelJS.Workbook, detail: any, lines: any[], items: any[]) => {
-    const sheet = workbook.addWorksheet('DANH MUC');
-    configureSheet(sheet, 'portrait');
-    styleTitle(sheet, 6, 'DANH MỤC SẢN XUẤT', detail.plantName || 'Cơ sở');
-    const lineHeader = sheet.getRow(5);
-    lineHeader.values = ['Mã chuyền', 'Tên chuyền', 'Tổ trưởng', 'Thứ tự', 'Trạng thái'];
-    styleHeader(lineHeader);
-    lines.forEach((line) =>
-        sheet.addRow([
-            line.code,
-            line.name || '',
-            line.leaderName || '',
-            line.sortOrder || 0,
-            line.isActive ? 'Đang dùng' : 'Đã tắt',
-        ])
-    );
-    const itemStart = sheet.rowCount + 3;
-    const itemHeader = sheet.getRow(itemStart);
-    itemHeader.values = ['Mã hàng', 'Tên hàng', 'Đơn vị', 'Đơn giá (đ/SP)', 'Trạng thái'];
-    styleHeader(itemHeader);
-    items.forEach((item) =>
-        sheet.addRow([
-            item.code,
-            item.name || '',
-            item.unit || 'SP',
-            item.unitPrice || 0,
-            item.isActive ? 'Đang dùng' : 'Đã tắt',
-        ])
-    );
-    styleDataArea(sheet, 6, Math.max(6, itemStart - 3), 5);
-    styleDataArea(sheet, itemStart + 1, sheet.rowCount, 5);
-    sheet.columns = [{ width: 17 }, { width: 28 }, { width: 22 }, { width: 18 }, { width: 14 }, { width: 3 }];
-    sheet.getColumn(4).numFmt = '#,##0';
-    sheet.pageSetup.printArea = `A1:E${sheet.rowCount}`;
-};
-
-export const buildProductionWorkbook = async ({
-    detail,
-    monthDetails,
-    lines,
-    items,
-    plan,
-}: {
-    detail: any;
-    monthDetails: any[];
-    lines: any[];
-    items: any[];
-    plan?: any;
-}) => {
+export const buildProductionWorkbook = async ({ detail }: { detail: any }) => {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Hải Đăng Production';
-    workbook.company = 'Công ty TNHH May Xuất Khẩu Hải Đăng';
+    workbook.company = COMPANY_NAME;
     workbook.created = new Date();
     workbook.modified = new Date();
     workbook.calcProperties.fullCalcOnLoad = true;
 
     addDailyReportSheet(workbook, detail);
-    addPlanSheet(workbook, detail, plan);
     addEntryLedgerSheet(workbook, detail);
-    addMonthlySummarySheet(workbook, detail, monthDetails);
-    addItemSummarySheet(workbook, detail, monthDetails);
-    addCatalogSheet(workbook, detail, lines, items);
 
     return workbook;
 };
