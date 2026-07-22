@@ -161,9 +161,13 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 const run = slot.isActive === false ? undefined : resolveRunForSlot(runs, String(slot.key), slots);
                 const slotEntries = entries.filter((entry: any) => entry.slotKey === slot.key);
                 const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
-                const target = Number(run?.hourlyQuota || 0) * durationHours;
+                // Tăng ca KHÔNG nâng khoán: KPI ngày chốt trên giờ hành chính (10 giờ x 200 = 2000),
+                // làm thêm 1-2 tiếng thì sản lượng đó là phần vượt để xét thưởng, không phải chỉ tiêu.
+                const overtime = slot.kind === 'overtime';
+                const target = overtime ? 0 : Number(run?.hourlyQuota || 0) * durationHours;
                 return {
                     key: slot.key,
+                    overtime,
                     target: round(target),
                     actual: slotEntries.reduce((sum: number, entry: any) => sum + entry.quantity, 0),
                     reported: slotEntries.length > 0,
@@ -218,6 +222,7 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
         );
         return {
             key: slot.key,
+            overtime: slot.kind === 'overtime',
             target: round(values.reduce((sum: number, value: any) => sum + Number(value?.target || 0), 0)),
             actual: values.reduce((sum: number, value: any) => sum + Number(value?.actual || 0), 0),
             reportedLines: dueLines.filter((line: any) =>

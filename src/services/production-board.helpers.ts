@@ -208,6 +208,7 @@ const buildBoardLine = (line: any, detail: any, clock: ProductionBoardClock) => 
             label: slot.label,
             startMinute: Number(slot.startMinute),
             endMinute: Number(slot.endMinute),
+            overtime: slot.kind === 'overtime',
             target: round(slotTarget),
             actual: slotActual,
             targetAmount: round(slotTargetAmount, 0),

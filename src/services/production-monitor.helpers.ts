@@ -126,7 +126,6 @@ export const buildProductionMonitor = (detail: any, baselineDetails: any[], cloc
             .filter((slot: any) => slot.reported)
             .forEach((slotValue: any) => {
                 const target = Number(slotValue.target || 0);
-                if (target <= 0) return;
                 const percent = slotPercent(Number(slotValue.actual || 0), target);
                 const entries = line.entries.filter((entry: any) => entry.slotKey === slotValue.key);
                 const hasNote = entries.some((entry: any) => String(entry.note || '').trim());
@@ -147,6 +146,9 @@ export const buildProductionMonitor = (detail: any, baselineDetails: any[], cloc
                     });
                     return;
                 }
+
+                // Khung tăng ca không có khoán nên không có gì để so tỉ lệ — chỉ cảnh báo 0 SP ở trên.
+                if (target <= 0) return;
 
                 if (percent < 80) {
                     alerts.push({
