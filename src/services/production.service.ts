@@ -140,8 +140,20 @@ const assertDayEditable = (day: any) => {
     if (day.status === 'locked') throw new BadRequestError('Ngày sản xuất đã khóa sổ');
 };
 
+// Danh sách chuyền chạy trong ngày là CHỐT THEO NGÀY: seed một lần lúc khởi tạo rồi thôi.
+// Trước đây hàm này chạy ở mọi lần đọc ngày nháp nên thêm chuyền mới là nó nhồi ngược
+// vào tất cả các ngày cũ (card trắng) và tắt chuyền cũng không gỡ được ra.
+// Muốn đổi biên chế chuyền của một ngày cụ thể thì dùng addProductionDayLine/removeProductionDayLine.
 const ensureDayLineRecords = async (day: any) => {
     if (day.status && day.status !== 'draft') return;
+    if (day.lineRosterSeededAt) return;
+    // Ngày cũ (tạo trước khi có cột mốc) đã có sẵn bản ghi -> coi như đã xếp xong.
+    const existing = await ProductionLineRecord.countDocuments({ dayId: day._id });
+    if (existing > 0) {
+        await ProductionDay.updateOne({ _id: day._id }, { $set: { lineRosterSeededAt: new Date() } });
+        day.lineRosterSeededAt = new Date();
+        return;
+    }
     const lines = await ProductionLine.find({ plantId: day.plantId, isActive: true })
         .sort({ sortOrder: 1, code: 1 })
         .lean();
@@ -170,6 +182,8 @@ const ensureDayLineRecords = async (day: any) => {
     }));
     // Mongoose suy luận mảng subdocument thành DocumentArray ở bulkWrite dù payload chỉ dùng $setOnInsert.
     await ProductionLineRecord.bulkWrite(operations as any, { ordered: false });
+    await ProductionDay.updateOne({ _id: day._id }, { $set: { lineRosterSeededAt: new Date() } });
+    day.lineRosterSeededAt = new Date();
 };
 
 const loadDayDetail = async (dayInput: any, role?: string) => {
@@ -615,6 +629,48 @@ export const updateProductionTimeSlots = async (req: Request, res: Response) => 
     await day.save();
     emitProductionChange(day, { changeType: 'time-slots-updated' });
     return sendSuccess(res, await loadDayDetail(day, req.role), 'Đã cập nhật khung giờ');
+};
+
+export const addProductionDayLine = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.body.lineId);
+    const line: any = await ProductionLine.findOne({ _id: lineId, plantId: day.plantId });
+    if (!line) throw new NotFoundError('Không tìm thấy chuyền trong cơ sở này');
+    if (line.isActive === false) throw new BadRequestError('Chuyền đang tắt, cần bật lại trước khi đưa vào ngày');
+
+    const existing = await ProductionLineRecord.findOne({ dayId: day._id, lineId: line._id }).select('_id').lean();
+    if (existing) throw new DuplicateError('Chuyền đã có trong ngày sản xuất này');
+
+    await ProductionLineRecord.create({
+        dayId: day._id,
+        plantId: day.plantId,
+        productionDate: day.productionDate,
+        lineId: line._id,
+        lineCode: line.code,
+        lineName: line.name,
+        leaderName: line.leaderName,
+        sortOrder: line.sortOrder ?? 0,
+        workerCount: 0,
+        runs: [],
+        entries: [],
+        updatedBy: req.userId,
+    });
+    emitProductionChange(day, { changeType: 'day-line-added', lineId: String(line._id) });
+    return sendSuccess(res, await loadDayDetail(day, req.role), `Đã thêm chuyền ${line.code} vào ngày`);
+};
+
+export const removeProductionDayLine = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.params.lineId);
+    const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+    if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
+    // Gỡ chuyền là thao tác biên chế, không được dùng để xoá số liệu đã báo.
+    if (record.entries?.length) throw new BadRequestError('Chuyền đã có sản lượng, không thể gỡ khỏi ngày');
+    if (record.runs?.length) throw new BadRequestError('Chuyền đã gán mã hàng, xóa mã hàng trước khi gỡ');
+
+    await ProductionLineRecord.deleteOne({ _id: record._id });
+    emitProductionChange(day, { changeType: 'day-line-removed', lineId });
+    return sendSuccess(res, await loadDayDetail(day, req.role), `Đã gỡ chuyền ${record.lineCode} khỏi ngày`);
 };
 
 export const configureProductionLine = async (req: Request, res: Response) => {

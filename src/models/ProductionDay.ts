@@ -55,6 +55,9 @@ const ProductionDaySchema = new mongoose.Schema(
         reopenedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         statusNote: { type: String, trim: true, maxlength: 500 },
         statusHistory: { type: [ProductionDayStatusEventSchema], default: [] },
+        // Đánh dấu đã xếp biên chế chuyền cho ngày này. Có mốc rồi thì không seed lại
+        // danh mục chuyền nữa, kể cả khi người dùng gỡ hết chuyền ra.
+        lineRosterSeededAt: { type: Date },
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     },

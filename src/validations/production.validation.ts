@@ -84,6 +84,10 @@ export const transitionProductionDaySchema = z.object({
     note: z.string().trim().max(500).optional(),
 });
 
+export const addProductionDayLineSchema = z.object({
+    lineId: zObjectId('Chuyền'),
+});
+
 export const configureProductionLineSchema = z
     .object({
         workerCount: z.number().int().min(0).max(1000),

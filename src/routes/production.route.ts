@@ -8,6 +8,7 @@ import * as productionReportService from '@/services/production-report.service';
 import * as productionService from '@/services/production.service';
 import asyncHandler from '@/utils/asyncHandler';
 import {
+    addProductionDayLineSchema,
     carryOverProductionPlanSchema,
     configureProductionLineSchema,
     createProductionDaySchema,
@@ -150,6 +151,19 @@ router.patch(
     validateObjectIdParams('id'),
     validator(updateProductionTimeSlotsSchema),
     asyncHandler(productionService.updateProductionTimeSlots)
+);
+router.post(
+    '/days/:dayId/lines',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('dayId'),
+    validator(addProductionDayLineSchema),
+    asyncHandler(productionService.addProductionDayLine)
+);
+router.delete(
+    '/days/:dayId/lines/:lineId',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('dayId', 'lineId'),
+    asyncHandler(productionService.removeProductionDayLine)
 );
 router.put(
     '/days/:dayId/lines/:lineId',

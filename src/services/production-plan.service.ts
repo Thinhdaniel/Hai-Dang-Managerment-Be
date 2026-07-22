@@ -294,12 +294,16 @@ const normalizeAllocations = async (plan: any, inputs: any[], session?: mongoose
     return normalized;
 };
 
-const ensureDayLineRecords = async (day: any, session?: mongoose.ClientSession) => {
+// onlyLineIds = chỉ tạo bản ghi cho những chuyền kế hoạch thực sự giao việc.
+// Bỏ trống (ngày vừa được publish tạo mới) thì lấy cả biên chế chuyền đang bật.
+// Không được nhồi cả danh mục vào một ngày đã tồn tại: biên chế chuyền chốt theo ngày.
+const ensureDayLineRecords = async (day: any, onlyLineIds?: Set<string>, session?: mongoose.ClientSession) => {
     const lineQuery = ProductionLine.find({ plantId: day.plantId, isActive: true })
         .sort({ sortOrder: 1, code: 1 })
         .lean();
     if (session) lineQuery.session(session);
-    const lines = await lineQuery;
+    const allLines = await lineQuery;
+    const lines = onlyLineIds ? allLines.filter((line: any) => onlyLineIds.has(String(line._id))) : allLines;
     if (!lines.length) return;
     await ProductionLineRecord.bulkWrite(
         lines.map((line: any) => ({
@@ -325,12 +329,21 @@ const ensureDayLineRecords = async (day: any, session?: mongoose.ClientSession) 
         })) as any,
         { ordered: false, ...(session ? { session } : {}) }
     );
+    if (!onlyLineIds) {
+        await ProductionDay.updateOne(
+            { _id: day._id },
+            { $set: { lineRosterSeededAt: new Date() } },
+            session ? { session } : undefined
+        );
+        day.lineRosterSeededAt = new Date();
+    }
 };
 
 const ensureProductionDay = async (plan: any, actorId: string, session?: mongoose.ClientSession) => {
     const dayQuery = ProductionDay.findOne({ plantId: plan.plantId, productionDate: plan.productionDate });
     if (session) dayQuery.session(session);
     let day: any = await dayQuery;
+    const isNewDay = !day;
     if (!day) {
         try {
             const created = await ProductionDay.create(
@@ -372,7 +385,11 @@ const ensureProductionDay = async (plan: any, actorId: string, session?: mongoos
             `Khung giờ của ${invalidAllocation.lineCode} - ${invalidAllocation.itemCode} không còn tồn tại trong sổ sản xuất`
         );
     }
-    await ensureDayLineRecords(day, session);
+    await ensureDayLineRecords(
+        day,
+        isNewDay ? undefined : new Set(plan.allocations.map((allocation: any) => String(allocation.lineId))),
+        session
+    );
     return day;
 };
 
