@@ -30,7 +30,9 @@ import { Router } from 'express';
 const router = Router();
 
 router.use(authenticate);
-router.use(authorize(...ROLE_GROUPS.FIELD));
+// Lớp base gồm cả Tổ trưởng để họ nhập số theo giờ; các route quản trị bên dưới
+// vẫn tự gate MANAGEMENT nên tổ trưởng chỉ chạm được luồng nhập liệu.
+router.use(authorize(...ROLE_GROUPS.PRODUCTION_FIELD));
 
 router.get('/lines', asyncHandler(productionService.listProductionLines));
 router.post(
