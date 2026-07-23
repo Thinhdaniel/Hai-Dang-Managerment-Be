@@ -577,6 +577,141 @@ export const scanSupplyRequest = async (req: Request, res: Response) => {
     }
 };
 
+// ===== OCR phiếu CẤP PHÁT nội bộ (có đơn giá + VAT) =====
+// Khác phiếu đề xuất cấp (chỉ tên + SL): phiếu cấp phát/xuất kho nội bộ thường có cả
+// cột Số lượng cấp, Đơn giá, VAT%, Thành tiền -> phải đọc ĐỦ để điền sẵn form cấp phát.
+
+const buildDistributionPrompt = () =>
+    [
+        'Ban la tro ly OCR phieu CAP PHAT / XUAT KHO vat tu NOI BO cua cong ty may (tieng Viet).',
+        'Doc anh (phieu giay hoac anh chup bang Excel) va trich CHINH XAC tung dong vat tu + thong tin chung.',
+        'Chi tra ve JSON hop le, khong markdown, khong giai thich ngoai JSON. TUYET DOI khong bia: truong khong doc duoc de null.',
+        'Bang thuong co cac cot tu TRAI->PHAI: STT, Ten vat tu (materialName), DVT/Don vi tinh (unit), So luong cap/So luong/SL (quantity), Don gia (unitPrice), VAT %/Thue (vatRate), Thanh tien/Tong tien [BO QUA], Ghi chu (note). Map theo TIEU DE COT / vi tri cot.',
+        'CUC KY QUAN TRONG — doc DU cho TUNG dong: quantity (so luong cap), unitPrice (don gia 1 don vi), vatRate (phan tram thue). Day la du lieu chinh, khong duoc bo sot.',
+        'vatRate = phan tram thue (vd 8, 10), KHONG phai tien thue. O VAT trong hoac gach "-" (hang khong chiu thue) thi vatRate = 0 (KHONG de null).',
+        'unitPrice la DON GIA mot don vi (khop voi thanh tien = quantity x unitPrice). Neu chi co cot Thanh tien va So luong, hay suy don gia = thanh tien / so luong; neu khong chac thi de unitPrice null.',
+        'So tien/so luong tra ve SO thuan, KHONG dau phan cach nghin (vd "2.559.600" -> 2559600, "12,5" -> 12.5, "100,00" -> 100).',
+        'TIENG VIET PHAI DU DAU cho moi text (ten hang, ghi chu): chu mo/mat dau thi khoi phuc theo tu vung nganh may (vd "chi"->"chỉ", "kim may"->"kim máy", "dau may"->"dầu máy"). CON SO mo/khong ro -> de null, KHONG doan.',
+        'Thong tin chung (header): nguoi xin cap/nguoi nhan -> requesterName; bo phan -> department; to/chuyen -> line; ghi chu chung/muc dich -> note.',
+        'materialName giu nguyen ten hang tren phieu (kem quy cach neu ghi lien). BO QUA dong tong cong, tieu de, chu ky, nguoi duyet.',
+        'Output schema (chi JSON):',
+        '{"header":{"requesterName":null,"department":null,"line":null,"note":null},"items":[{"materialName":"","unit":null,"quantity":null,"unitPrice":null,"vatRate":null,"note":null}]}',
+    ].join('\n');
+
+export const scanDistributionSlip = async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file || !file.buffer?.length) {
+        throw new BadRequestError('Chưa có ảnh phiếu cấp phát để quét');
+    }
+
+    const dataUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+
+    const attempt = (feature: string, vertexModel?: string) => async (model?: string) => {
+        const aiResult = await generateOcrJson<any>(
+            {
+                feature,
+                model,
+                temperature: 0.04,
+                // reasoning 'low' + dư maxTokens: đủ suy luận map cột (SL/đơn giá/VAT) mà không cắt cụt JSON.
+                reasoningEffort: 'low',
+                maxTokens: 16000,
+                timeoutMs: 75000,
+                messages: [
+                    {
+                        role: 'system',
+                        content:
+                            'Ban trich du lieu co cau truc tu anh phieu cap phat vat tu thanh JSON, doc DU so luong/don gia/VAT. Uu tien chinh xac, khong bia. Chi tra JSON.',
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'text', text: buildDistributionPrompt() },
+                            { type: 'image_url', image_url: { url: dataUrl } },
+                        ],
+                    },
+                ],
+            },
+            vertexModel
+        );
+        const items = normalizeItems(aiResult.data);
+        if (!items.length) throw new Error('OCR returned no distribution items');
+        const header = {
+            requesterName: cleanText(aiResult.data?.header?.requesterName),
+            department: cleanText(aiResult.data?.header?.department),
+            line: cleanText(aiResult.data?.header?.line),
+            note: cleanText(aiResult.data?.header?.note),
+        };
+        return { aiResult, items, header };
+    };
+
+    // Dòng ghép cặp coi là lệch khi SL, đơn giá HOẶC VAT giữa 2 lần đọc khác nhau.
+    const distributionDiff = (a: OcrItem, b: OcrItem): string | null => {
+        const qtyA = a.quantity ?? a.quantityRequested;
+        const qtyB = b.quantity ?? b.quantityRequested;
+        const diffs: string[] = [];
+        if (qtyA != null && qtyB != null && Number(qtyA) !== Number(qtyB)) {
+            diffs.push(`SL ${fmtNumForNote(qtyA)} vs ${fmtNumForNote(qtyB)}`);
+        }
+        if (a.unitPrice != null && b.unitPrice != null && Number(a.unitPrice) !== Number(b.unitPrice)) {
+            diffs.push(`đơn giá ${fmtNumForNote(a.unitPrice)} vs ${fmtNumForNote(b.unitPrice)}`);
+        }
+        if (a.vatRate != null && b.vatRate != null && Number(a.vatRate) !== Number(b.vatRate)) {
+            diffs.push(`VAT ${fmtNumForNote(a.vatRate)}% vs ${fmtNumForNote(b.vatRate)}%`);
+        }
+        return diffs.length ? `2 lần đọc lệch nhau: ${diffs.join(' · ')}` : null;
+    };
+
+    try {
+        const [primaryResult, verifyResult] = await Promise.allSettled([
+            runOcrWithRetry(attempt(AI_FEATURES.OCR_DISTRIBUTION), OCR_PRIMARY_VISION_MODEL),
+            attempt(AI_FEATURES.OCR_DISTRIBUTION_VERIFY, config.vertex.verifyModel)(),
+        ]);
+        if (primaryResult.status === 'rejected') throw primaryResult.reason;
+        const { aiResult, items: firstItems, header } = primaryResult.value;
+
+        let items: Array<OcrItem & VerifyMark> = firstItems;
+        let verification = SKIPPED_VERIFICATION;
+        if (verifyResult.status === 'fulfilled') {
+            items = reconcileOcrItems(firstItems, verifyResult.value.items, distributionDiff);
+            verification = buildVerification(items, verifyResult.value.aiResult.model);
+        } else {
+            console.warn(
+                '[ai-ocr] distribution verify pass failed:',
+                verifyResult.reason instanceof Error ? verifyResult.reason.message : verifyResult.reason
+            );
+        }
+
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: {
+                    header,
+                    items,
+                    count: items.length,
+                    available: true,
+                    usedFallback: false,
+                    verification,
+                    provider: aiResult.provider,
+                    model: aiResult.model,
+                    latencyMs: aiResult.latencyMs,
+                },
+                message: `Đã quét được ${items.length} dòng vật tư cấp phát`,
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    } catch (error) {
+        console.warn('[ai-ocr] distribution OCR fallback:', error instanceof Error ? error.message : error);
+        return res.status(StatusCodes.OK).json(
+            customResponse({
+                data: { header: {}, items: [], count: 0, available: false, usedFallback: true },
+                message: 'Chưa đọc được phiếu cấp phát. Hãy chụp rõ nét, đủ sáng và thẳng góc rồi thử lại.',
+                status: StatusCodes.OK,
+                success: true,
+            })
+        );
+    }
+};
+
 // ===== OCR tem thông số máy (nameplate) =====
 // Chụp 2-3 ảnh tem/nhãn trên thân máy -> trích nhãn hiệu, model, serial (+ gợi ý tên) để điền
 // sẵn form nhận máy mượn/thêm máy. Ảnh đồng thời được upload Cloudinary để user chọn 1 ảnh

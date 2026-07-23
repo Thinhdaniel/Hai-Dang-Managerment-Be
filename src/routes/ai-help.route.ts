@@ -19,6 +19,7 @@ import { matchMaterialsByAi } from '@/services/ai-material-match.service';
 import { summarizeChatConversation } from '@/services/ai-chat-summary.service';
 import {
     parsePurchaseQuoteText,
+    scanDistributionSlip,
     scanMachineLabel,
     scanPurchaseInvoice,
     scanSupplyRequest,
@@ -69,6 +70,7 @@ router.post('/chat-summary', validator(aiChatSummarySchema), asyncHandler(summar
 router.get('/qr-field/:assetId', asyncHandler(getQrFieldInsight));
 router.post('/ocr/purchase-invoice', imageUpload.single('image'), asyncHandler(scanPurchaseInvoice));
 router.post('/ocr/supply-request', imageUpload.single('image'), asyncHandler(scanSupplyRequest));
+router.post('/ocr/distribution', imageUpload.single('image'), asyncHandler(scanDistributionSlip));
 router.post('/ocr/machine-label', imageUpload.array('images', 3), asyncHandler(scanMachineLabel));
 router.post('/ocr/purchase-quote-text', asyncHandler(parsePurchaseQuoteText));
 router.post('/purchase-request/:id/review', asyncHandler(reviewPurchaseRequest));

@@ -22,6 +22,8 @@ export const AI_FEATURES = {
     OCR_INVOICE_VERIFY: 'ocr-invoice-verify', // Lần đọc 2 độc lập của hóa đơn (model khác dòng) để đối chiếu chéo
     OCR_SUPPLY_REQUEST: 'ocr-supply-request', // OCR ảnh phiếu đề xuất cấp vật tư -> trích dòng (vision, JSON)
     OCR_SUPPLY_REQUEST_VERIFY: 'ocr-supply-request-verify', // Lần đọc 2 độc lập của phiếu đề xuất cấp
+    OCR_DISTRIBUTION: 'ocr-distribution', // OCR ảnh phiếu cấp phát nội bộ -> trích dòng CÓ đơn giá/VAT (vision, JSON)
+    OCR_DISTRIBUTION_VERIFY: 'ocr-distribution-verify', // Lần đọc 2 độc lập của phiếu cấp phát
     OCR_PURCHASE_RECEIPT: 'ocr-purchase-receipt', // OCR ảnh phiếu giao hàng/nhận hàng NCC -> đối soát đơn đặt (vision, JSON)
     OCR_PURCHASE_RECEIPT_VERIFY: 'ocr-purchase-receipt-verify', // Lần đọc 2 độc lập (model khác dòng) để đối chiếu chéo
     RECEIPT_SEMANTIC_MATCH: 'receipt-semantic-match', // Ghép dòng phiếu NCC vào dòng đơn theo NGỮ NGHĨA (text, JSON)
@@ -80,6 +82,8 @@ export const DEFAULT_FEATURE_MODELS: Record<string, string | string[]> = {
     'ocr-invoice-verify': ['gc/gemini-2.5-pro', 'kr/claude-sonnet-4.5'],
     'ocr-supply-request': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
     'ocr-supply-request-verify': ['gc/gemini-2.5-pro', 'kr/claude-sonnet-4.5'],
+    'ocr-distribution': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
+    'ocr-distribution-verify': ['gc/gemini-2.5-pro', 'bb/gpt-5.5'],
     'ocr-purchase-receipt': ['gc/gemini-2.5-flash', 'bb/gpt-5.4'],
     // Lần đọc 2 dùng model KHÁC DÒNG với lần 1 để lỗi không tương quan (bake-off đã xác nhận bb/gpt-5.5 đọc ảnh tốt)
     'ocr-purchase-receipt-verify': ['gc/gemini-2.5-pro', 'bb/gpt-5.5'],
