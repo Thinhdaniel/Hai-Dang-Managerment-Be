@@ -104,6 +104,43 @@ export const resolveRunForSlot = (runs: any[], slotKey: string, slots: any[]) =>
 
 const round = (value: number, digits = 2) => Number(value.toFixed(digits));
 
+type ProductionEntrySyncInput = {
+    clientMutationId?: string;
+    expectedUpdatedAt?: string | null;
+    hasExpectedUpdatedAt: boolean;
+};
+
+type ProductionEntrySyncDecision =
+    | { action: 'write' }
+    | { action: 'idempotent' }
+    | { action: 'conflict'; reason: 'created-remotely' | 'updated-remotely' | 'deleted-remotely' };
+
+/**
+ * Quyết định đồng bộ cho một ô sản lượng. Client cũ không gửi
+ * expectedUpdatedAt vẫn được phép ghi như trước; Leader Workspace mới luôn
+ * gửi field này để retry offline không âm thầm đè dữ liệu từ thiết bị khác.
+ */
+export const decideProductionEntrySync = (
+    existing: { updatedAt?: Date | string; lastClientMutationId?: string } | null | undefined,
+    input: ProductionEntrySyncInput
+): ProductionEntrySyncDecision => {
+    if (existing && input.clientMutationId && existing.lastClientMutationId === input.clientMutationId) {
+        return { action: 'idempotent' };
+    }
+
+    if (!input.hasExpectedUpdatedAt) return { action: 'write' };
+
+    if (!existing) {
+        return input.expectedUpdatedAt ? { action: 'conflict', reason: 'deleted-remotely' } : { action: 'write' };
+    }
+
+    if (!input.expectedUpdatedAt) return { action: 'conflict', reason: 'created-remotely' };
+
+    const current = new Date(existing.updatedAt || 0).getTime();
+    const expected = new Date(input.expectedUpdatedAt).getTime();
+    return current === expected ? { action: 'write' } : { action: 'conflict', reason: 'updated-remotely' };
+};
+
 export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => {
     const day = typeof dayInput?.toObject === 'function' ? dayInput.toObject() : dayInput;
     const slots = [...(day.timeSlots || [])].sort(
@@ -237,6 +274,12 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
     const totalAmount = lines.reduce((sum, line) => sum + line.totalAmount, 0);
     const totalWorkers = lines.reduce((sum, line) => sum + line.workerCount, 0);
 
+    const dataAsOf = [day.updatedAt, ...lines.map((line: any) => line.updatedAt)]
+        .filter(Boolean)
+        .map((value) => new Date(value).getTime())
+        .filter(Number.isFinite)
+        .reduce((latest, value) => Math.max(latest, value), 0);
+
     return {
         id: toId(day),
         plantId: toId(day.plantId),
@@ -244,6 +287,8 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
         plantCode: day.plantCode,
         productionDate: day.productionDate,
         status: day.status || 'draft',
+        reportingState: day.status === 'locked' ? 'official' : 'provisional',
+        dataAsOf: dataAsOf > 0 ? new Date(dataAsOf).toISOString() : undefined,
         statusNote: day.statusNote,
         submittedAt: toIso(day.submittedAt),
         submittedBy: serializeActor(day.submittedBy),

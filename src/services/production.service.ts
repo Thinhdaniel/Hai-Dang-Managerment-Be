@@ -14,6 +14,7 @@ import { sendSuccess } from './service.helpers';
 import {
     buildProductionDayDetail,
     buildTimeSlotLabel,
+    decideProductionEntrySync,
     DEFAULT_PRODUCTION_TIME_SLOTS,
     redactProductionFinancials,
     serializeProductionItem,
@@ -551,6 +552,9 @@ export const exportProductionDay = async (req: Request, res: Response) => {
 export const createProductionDay = async (req: Request, res: Response) => {
     const plantId = resolvePlantId(req, req.body.plantId);
     const productionDate = assertValidDate(req.body.productionDate);
+    if (req.role === USER_ROLE.LINE_LEADER && req.body.timeSlots) {
+        throw new UnAuthorizedError('Tổ trưởng không được tự thay đổi khung giờ khi khởi tạo ngày sản xuất');
+    }
     const existing = await ProductionDay.findOne({ plantId, productionDate });
     if (existing) {
         return sendSuccess(res, await loadDayDetail(existing, req.role), 'Ngày sản xuất đã tồn tại');
@@ -841,11 +845,33 @@ export const upsertHourlyProductionEntry = async (req: Request, res: Response) =
     const existing = record.entries.find(
         (entry: any) => entry.slotKey === slotKey && String(entry.runId) === String(run._id)
     );
+    const syncDecision = decideProductionEntrySync(existing, {
+        clientMutationId: req.body.clientMutationId,
+        expectedUpdatedAt: req.body.expectedUpdatedAt,
+        hasExpectedUpdatedAt: Object.prototype.hasOwnProperty.call(req.body, 'expectedUpdatedAt'),
+    });
+
+    if (syncDecision.action === 'conflict') {
+        throw new DuplicateError(
+            'Số liệu khung giờ này vừa được cập nhật từ thiết bị khác. Dữ liệu mới nhất đã được giữ lại, vui lòng kiểm tra rồi lưu lại.'
+        );
+    }
+
+    if (syncDecision.action === 'idempotent') {
+        const detail: any = await loadDayDetail(day, req.role);
+        return sendSuccess(
+            res,
+            detail.lines.find((line: any) => line.lineId === lineId),
+            'Sản lượng đã được đồng bộ trước đó'
+        );
+    }
+
     if (existing) {
         existing.quantity = req.body.quantity;
         existing.note = req.body.note;
         existing.updatedBy = req.userId;
         existing.updatedAt = new Date();
+        existing.lastClientMutationId = req.body.clientMutationId;
     } else {
         record.entries.push({
             slotKey,
@@ -856,11 +882,39 @@ export const upsertHourlyProductionEntry = async (req: Request, res: Response) =
             enteredAt: new Date(),
             updatedBy: req.userId,
             updatedAt: new Date(),
+            lastClientMutationId: req.body.clientMutationId,
         });
     }
     record.updatedBy = req.userId;
-    await saveRecord(record);
-    emitProductionChange(day, { changeType: 'entry-updated', lineId, slotKey });
+    try {
+        await saveRecord(record);
+    } catch (error) {
+        if (error instanceof DuplicateError && req.body.clientMutationId) {
+            const latestRecord: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+            const latestEntry = latestRecord?.entries?.find(
+                (entry: any) =>
+                    entry.slotKey === slotKey &&
+                    String(entry.runId) === String(run._id) &&
+                    entry.lastClientMutationId === req.body.clientMutationId
+            );
+            if (latestEntry) {
+                const detail: any = await loadDayDetail(day, req.role);
+                return sendSuccess(
+                    res,
+                    detail.lines.find((line: any) => line.lineId === lineId),
+                    'Sản lượng đã được đồng bộ trước đó'
+                );
+            }
+        }
+        throw error;
+    }
+    emitProductionChange(day, {
+        changeType: 'entry-updated',
+        lineId,
+        slotKey,
+        actorId: req.userId,
+        clientMutationId: req.body.clientMutationId,
+    });
     const detail: any = await loadDayDetail(day, req.role);
     return sendSuccess(
         res,

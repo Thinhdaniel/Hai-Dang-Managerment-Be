@@ -115,6 +115,16 @@ export const upsertHourlyProductionEntrySchema = z.object({
     runId: zObjectId('Đợt mã hàng'),
     quantity: z.number().int().min(0).max(100000000),
     note: zOptionalString(),
+    clientMutationId: z
+        .string()
+        .trim()
+        .min(8)
+        .max(80)
+        .regex(/^[A-Za-z0-9:_-]+$/, 'Mã đồng bộ không hợp lệ')
+        .optional(),
+    // null nghĩa là thiết bị tin rằng ô này chưa có dữ liệu. Client cũ không
+    // gửi field này vẫn giữ nguyên hành vi ghi đè trước đây.
+    expectedUpdatedAt: z.string().datetime().nullable().optional(),
 });
 
 const productionPlanAllocationSchema = z.object({

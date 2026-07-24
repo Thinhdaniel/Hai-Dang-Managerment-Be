@@ -34,6 +34,7 @@ const HourlyProductionEntrySchema = new mongoose.Schema(
         enteredAt: { type: Date, default: Date.now },
         updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         updatedAt: { type: Date, default: Date.now },
+        lastClientMutationId: { type: String, trim: true, maxlength: 80 },
     },
     { _id: true }
 );

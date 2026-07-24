@@ -122,6 +122,7 @@ router.get('/days', asyncHandler(productionService.listProductionDays));
 router.post('/days', validator(createProductionDaySchema), asyncHandler(productionService.createProductionDay));
 router.post(
     '/days/:id/submit',
+    authorize(...ROLE_GROUPS.FIELD),
     validateObjectIdParams('id'),
     validator(transitionProductionDaySchema),
     asyncHandler(productionService.submitProductionDay)
@@ -181,6 +182,7 @@ router.post(
 );
 router.delete(
     '/days/:dayId/lines/:lineId/runs/:runId',
+    authorize(...ROLE_GROUPS.FIELD),
     validateObjectIdParams('dayId', 'lineId', 'runId'),
     asyncHandler(productionService.deleteProductionRun)
 );
@@ -192,6 +194,7 @@ router.put(
 );
 router.delete(
     '/days/:dayId/lines/:lineId/entries/:entryId',
+    authorize(...ROLE_GROUPS.FIELD),
     validateObjectIdParams('dayId', 'lineId', 'entryId'),
     asyncHandler(productionService.deleteHourlyProductionEntry)
 );

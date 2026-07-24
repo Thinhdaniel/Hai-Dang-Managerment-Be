@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
     buildProductionDayDetail,
     buildTimeSlotLabel,
+    decideProductionEntrySync,
     redactProductionFinancials,
     resolveRunForSlot,
     validateProductionDayForSubmission,
@@ -218,4 +219,130 @@ test('ẩn đơn giá và giá trị sản lượng khỏi payload của nhân v
     assert.equal(redacted.summary.totalAmount, 0);
     assert.equal('unitPriceSnapshot' in redacted.lines[0].runs[0], false);
     assert.equal('amount' in redacted.lines[0].entries[0], false);
+});
+
+test('retry cùng clientMutationId là idempotent, không ghi lại ô sản lượng', () => {
+    const decision = decideProductionEntrySync(
+        {
+            updatedAt: '2026-07-24T02:00:00.000Z',
+            lastClientMutationId: 'entry-device-a-001',
+        },
+        {
+            clientMutationId: 'entry-device-a-001',
+            expectedUpdatedAt: null,
+            hasExpectedUpdatedAt: true,
+        }
+    );
+
+    assert.deepEqual(decision, { action: 'idempotent' });
+});
+
+test('phát hiện thiết bị khác đã tạo ô mà client offline vẫn nghĩ là chưa có', () => {
+    const decision = decideProductionEntrySync(
+        { updatedAt: '2026-07-24T02:00:00.000Z' },
+        {
+            clientMutationId: 'entry-device-b-001',
+            expectedUpdatedAt: null,
+            hasExpectedUpdatedAt: true,
+        }
+    );
+
+    assert.deepEqual(decision, { action: 'conflict', reason: 'created-remotely' });
+});
+
+test('cho cập nhật khi expectedUpdatedAt khớp dữ liệu chuẩn trên server', () => {
+    const decision = decideProductionEntrySync(
+        { updatedAt: new Date('2026-07-24T02:00:00.000Z') },
+        {
+            clientMutationId: 'entry-device-a-002',
+            expectedUpdatedAt: '2026-07-24T02:00:00.000Z',
+            hasExpectedUpdatedAt: true,
+        }
+    );
+
+    assert.deepEqual(decision, { action: 'write' });
+});
+
+test('chặn ghi đè khi phiên bản server mới hơn phiên bản thiết bị đã đọc', () => {
+    const decision = decideProductionEntrySync(
+        { updatedAt: '2026-07-24T02:05:00.000Z' },
+        {
+            clientMutationId: 'entry-device-a-003',
+            expectedUpdatedAt: '2026-07-24T02:00:00.000Z',
+            hasExpectedUpdatedAt: true,
+        }
+    );
+
+    assert.deepEqual(decision, { action: 'conflict', reason: 'updated-remotely' });
+});
+
+test('chặn khôi phục âm thầm khi ô đã bị xóa trên server', () => {
+    const decision = decideProductionEntrySync(null, {
+        clientMutationId: 'entry-device-a-004',
+        expectedUpdatedAt: '2026-07-24T02:00:00.000Z',
+        hasExpectedUpdatedAt: true,
+    });
+
+    assert.deepEqual(decision, { action: 'conflict', reason: 'deleted-remotely' });
+});
+
+test('payload client cũ không có expectedUpdatedAt vẫn giữ hành vi ghi hiện tại', () => {
+    const decision = decideProductionEntrySync(
+        { updatedAt: '2026-07-24T02:00:00.000Z' },
+        {
+            clientMutationId: undefined,
+            expectedUpdatedAt: undefined,
+            hasExpectedUpdatedAt: false,
+        }
+    );
+
+    assert.deepEqual(decision, { action: 'write' });
+});
+
+test('ngày đang nhập là báo cáo tạm tính và dataAsOf lấy lần sửa chuyền mới nhất', () => {
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-sync',
+            plantId: 'plant-1',
+            productionDate: '2026-07-24',
+            status: 'draft',
+            updatedAt: new Date('2026-07-24T01:00:00.000Z'),
+            timeSlots: slots,
+        },
+        [
+            {
+                _id: 'record-sync',
+                dayId: 'day-sync',
+                plantId: 'plant-1',
+                productionDate: '2026-07-24',
+                lineId: 'line-1',
+                lineCode: 'CM1',
+                workerCount: 20,
+                workerCountConfirmedAt: new Date('2026-07-24T00:30:00.000Z'),
+                updatedAt: new Date('2026-07-24T03:15:00.000Z'),
+                runs,
+                entries: [],
+            },
+        ]
+    );
+
+    assert.equal(detail.reportingState, 'provisional');
+    assert.equal(detail.dataAsOf, '2026-07-24T03:15:00.000Z');
+});
+
+test('ngày đã khóa được đánh dấu là báo cáo chính thức', () => {
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-locked',
+            plantId: 'plant-1',
+            productionDate: '2026-07-24',
+            status: 'locked',
+            updatedAt: new Date('2026-07-24T04:00:00.000Z'),
+            timeSlots: slots,
+        },
+        []
+    );
+
+    assert.equal(detail.reportingState, 'official');
+    assert.equal(detail.dataAsOf, '2026-07-24T04:00:00.000Z');
 });
