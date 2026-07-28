@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { buildProductionBoard } from '@/services/production-board.helpers';
 import {
     buildProductionDayDetail,
     buildTimeSlotLabel,
     decideProductionEntrySync,
+    findProductionRunStartConflicts,
     redactProductionFinancials,
     resolveRunForSlot,
     validateProductionDayForSubmission,
@@ -124,6 +126,77 @@ test('khi đổi mã đúng đầu khung giờ, ưu tiên lần chạy được 
     ];
 
     assert.equal(resolveRunForSlot(sameSlotRuns, '09:00', slots)?._id, 'run-b');
+});
+
+test('không cho đổi mã ngược vào khung đã có sản lượng', () => {
+    const entries = [
+        { slotKey: '08:00', runId: 'run-a', quantity: 90 },
+        { slotKey: '09:00', runId: 'run-a', quantity: 80 },
+    ];
+
+    assert.deepEqual(findProductionRunStartConflicts(entries, '08:00', slots), ['08:00', '09:00']);
+    assert.deepEqual(findProductionRunStartConflicts(entries, '09:00', slots), ['09:00']);
+});
+
+test('bản ghi sản lượng giữ đúng mã và đơn giá lịch sử khi khoảng run từng bị ghi đè', () => {
+    const overlapSlots = [
+        ...slots,
+        { key: '10:00', label: '10h', startMinute: 570, endMinute: 630, kind: 'regular', isActive: true },
+    ];
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-overlap',
+            plantId: 'plant-1',
+            productionDate: '2026-07-28',
+            timeSlots: overlapSlots,
+        },
+        [
+            {
+                _id: 'record-overlap',
+                dayId: 'day-overlap',
+                plantId: 'plant-1',
+                productionDate: '2026-07-28',
+                lineId: 'line-56',
+                lineCode: 'CM5+6',
+                workerCount: 27,
+                runs: [
+                    {
+                        ...runs[0],
+                        endedSlotKey: '08:00',
+                        hourlyQuota: 200,
+                        unitPriceSnapshot: 15_210,
+                    },
+                    {
+                        ...runs[1],
+                        startedSlotKey: '08:00',
+                        hourlyQuota: 200,
+                        unitPriceSnapshot: 5_350,
+                    },
+                ],
+                entries: [
+                    { _id: 'entry-08', slotKey: '08:00', runId: 'run-a', quantity: 150 },
+                    { _id: 'entry-09', slotKey: '09:00', runId: 'run-a', quantity: 160 },
+                ],
+            },
+        ]
+    );
+
+    const line = detail.lines[0];
+    assert.equal(line.slotValues[0].runId, 'run-a');
+    assert.equal(line.slotValues[1].runId, 'run-a');
+    assert.equal(line.slotValues[2].runId, 'run-b');
+    assert.equal(line.totalTarget, 500);
+    assert.equal(line.totalAmount, 4_715_100);
+
+    const boardLine = buildProductionBoard(detail, {
+        localDate: '2026-07-28',
+        minuteOfDay: 700,
+        asOf: '2026-07-28T04:40:00.000Z',
+    }).lines[0];
+    assert.equal(boardLine.day.targetAmount, 5_633_000);
+    assert.equal(boardLine.day.actualAmount, 4_715_100);
+    assert.equal(boardLine.day.targetAverageIncome, 208_630);
+    assert.ok((boardLine.day.projectedAverageIncome || 0) < boardLine.day.targetAverageIncome);
 });
 
 test('không cho gửi duyệt khi một khung giờ có mã chạy nhưng chưa báo sản lượng', () => {

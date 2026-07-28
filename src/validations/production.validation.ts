@@ -111,6 +111,13 @@ export const createProductionRunSchema = z.object({
     startedSlotKey: z.string().trim().min(1).max(24),
 });
 
+export const correctProductionLineSetupSchema = z.object({
+    itemId: zObjectId('Mã hàng'),
+    hourlyQuota: z.number().min(0).max(10000000),
+    reason: z.string().trim().min(5, 'Cần ghi rõ lý do sửa mã').max(500),
+    confirmed: z.literal(true, { error: 'Cần xác nhận tính lại toàn bộ dữ liệu trong ngày' }),
+});
+
 export const upsertHourlyProductionEntrySchema = z.object({
     runId: zObjectId('Đợt mã hàng'),
     quantity: z.number().int().min(0).max(100000000),

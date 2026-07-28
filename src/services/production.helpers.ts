@@ -82,6 +82,23 @@ export const serializeProductionItem = (input: any) => {
 
 const slotIndexMap = (slots: any[]) => new Map(slots.map((slot, index) => [String(slot.key), index]));
 
+export const findProductionRunStartConflicts = (entries: any[], startedSlotKey: string, slots: any[]) => {
+    const indexByKey = slotIndexMap(slots);
+    const startedSlotIndex = indexByKey.get(String(startedSlotKey));
+    if (startedSlotIndex === undefined) return [];
+
+    return [
+        ...new Set(
+            entries
+                .map((entry) => String(entry.slotKey))
+                .filter((slotKey) => {
+                    const entrySlotIndex = indexByKey.get(slotKey);
+                    return entrySlotIndex !== undefined && entrySlotIndex >= startedSlotIndex;
+                })
+        ),
+    ].sort((left, right) => Number(indexByKey.get(left)) - Number(indexByKey.get(right)));
+};
+
 export const resolveRunForSlot = (runs: any[], slotKey: string, slots: any[]) => {
     const indexByKey = slotIndexMap(slots);
     const slotIndex = indexByKey.get(slotKey);
@@ -195,8 +212,14 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             const slotValues = slots.map((slot: any) => {
                 // Slot đã tắt không được mang runId: API nhập liệu từ chối slot tắt, nên nếu vẫn gán
                 // runId thì validate gửi duyệt + báo cáo sẽ đòi số liệu ở ô không bao giờ nhập được.
-                const run = slot.isActive === false ? undefined : resolveRunForSlot(runs, String(slot.key), slots);
                 const slotEntries = entries.filter((entry: any) => entry.slotKey === slot.key);
+                const scheduledRun =
+                    slot.isActive === false ? undefined : resolveRunForSlot(runs, String(slot.key), slots);
+                const entryRunIds = [...new Set(slotEntries.map((entry: any) => String(entry.runId)))];
+                // Bản ghi sản lượng là bằng chứng lịch sử mạnh hơn khoảng run hiện tại. Điều này giữ đúng
+                // mã hàng, đơn giá và khoán nếu một lần đổi mã cũ đã vô tình áp dụng ngược vào giờ đã báo.
+                const recordedRun = entryRunIds.length === 1 ? runById.get(entryRunIds[0]) : undefined;
+                const run = slot.isActive === false ? undefined : recordedRun || scheduledRun;
                 const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
                 // Tăng ca KHÔNG nâng khoán: KPI ngày chốt trên giờ hành chính (10 giờ x 200 = 2000),
                 // làm thêm 1-2 tiếng thì sản lượng đó là phần vượt để xét thưởng, không phải chỉ tiêu.

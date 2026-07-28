@@ -16,6 +16,7 @@ import {
     buildTimeSlotLabel,
     decideProductionEntrySync,
     DEFAULT_PRODUCTION_TIME_SLOTS,
+    findProductionRunStartConflicts,
     redactProductionFinancials,
     serializeProductionItem,
     serializeProductionLine,
@@ -765,6 +766,17 @@ export const createProductionRun = async (req: Request, res: Response) => {
     });
     if (!item) throw new NotFoundError('Không tìm thấy mã hàng đang hoạt động');
 
+    const conflictingSlotKeys = findProductionRunStartConflicts(record.entries, req.body.startedSlotKey, day.timeSlots);
+    if (conflictingSlotKeys.length) {
+        const labels = conflictingSlotKeys
+            .map((key) => day.timeSlots.find((slot: any) => String(slot.key) === key)?.label || key)
+            .slice(0, 3);
+        const remainingCount = Math.max(0, conflictingSlotKeys.length - labels.length);
+        throw new BadRequestError(
+            `Không thể áp dụng ngược từ khung đã có sản lượng (${labels.join(', ')}${remainingCount ? ` và ${remainingCount} khung khác` : ''}). Hãy chọn khung chưa nhập tiếp theo hoặc xóa số liệu cần sửa trước.`
+        );
+    }
+
     const previousSlotKey = day.timeSlots[Math.max(0, slotIndex - 1)]?.key || req.body.startedSlotKey;
     record.runs.forEach((run: any) => {
         if (run.status === 'active') {
@@ -792,6 +804,91 @@ export const createProductionRun = async (req: Request, res: Response) => {
         detail.lines.find((line: any) => line.lineId === lineId),
         'Đã bắt đầu mã hàng mới',
         StatusCodes.CREATED
+    );
+};
+
+export const correctProductionLineSetup = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.params.lineId);
+    const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+    if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
+    if (!record.runs.length) throw new BadRequestError('Chuyền chưa có mã hàng để sửa');
+    if (record.runs.some((run: any) => run.source === 'plan')) {
+        throw new BadRequestError('Chuyền đang dùng kế hoạch đã phát hành; hãy sửa và phát hành lại kế hoạch');
+    }
+
+    const item: any = await ProductionItem.findOne({
+        _id: req.body.itemId,
+        plantId: day.plantId,
+        isActive: true,
+    });
+    if (!item) throw new NotFoundError('Không tìm thấy mã hàng đang hoạt động');
+
+    const activeSlots = day.timeSlots.filter((slot: any) => slot.isActive !== false);
+    const firstSlotKey = activeSlots[0]?.key;
+    if (!firstSlotKey) throw new BadRequestError('Ngày sản xuất chưa có khung giờ hoạt động');
+
+    const slotIndexByKey = new Map(day.timeSlots.map((slot: any, index: number) => [String(slot.key), index]));
+    const canonicalRun = [...record.runs].sort((left: any, right: any) => {
+        const leftIndex = Number(slotIndexByKey.get(String(left.startedSlotKey)) ?? Number.MAX_SAFE_INTEGER);
+        const rightIndex = Number(slotIndexByKey.get(String(right.startedSlotKey)) ?? Number.MAX_SAFE_INTEGER);
+        return (
+            leftIndex - rightIndex || new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime()
+        );
+    })[0];
+    const canonicalRunId = canonicalRun._id;
+    const previousItemCodes = [...new Set(record.runs.map((run: any) => String(run.itemCode)).filter(Boolean))];
+    const previousUnitPrices = [...new Set(record.runs.map((run: any) => Number(run.unitPriceSnapshot || 0)))];
+
+    const entryBySlot = new Map<string, any>();
+    [...record.entries].forEach((entry: any) => {
+        const existingEntry = entryBySlot.get(String(entry.slotKey));
+        if (existingEntry) {
+            existingEntry.quantity = Number(existingEntry.quantity || 0) + Number(entry.quantity || 0);
+            const notes = [existingEntry.note, entry.note].filter(Boolean);
+            existingEntry.note = [...new Set(notes)].join(' · ').slice(0, 500) || undefined;
+            existingEntry.updatedBy = req.userId;
+            existingEntry.updatedAt = new Date();
+            entry.deleteOne();
+            return;
+        }
+        entry.runId = canonicalRunId;
+        entry.updatedBy = req.userId;
+        entry.updatedAt = new Date();
+        entryBySlot.set(String(entry.slotKey), entry);
+    });
+    for (let index = record.runs.length - 1; index >= 0; index -= 1) {
+        if (String(record.runs[index]._id) !== String(canonicalRunId)) record.runs[index].deleteOne();
+    }
+    canonicalRun.itemId = item._id;
+    canonicalRun.itemCode = item.code;
+    canonicalRun.itemName = item.name;
+    canonicalRun.unit = item.unit || 'SP';
+    canonicalRun.unitPriceSnapshot = item.unitPrice || 0;
+    canonicalRun.hourlyQuota = req.body.hourlyQuota;
+    canonicalRun.startedSlotKey = firstSlotKey;
+    canonicalRun.endedSlotKey = undefined;
+    canonicalRun.status = 'active';
+
+    record.setupCorrections.push({
+        reason: req.body.reason,
+        previousItemCodes,
+        previousUnitPrices,
+        nextItemCode: item.code,
+        nextUnitPrice: item.unitPrice || 0,
+        nextHourlyQuota: req.body.hourlyQuota,
+        correctedBy: req.userId,
+        correctedAt: new Date(),
+    });
+    record.updatedBy = req.userId;
+    await saveRecord(record);
+    emitProductionChange(day, { changeType: 'line-configured', lineId });
+
+    const detail: any = await loadDayDetail(day, req.role);
+    return sendSuccess(
+        res,
+        detail.lines.find((line: any) => line.lineId === lineId),
+        `Đã sửa mã cài nhầm thành ${item.code} và tính lại toàn bộ ngày`
     );
 };
 
@@ -834,17 +931,19 @@ export const upsertHourlyProductionEntry = async (req: Request, res: Response) =
     if (slotIndex < 0) throw new BadRequestError('Khung giờ không hợp lệ hoặc đã tắt');
     const run = record.runs.id(req.body.runId);
     if (!run) throw new NotFoundError('Mã hàng không thuộc chuyền này');
+    const existing = record.entries.find(
+        (entry: any) => entry.slotKey === slotKey && String(entry.runId) === String(run._id)
+    );
     const startIndex = day.timeSlots.findIndex((slot: any) => slot.key === run.startedSlotKey);
     const endIndex = run.endedSlotKey
         ? day.timeSlots.findIndex((slot: any) => slot.key === run.endedSlotKey)
         : day.timeSlots.length - 1;
-    if (slotIndex < startIndex || (endIndex >= 0 && slotIndex > endIndex)) {
+    // Cho phép sửa chính bản ghi lịch sử ngay cả khi khoảng run từng bị đóng sai.
+    // Chỉ chặn tạo mới ngoài khoảng hoạt động của mã hàng.
+    if (!existing && (slotIndex < startIndex || (endIndex >= 0 && slotIndex > endIndex))) {
         throw new BadRequestError('Mã hàng không hoạt động tại khung giờ này');
     }
 
-    const existing = record.entries.find(
-        (entry: any) => entry.slotKey === slotKey && String(entry.runId) === String(run._id)
-    );
     const syncDecision = decideProductionEntrySync(existing, {
         clientMutationId: req.body.clientMutationId,
         expectedUpdatedAt: req.body.expectedUpdatedAt,

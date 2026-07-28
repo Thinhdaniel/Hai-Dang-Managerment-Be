@@ -39,6 +39,20 @@ const HourlyProductionEntrySchema = new mongoose.Schema(
     { _id: true }
 );
 
+const ProductionSetupCorrectionSchema = new mongoose.Schema(
+    {
+        reason: { type: String, required: true, trim: true, maxlength: 500 },
+        previousItemCodes: { type: [String], default: [] },
+        previousUnitPrices: { type: [Number], default: [] },
+        nextItemCode: { type: String, required: true, trim: true },
+        nextUnitPrice: { type: Number, required: true, min: 0 },
+        nextHourlyQuota: { type: Number, required: true, min: 0 },
+        correctedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        correctedAt: { type: Date, default: Date.now },
+    },
+    { _id: true }
+);
+
 const ProductionLineRecordSchema = new mongoose.Schema(
     {
         dayId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionDay', required: true },
@@ -54,6 +68,7 @@ const ProductionLineRecordSchema = new mongoose.Schema(
         workerCountConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         runs: { type: [ProductionRunSchema], default: [] },
         entries: { type: [HourlyProductionEntrySchema], default: [] },
+        setupCorrections: { type: [ProductionSetupCorrectionSchema], default: [] },
         updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     },
     {

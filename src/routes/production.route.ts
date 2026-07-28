@@ -11,6 +11,7 @@ import {
     addProductionDayLineSchema,
     carryOverProductionPlanSchema,
     configureProductionLineSchema,
+    correctProductionLineSetupSchema,
     createProductionDaySchema,
     createProductionItemSchema,
     createProductionLineSchema,
@@ -179,6 +180,13 @@ router.post(
     validateObjectIdParams('dayId', 'lineId'),
     validator(createProductionRunSchema),
     asyncHandler(productionService.createProductionRun)
+);
+router.post(
+    '/days/:dayId/lines/:lineId/correct-setup',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('dayId', 'lineId'),
+    validator(correctProductionLineSetupSchema),
+    asyncHandler(productionService.correctProductionLineSetup)
 );
 router.delete(
     '/days/:dayId/lines/:lineId/runs/:runId',
