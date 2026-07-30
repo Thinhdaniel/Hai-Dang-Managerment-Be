@@ -58,6 +58,7 @@ const makeDetail = ({
                         itemCode: 'HD-01',
                         itemName: 'Áo mẫu',
                         unit: 'SP',
+                        orderCode: 'PO-01',
                         planAllocationId: 'allocation-1',
                     },
                 ],
@@ -88,6 +89,7 @@ const makePlan = (date: string, quantity = 200) => ({
             itemCode: 'HD-01',
             itemName: 'Áo mẫu',
             unit: 'SP',
+            orderCode: 'PO-01',
             plannedQuantity: quantity,
         },
     ],
@@ -115,6 +117,9 @@ test('tổng hợp nhất quán sản lượng, kế hoạch, báo đủ và nă
     assert.equal(report.summary.totalAmount, 900);
     assert.equal(report.lines[0].actualQuantity, 90);
     assert.equal(report.items[0].targetQuantity, 200);
+    assert.equal(report.orders[0].orderCode, 'PO-01');
+    assert.equal(report.summary.periodQuantity, 90);
+    assert.equal(report.summary.cumulativeQuantity, 90);
 });
 
 test('phân loại ngoại lệ và không coi ngày khóa sổ là ngày mở', () => {
@@ -144,4 +149,91 @@ test('ẩn toàn bộ giá trị tài chính và tính so sánh kỳ trước', 
     assert.equal(Object.hasOwn(report.summary, 'totalAmount'), false);
     assert.equal(Object.hasOwn(report.lines[0], 'totalAmount'), false);
     assert.equal(Object.hasOwn(report.items[0], 'totalAmount'), false);
+});
+
+test('cộng số đầu kỳ và dữ liệu trước kỳ vào lũy kế mà không làm sai KPI trong kỳ', () => {
+    const before = makeDetail({ date: '2026-07-19', quantities: [100], secondReported: false });
+    const current = makeDetail({ date: '2026-07-20', quantities: [120, 80], secondReported: true });
+    const report = buildProductionReport([current], [makePlan('2026-07-20')], {
+        ...options,
+        prePeriodDetails: [before],
+        cumulativeDetails: [before, current],
+        trackingStartDate: '2026-07-19',
+        openingBalance: {
+            coverage: {
+                available: true,
+                cutoffDate: '2026-07-18',
+                batchCount: 1,
+                totalQuantity: 1_000,
+                exactQuantity: 1_000,
+                unallocatedQuantity: 0,
+                valuedQuantity: 1_000,
+                totalAmount: 10_000,
+                amountCoveragePercent: 100,
+            },
+            entries: [
+                {
+                    lineId: 'line-1',
+                    lineCode: 'C1',
+                    lineName: 'Chuyền 1',
+                    itemId: 'item-1',
+                    itemCode: 'HD-01',
+                    itemName: 'Áo mẫu',
+                    orderCode: 'PO-01',
+                    unit: 'SP',
+                    quantity: 1_000,
+                    unitPriceSnapshot: 10,
+                    amountSnapshot: 10_000,
+                    allocationState: 'exact',
+                },
+            ],
+        },
+    });
+
+    assert.equal(report.summary.actualQuantity, 200);
+    assert.equal(report.summary.periodQuantity, 200);
+    assert.equal(report.summary.openingQuantity, 1_100);
+    assert.equal(report.summary.cumulativeQuantity, 1_300);
+    assert.equal(report.summary.achievementPercent, 100);
+    assert.equal(report.lines[0].openingQuantity, 1_100);
+    assert.equal(report.lines[0].cumulativeQuantity, 1_300);
+    assert.equal(report.items[0].cumulativeQuantity, 1_300);
+    assert.equal(report.orders[0].cumulativeQuantity, 1_300);
+    assert.equal(report.trend[0].cumulativeQuantity, 1_300);
+    assert.equal(report.meta.dataCoverage.status, 'complete');
+});
+
+test('số đầu kỳ chưa phân bổ chỉ cộng vào tổng và chuyền, không gán sai mã hàng', () => {
+    const report = buildProductionReport([], [], {
+        ...options,
+        openingBalance: {
+            coverage: {
+                available: true,
+                cutoffDate: '2026-07-18',
+                batchCount: 1,
+                totalQuantity: 500,
+                exactQuantity: 0,
+                unallocatedQuantity: 500,
+                valuedQuantity: 0,
+                totalAmount: 0,
+                amountCoveragePercent: 0,
+            },
+            entries: [
+                {
+                    lineId: 'line-1',
+                    lineCode: 'C1',
+                    quantity: 500,
+                    unit: 'SP',
+                    allocationState: 'unallocated',
+                },
+            ],
+        },
+        cumulativeDetails: [],
+    });
+
+    assert.equal(report.summary.cumulativeQuantity, 500);
+    assert.equal(report.lines[0].unallocatedOpeningQuantity, 500);
+    assert.equal(report.items.length, 0);
+    assert.equal(report.orders.length, 0);
+    assert.equal(report.meta.dataCoverage.status, 'partial');
 });

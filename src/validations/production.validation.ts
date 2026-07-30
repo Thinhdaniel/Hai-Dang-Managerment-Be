@@ -70,6 +70,44 @@ export const createProductionItemSchema = z.object({
 
 export const updateProductionItemSchema = createProductionItemSchema.omit({ plantId: true }).partial();
 
+const productionOpeningBalanceEntrySchema = z
+    .object({
+        lineId: zObjectId('Chuyền'),
+        itemId: zObjectId('Mã hàng').nullable().optional(),
+        orderCode: z.string().trim().max(80).optional(),
+        quantity: z.number().positive().max(1_000_000_000),
+        unitPrice: z.number().min(0).max(1_000_000_000).nullable().optional(),
+    })
+    .superRefine((value, ctx) => {
+        if (!value.itemId && value.orderCode) {
+            ctx.addIssue({
+                code: 'custom',
+                message: 'Cần chọn mã hàng trước khi nhập mã đơn hàng',
+                path: ['orderCode'],
+            });
+        }
+    });
+
+export const createProductionOpeningBalanceSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    cutoffDate: productionDateSchema,
+    note: z.string().trim().min(3, 'Cần ghi rõ nguồn hoặc lý do nhập đầu kỳ').max(500),
+    entries: z
+        .array(productionOpeningBalanceEntrySchema)
+        .min(1, 'Cần ít nhất một dòng sản lượng đầu kỳ')
+        .max(200, 'Tối đa 200 dòng khi nhập thủ công'),
+});
+
+export const importProductionOpeningBalanceSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    cutoffDate: productionDateSchema,
+    note: z.string().trim().min(3, 'Cần ghi rõ nguồn file đầu kỳ').max(500),
+});
+
+export const voidProductionOpeningBalanceSchema = z.object({
+    reason: z.string().trim().min(5, 'Cần ghi rõ lý do hủy số liệu đầu kỳ').max(500),
+});
+
 export const createProductionDaySchema = z.object({
     plantId: zObjectId('Cơ sở'),
     productionDate: productionDateSchema,

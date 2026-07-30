@@ -13,6 +13,13 @@ type BuildProductionReportOptions = {
     previousTo?: string;
     previousDetails?: any[];
     previousPlans?: any[];
+    prePeriodDetails?: any[];
+    cumulativeDetails?: any[];
+    openingBalance?: {
+        coverage?: any;
+        entries?: any[];
+    };
+    trackingStartDate?: string;
     exceptionLimit?: number;
 };
 
@@ -45,6 +52,7 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
     const planByDate = new Map(plans.map((plan) => [String(plan.productionDate), plan]));
     const lineMap = new Map<string, any>();
     const itemMap = new Map<string, any>();
+    const orderMap = new Map<string, any>();
     const exceptions: any[] = [];
 
     const ensureLine = (source: any) => {
@@ -90,6 +98,34 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
         return itemMap.get(key);
     };
 
+    const ensureOrder = (source: any) => {
+        const orderCode = String(source.orderCode || '').trim();
+        const key = orderCode.toUpperCase() || '__unassigned__';
+        if (!orderMap.has(key)) {
+            orderMap.set(key, {
+                orderKey: key,
+                orderCode: orderCode || undefined,
+                activeDays: new Set<string>(),
+                lineIds: new Set<string>(),
+                itemIds: new Set<string>(),
+                itemCodes: new Set<string>(),
+                targetQuantity: 0,
+                actualQuantity: 0,
+                plannedQuantity: 0,
+                plannedActualQuantity: 0,
+                totalAmount: 0,
+            });
+        }
+        const order = orderMap.get(key);
+        if (source.lineId || source.lineCode) order.lineIds.add(String(source.lineId || source.lineCode));
+        if (source.itemId || source.itemCode) {
+            order.itemIds.add(String(source.itemId || source.itemCode));
+            if (source.itemCode) order.itemCodes.add(String(source.itemCode));
+        }
+        if (source.productionDate) order.activeDays.add(String(source.productionDate));
+        return order;
+    };
+
     allocations.forEach((allocation: any) => {
         const line = ensureLine(allocation);
         line.plannedQuantity += Number(allocation.plannedQuantity || 0);
@@ -97,6 +133,8 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
         item.plannedQuantity += Number(allocation.plannedQuantity || 0);
         item.lineIds.add(String(allocation.lineId || allocation.lineCode));
         item.activeDays.add(String(allocation.productionDate));
+        const order = ensureOrder(allocation);
+        order.plannedQuantity += Number(allocation.plannedQuantity || 0);
     });
 
     const trend = details.map((detail) => {
@@ -169,6 +207,8 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
                 item.targetQuantity += Number(slot.target || 0);
                 item.activeDays.add(String(detail.productionDate));
                 item.lineIds.add(String(line.lineId));
+                const order = ensureOrder({ ...run, lineId: line.lineId, productionDate: detail.productionDate });
+                order.targetQuantity += Number(slot.target || 0);
                 if (!slot.reported) {
                     const slotLabel =
                         detail.timeSlots?.find((itemSlot: any) => itemSlot.key === slot.key)?.label || slot.key;
@@ -196,11 +236,15 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
                 item.totalAmount += Number(entry.amount || 0);
                 item.activeDays.add(String(detail.productionDate));
                 item.lineIds.add(String(line.lineId));
+                const order = ensureOrder({ ...run, lineId: line.lineId, productionDate: detail.productionDate });
+                order.actualQuantity += quantity;
+                order.totalAmount += Number(entry.amount || 0);
                 const allocationId = String(run.planAllocationId || '');
                 if (allocationId && dayAllocationIds.has(allocationId) && allocationById.has(allocationId)) {
                     plannedActualQuantity += quantity;
                     lineAggregate.plannedActualQuantity += quantity;
                     item.plannedActualQuantity += quantity;
+                    order.plannedActualQuantity += quantity;
                 }
                 if (quantity === 0 && !String(entry.note || '').trim()) {
                     const slotLabel =
@@ -303,6 +347,28 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
             (left, right) => right.actualQuantity - left.actualQuantity || left.itemCode.localeCompare(right.itemCode)
         );
 
+    const orders = [...orderMap.values()]
+        .map((order) => ({
+            orderKey: order.orderKey,
+            orderCode: order.orderCode,
+            activeDays: order.activeDays.size,
+            lineCount: order.lineIds.size,
+            itemCount: order.itemIds.size,
+            itemCodes: [...order.itemCodes].sort(),
+            targetQuantity: round(order.targetQuantity, 1),
+            actualQuantity: round(order.actualQuantity, 1),
+            achievementPercent: percentage(order.actualQuantity, order.targetQuantity),
+            plannedQuantity: round(order.plannedQuantity, 1),
+            plannedActualQuantity: round(order.plannedActualQuantity, 1),
+            planAttainmentPercent: percentage(order.plannedActualQuantity, order.plannedQuantity),
+            ...(financialsVisible ? { totalAmount: round(order.totalAmount, 0) } : {}),
+        }))
+        .sort(
+            (left, right) =>
+                right.actualQuantity - left.actualQuantity ||
+                String(left.orderCode || '').localeCompare(String(right.orderCode || ''))
+        );
+
     const severityRank: Record<string, number> = { critical: 0, warning: 1, info: 2 };
     exceptions.sort(
         (left, right) =>
@@ -345,8 +411,291 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
         trend,
         lines,
         items,
+        orders,
         exceptions,
     };
+};
+
+const buildCarrySnapshot = (entries: any[], tracked: ReturnType<typeof buildCoreReport>, financialsVisible: boolean) => {
+    const lineMap = new Map<string, any>();
+    const itemMap = new Map<string, any>();
+    const orderMap = new Map<string, any>();
+
+    const ensureLine = (source: any) => {
+        const key = String(source.lineId || source.lineCode || 'unknown-line');
+        if (!lineMap.has(key)) {
+            lineMap.set(key, {
+                lineId: source.lineId || key,
+                lineCode: source.lineCode || 'N/A',
+                lineName: source.lineName,
+                leaderName: source.leaderName,
+                quantity: 0,
+                valuedQuantity: 0,
+                amount: 0,
+                unallocatedQuantity: 0,
+            });
+        }
+        return lineMap.get(key);
+    };
+
+    const ensureItem = (source: any) => {
+        const key = String(source.itemId || source.itemCode || 'unknown-item');
+        if (!itemMap.has(key)) {
+            itemMap.set(key, {
+                itemId: source.itemId || key,
+                itemCode: source.itemCode || 'N/A',
+                itemName: source.itemName,
+                unit: source.unit || 'SP',
+                quantity: 0,
+                valuedQuantity: 0,
+                amount: 0,
+            });
+        }
+        return itemMap.get(key);
+    };
+
+    const ensureOrder = (source: any) => {
+        const orderCode = String(source.orderCode || '').trim();
+        const key = String(source.orderKey || orderCode.toUpperCase() || '__unassigned__');
+        if (!orderMap.has(key)) {
+            orderMap.set(key, {
+                orderKey: key,
+                orderCode: orderCode || undefined,
+                itemCodes: new Set<string>(),
+                quantity: 0,
+                valuedQuantity: 0,
+                amount: 0,
+            });
+        }
+        const order = orderMap.get(key);
+        (source.itemCodes || []).forEach((code: string) => order.itemCodes.add(code));
+        if (source.itemCode) order.itemCodes.add(String(source.itemCode));
+        return order;
+    };
+
+    let baselineQuantity = 0;
+    let baselineValuedQuantity = 0;
+    let baselineAmount = 0;
+    let unallocatedQuantity = 0;
+    entries.forEach((entry) => {
+        const quantity = Number(entry.quantity || 0);
+        const hasAmount = entry.amountSnapshot !== undefined && entry.amountSnapshot !== null;
+        const amount = hasAmount ? Number(entry.amountSnapshot || 0) : 0;
+        baselineQuantity += quantity;
+        if (hasAmount) baselineValuedQuantity += quantity;
+        baselineAmount += amount;
+        if (entry.allocationState === 'unallocated' || !entry.itemId) unallocatedQuantity += quantity;
+
+        const line = ensureLine(entry);
+        line.quantity += quantity;
+        line.amount += amount;
+        if (hasAmount) line.valuedQuantity += quantity;
+        if (entry.allocationState === 'unallocated' || !entry.itemId) {
+            line.unallocatedQuantity += quantity;
+            return;
+        }
+
+        const item = ensureItem(entry);
+        item.quantity += quantity;
+        item.amount += amount;
+        if (hasAmount) item.valuedQuantity += quantity;
+        const order = ensureOrder(entry);
+        order.quantity += quantity;
+        order.amount += amount;
+        if (hasAmount) order.valuedQuantity += quantity;
+    });
+
+    tracked.lines.forEach((source: any) => {
+        const line = ensureLine(source);
+        line.quantity += Number(source.actualQuantity || 0);
+        line.valuedQuantity += Number(source.actualQuantity || 0);
+        line.amount += Number(source.totalAmount || 0);
+    });
+    tracked.items.forEach((source: any) => {
+        const item = ensureItem(source);
+        item.quantity += Number(source.actualQuantity || 0);
+        item.valuedQuantity += Number(source.actualQuantity || 0);
+        item.amount += Number(source.totalAmount || 0);
+    });
+    tracked.orders.forEach((source: any) => {
+        const order = ensureOrder(source);
+        order.quantity += Number(source.actualQuantity || 0);
+        order.valuedQuantity += Number(source.actualQuantity || 0);
+        order.amount += Number(source.totalAmount || 0);
+    });
+
+    const trackedQuantity = Number(tracked.summary.actualQuantity || 0);
+    const trackedAmount = Number(tracked.summary.totalAmount || 0);
+    const summaryQuantity = baselineQuantity + trackedQuantity;
+    const summaryValuedQuantity = baselineValuedQuantity + trackedQuantity;
+    return {
+        summary: {
+            quantity: round(summaryQuantity, 1),
+            baselineQuantity: round(baselineQuantity, 1),
+            trackedQuantity: round(trackedQuantity, 1),
+            valuedQuantity: round(summaryValuedQuantity, 1),
+            unpricedQuantity: round(Math.max(0, summaryQuantity - summaryValuedQuantity), 1),
+            unallocatedQuantity: round(unallocatedQuantity, 1),
+            ...(financialsVisible ? { amount: round(baselineAmount + trackedAmount, 0) } : {}),
+        },
+        lines: lineMap,
+        items: itemMap,
+        orders: orderMap,
+    };
+};
+
+const enrichLines = (current: any[], opening: any, cumulative: any, financialsVisible: boolean) => {
+    const currentById = new Map(current.map((row) => [String(row.lineId), row]));
+    const keys = new Set<string>([
+        ...currentById.keys(),
+        ...opening.lines.keys(),
+        ...cumulative.lines.keys(),
+    ]);
+    return [...keys]
+        .map((key) => {
+            const period = currentById.get(key);
+            const openingRow = opening.lines.get(key);
+            const cumulativeRow = cumulative.lines.get(key);
+            const identity = period || cumulativeRow || openingRow;
+            const periodQuantity = Number(period?.actualQuantity || 0);
+            return {
+                lineId: identity?.lineId || key,
+                lineCode: identity?.lineCode || 'N/A',
+                lineName: identity?.lineName,
+                leaderName: identity?.leaderName,
+                activeDays: Number(period?.activeDays || 0),
+                averageWorkers: Number(period?.averageWorkers || 0),
+                targetQuantity: Number(period?.targetQuantity || 0),
+                actualQuantity: periodQuantity,
+                periodQuantity,
+                openingQuantity: round(Number(openingRow?.quantity || 0), 1),
+                cumulativeQuantity: round(Number(cumulativeRow?.quantity || periodQuantity), 1),
+                achievementPercent: Number(period?.achievementPercent || 0),
+                plannedQuantity: Number(period?.plannedQuantity || 0),
+                plannedActualQuantity: Number(period?.plannedActualQuantity || 0),
+                planAttainmentPercent: Number(period?.planAttainmentPercent || 0),
+                reportingRate: Number(period?.reportingRate || 0),
+                outputPerWorkerDay: Number(period?.outputPerWorkerDay || 0),
+                underTargetDays: Number(period?.underTargetDays || 0),
+                unallocatedOpeningQuantity: round(Number(openingRow?.unallocatedQuantity || 0), 1),
+                openingAmountComplete:
+                    Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
+                ...(financialsVisible
+                    ? {
+                          totalAmount: Number(period?.totalAmount || 0),
+                          periodAmount: Number(period?.totalAmount || 0),
+                          openingAmount: round(Number(openingRow?.amount || 0), 0),
+                          cumulativeAmount: round(Number(cumulativeRow?.amount || period?.totalAmount || 0), 0),
+                      }
+                    : {}),
+            };
+        })
+        .sort(
+            (left, right) =>
+                right.cumulativeQuantity - left.cumulativeQuantity || left.lineCode.localeCompare(right.lineCode)
+        );
+};
+
+const enrichItems = (current: any[], opening: any, cumulative: any, financialsVisible: boolean) => {
+    const currentById = new Map(current.map((row) => [String(row.itemId), row]));
+    const keys = new Set<string>([
+        ...currentById.keys(),
+        ...opening.items.keys(),
+        ...cumulative.items.keys(),
+    ]);
+    return [...keys]
+        .map((key) => {
+            const period = currentById.get(key);
+            const openingRow = opening.items.get(key);
+            const cumulativeRow = cumulative.items.get(key);
+            const identity = period || cumulativeRow || openingRow;
+            const periodQuantity = Number(period?.actualQuantity || 0);
+            return {
+                itemId: identity?.itemId || key,
+                itemCode: identity?.itemCode || 'N/A',
+                itemName: identity?.itemName,
+                unit: identity?.unit || 'SP',
+                activeDays: Number(period?.activeDays || 0),
+                lineCount: Number(period?.lineCount || 0),
+                targetQuantity: Number(period?.targetQuantity || 0),
+                actualQuantity: periodQuantity,
+                periodQuantity,
+                openingQuantity: round(Number(openingRow?.quantity || 0), 1),
+                cumulativeQuantity: round(Number(cumulativeRow?.quantity || periodQuantity), 1),
+                achievementPercent: Number(period?.achievementPercent || 0),
+                plannedQuantity: Number(period?.plannedQuantity || 0),
+                plannedActualQuantity: Number(period?.plannedActualQuantity || 0),
+                planAttainmentPercent: Number(period?.planAttainmentPercent || 0),
+                openingAmountComplete:
+                    Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
+                ...(financialsVisible
+                    ? {
+                          totalAmount: Number(period?.totalAmount || 0),
+                          periodAmount: Number(period?.totalAmount || 0),
+                          openingAmount: round(Number(openingRow?.amount || 0), 0),
+                          cumulativeAmount: round(Number(cumulativeRow?.amount || period?.totalAmount || 0), 0),
+                      }
+                    : {}),
+            };
+        })
+        .sort(
+            (left, right) =>
+                right.cumulativeQuantity - left.cumulativeQuantity || left.itemCode.localeCompare(right.itemCode)
+        );
+};
+
+const enrichOrders = (current: any[], opening: any, cumulative: any, financialsVisible: boolean) => {
+    const currentById = new Map(current.map((row) => [String(row.orderKey), row]));
+    const keys = new Set<string>([
+        ...currentById.keys(),
+        ...opening.orders.keys(),
+        ...cumulative.orders.keys(),
+    ]);
+    return [...keys]
+        .map((key) => {
+            const period = currentById.get(key);
+            const openingRow = opening.orders.get(key);
+            const cumulativeRow = cumulative.orders.get(key);
+            const identity = period || cumulativeRow || openingRow;
+            const periodQuantity = Number(period?.actualQuantity || 0);
+            const itemCodes = new Set<string>([
+                ...(period?.itemCodes || []),
+                ...(openingRow?.itemCodes || []),
+                ...(cumulativeRow?.itemCodes || []),
+            ]);
+            return {
+                orderKey: identity?.orderKey || key,
+                orderCode: identity?.orderCode,
+                itemCodes: [...itemCodes].sort(),
+                activeDays: Number(period?.activeDays || 0),
+                lineCount: Number(period?.lineCount || 0),
+                itemCount: Math.max(Number(period?.itemCount || 0), itemCodes.size),
+                targetQuantity: Number(period?.targetQuantity || 0),
+                actualQuantity: periodQuantity,
+                periodQuantity,
+                openingQuantity: round(Number(openingRow?.quantity || 0), 1),
+                cumulativeQuantity: round(Number(cumulativeRow?.quantity || periodQuantity), 1),
+                achievementPercent: Number(period?.achievementPercent || 0),
+                plannedQuantity: Number(period?.plannedQuantity || 0),
+                plannedActualQuantity: Number(period?.plannedActualQuantity || 0),
+                planAttainmentPercent: Number(period?.planAttainmentPercent || 0),
+                openingAmountComplete:
+                    Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
+                ...(financialsVisible
+                    ? {
+                          totalAmount: Number(period?.totalAmount || 0),
+                          periodAmount: Number(period?.totalAmount || 0),
+                          openingAmount: round(Number(openingRow?.amount || 0), 0),
+                          cumulativeAmount: round(Number(cumulativeRow?.amount || period?.totalAmount || 0), 0),
+                      }
+                    : {}),
+            };
+        })
+        .sort(
+            (left, right) =>
+                right.cumulativeQuantity - left.cumulativeQuantity ||
+                String(left.orderCode || '').localeCompare(String(right.orderCode || ''))
+        );
 };
 
 export const buildProductionReport = (details: any[], plans: any[], options: BuildProductionReportOptions) => {
@@ -356,6 +705,61 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
         options.previousPlans || [],
         options.financialsVisible
     );
+    const coverage = options.openingBalance?.coverage || {};
+    const cutoffDate = coverage.cutoffDate ? String(coverage.cutoffDate) : undefined;
+    const cumulativeAvailable = !cutoffDate || options.to >= cutoffDate;
+    const openingEntries = cumulativeAvailable ? options.openingBalance?.entries || [] : [];
+    const prePeriod = buildCoreReport(options.prePeriodDetails || [], [], options.financialsVisible);
+    const cumulativeTracked = buildCoreReport(
+        options.cumulativeDetails || details,
+        [],
+        options.financialsVisible
+    );
+    const openingSnapshot = buildCarrySnapshot(openingEntries, prePeriod, options.financialsVisible);
+    const cumulativeSnapshot = buildCarrySnapshot(openingEntries, cumulativeTracked, options.financialsVisible);
+    const lines = enrichLines(current.lines, openingSnapshot, cumulativeSnapshot, options.financialsVisible);
+    const items = enrichItems(current.items, openingSnapshot, cumulativeSnapshot, options.financialsVisible);
+    const orders = enrichOrders(current.orders, openingSnapshot, cumulativeSnapshot, options.financialsVisible);
+    let runningQuantity = Number(openingSnapshot.summary.quantity || 0);
+    let runningAmount = Number(openingSnapshot.summary.amount || 0);
+    const trend = current.trend.map((point: any) => {
+        runningQuantity += Number(point.actualQuantity || 0);
+        runningAmount += Number(point.totalAmount || 0);
+        return {
+            ...point,
+            periodQuantity: Number(point.actualQuantity || 0),
+            cumulativeQuantity: round(runningQuantity, 1),
+            ...(options.financialsVisible ? { cumulativeAmount: round(runningAmount, 0) } : {}),
+        };
+    });
+    const cumulativeAmountComplete = Number(cumulativeSnapshot.summary.unpricedQuantity || 0) <= 0;
+    const summary = {
+        ...current.summary,
+        periodQuantity: Number(current.summary.actualQuantity || 0),
+        carryInQuantity: Number(coverage.totalQuantity || 0),
+        trackedBeforePeriodQuantity: Number(prePeriod.summary.actualQuantity || 0),
+        openingQuantity: Number(openingSnapshot.summary.quantity || 0),
+        trackedToDateQuantity: Number(cumulativeTracked.summary.actualQuantity || 0),
+        cumulativeQuantity: cumulativeAvailable ? Number(cumulativeSnapshot.summary.quantity || 0) : undefined,
+        unallocatedOpeningQuantity: Number(coverage.unallocatedQuantity || 0),
+        unpricedOpeningQuantity: Math.max(
+            0,
+            Number(coverage.totalQuantity || 0) - Number(coverage.valuedQuantity || 0)
+        ),
+        cumulativeLineCount: lines.filter((line) => line.cumulativeQuantity > 0).length,
+        cumulativeItemCount: items.filter((item) => item.cumulativeQuantity > 0).length,
+        orderCount: orders.length,
+        ...(options.financialsVisible
+            ? {
+                  periodAmount: Number(current.summary.totalAmount || 0),
+                  openingAmount: Number(openingSnapshot.summary.amount || 0),
+                  cumulativeAmount: cumulativeAvailable
+                      ? Number(cumulativeSnapshot.summary.amount || 0)
+                      : undefined,
+                  cumulativeAmountComplete,
+              }
+            : {}),
+    };
     const previousAvailable = previous.summary.dayCount > 0;
     const bestLine = current.lines
         .filter((line) => line.targetQuantity > 0)
@@ -377,8 +781,31 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
             scope: options.scope,
             generatedAt: options.generatedAt || new Date().toISOString(),
             financialsVisible: options.financialsVisible,
+            dataCoverage: {
+                status: !coverage.available
+                    ? 'missing'
+                    : Number(coverage.unallocatedQuantity || 0) > 0 ||
+                        Number(coverage.amountCoveragePercent ?? 100) < 100
+                      ? 'partial'
+                      : 'complete',
+                openingBalanceAvailable: Boolean(coverage.available),
+                cutoffDate,
+                trackingStartDate: options.trackingStartDate,
+                batchCount: Number(coverage.batchCount || 0),
+                periodDetailComplete: !cutoffDate || options.from > cutoffDate,
+                cumulativeAvailable,
+                amountCoveragePercent: Number(coverage.amountCoveragePercent ?? 100),
+                unallocatedQuantity: Number(coverage.unallocatedQuantity || 0),
+                unpricedQuantity: Math.max(
+                    0,
+                    Number(coverage.totalQuantity || 0) - Number(coverage.valuedQuantity || 0)
+                ),
+                lastConfirmedAt: coverage.lastConfirmedAt
+                    ? new Date(coverage.lastConfirmedAt).toISOString()
+                    : undefined,
+            },
         },
-        summary: current.summary,
+        summary,
         comparison: {
             available: previousAvailable,
             from: options.previousFrom,
@@ -426,9 +853,10 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
                 ? { itemId: topItem.itemId, itemCode: topItem.itemCode, actualQuantity: topItem.actualQuantity }
                 : undefined,
         },
-        trend: current.trend,
-        lines: current.lines,
-        items: current.items,
+        trend,
+        lines,
+        items,
+        orders,
         exceptionSummary: {
             total: current.exceptions.length,
             critical: current.exceptions.filter((item) => item.severity === 'critical').length,

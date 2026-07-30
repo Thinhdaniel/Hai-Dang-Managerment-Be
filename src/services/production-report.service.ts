@@ -8,6 +8,7 @@ import type { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
 import { buildProductionDayDetail } from './production.helpers';
+import { loadConfirmedProductionOpeningBalances } from './production-opening-balance.service';
 import { buildProductionReportWorkbook } from './production-report-export.service';
 import { buildProductionReport } from './production-report.helpers';
 import { sendSuccess } from './service.helpers';
@@ -71,14 +72,18 @@ const loadDetails = async (days: any[]) => {
 const loadReport = async (req: Request, exceptionLimit = 200) => {
     const [{ from, to, previousFrom, previousTo }, plant] = await Promise.all([resolveRange(req), resolvePlant(req)]);
     const scope = req.query.scope === 'locked' ? 'locked' : 'all';
-    const dateFloor = previousFrom;
+    const openingBalance = await loadConfirmedProductionOpeningBalances(plant.id);
+    const cumulativeFloor = openingBalance.coverage.cutoffDate
+        ? addDays(String(openingBalance.coverage.cutoffDate), 1)
+        : previousFrom;
+    const dateFloor = cumulativeFloor < previousFrom ? cumulativeFloor : previousFrom;
     const dayFilter: Record<string, any> = {
         plantId: plant.id,
         productionDate: { $gte: dateFloor, $lte: to },
     };
     if (scope === 'locked') dayFilter.status = 'locked';
 
-    const [days, plans] = await Promise.all([
+    const [days, plans, firstTrackedDay] = await Promise.all([
         ProductionDay.find(dayFilter).sort({ productionDate: 1 }).lean(),
         ProductionPlan.find({
             plantId: plant.id,
@@ -86,6 +91,13 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
             status: 'published',
         })
             .sort({ productionDate: 1 })
+            .lean(),
+        ProductionDay.findOne({
+            plantId: plant.id,
+            ...(scope === 'locked' ? { status: 'locked' } : {}),
+        })
+            .sort({ productionDate: 1 })
+            .select('productionDate')
             .lean(),
     ]);
     const details = await loadDetails(days);
@@ -97,6 +109,15 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
     const previousPlans = plans.filter(
         (plan) => plan.productionDate >= previousFrom && plan.productionDate <= previousTo
     );
+    const cutoffDate = openingBalance.coverage.cutoffDate
+        ? String(openingBalance.coverage.cutoffDate)
+        : undefined;
+    const prePeriodDetails = cutoffDate
+        ? details.filter((day) => day.productionDate > cutoffDate && day.productionDate < from)
+        : [];
+    const cumulativeDetails = cutoffDate
+        ? details.filter((day) => day.productionDate > cutoffDate && day.productionDate <= to)
+        : currentDetails;
     const financialsVisible = [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER].includes(req.role as USER_ROLE);
 
     return buildProductionReport(currentDetails, currentPlans, {
@@ -111,6 +132,10 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
         previousTo,
         previousDetails,
         previousPlans,
+        prePeriodDetails,
+        cumulativeDetails,
+        openingBalance,
+        trackingStartDate: (firstTrackedDay as any)?.productionDate,
         exceptionLimit,
     });
 };
@@ -122,6 +147,8 @@ export const getProductionReport = async (req: Request, res: Response) => {
         report,
         report.summary.dayCount
             ? `Đã tổng hợp ${report.summary.dayCount} ngày sản xuất`
+            : Number(report.summary.cumulativeQuantity || 0) > 0
+              ? 'Đã tải lũy kế sản lượng; kỳ lọc chưa có dữ liệu theo giờ'
             : 'Chưa có dữ liệu sản xuất trong khoảng đã chọn'
     );
 };

@@ -1,8 +1,10 @@
 import { ROLE_GROUPS } from '@/constant/permissions';
 import { authenticate } from '@/middlewares/authenticationMiddleware';
 import { authorize } from '@/middlewares/authorizationMiddleware';
+import { excelUpload } from '@/middlewares/multerMiddleware';
 import { validateObjectIdParams } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
+import * as productionOpeningBalanceService from '@/services/production-opening-balance.service';
 import * as productionPlanService from '@/services/production-plan.service';
 import * as productionReportService from '@/services/production-report.service';
 import * as productionService from '@/services/production.service';
@@ -15,8 +17,10 @@ import {
     createProductionDaySchema,
     createProductionItemSchema,
     createProductionLineSchema,
+    createProductionOpeningBalanceSchema,
     createProductionPlanSchema,
     createProductionRunSchema,
+    importProductionOpeningBalanceSchema,
     publishProductionPlanSchema,
     reopenProductionPlanSchema,
     updateProductionItemSchema,
@@ -25,6 +29,7 @@ import {
     updateProductionTimeSlotsSchema,
     upsertHourlyProductionEntrySchema,
     transitionProductionDaySchema,
+    voidProductionOpeningBalanceSchema,
 } from '@/validations/production.validation';
 import { Router } from 'express';
 
@@ -63,6 +68,44 @@ router.patch(
     validateObjectIdParams('id'),
     validator(updateProductionItemSchema),
     asyncHandler(productionService.updateProductionItem)
+);
+
+router.get(
+    '/opening-balances',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionOpeningBalanceService.listProductionOpeningBalances)
+);
+router.get(
+    '/opening-balances/template',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionOpeningBalanceService.downloadProductionOpeningBalanceTemplate)
+);
+router.post(
+    '/opening-balances/manual',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(createProductionOpeningBalanceSchema),
+    asyncHandler(productionOpeningBalanceService.createManualProductionOpeningBalance)
+);
+router.post(
+    '/opening-balances/import/preview',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    excelUpload.single('file'),
+    validator(importProductionOpeningBalanceSchema),
+    asyncHandler(productionOpeningBalanceService.previewProductionOpeningBalanceImport)
+);
+router.post(
+    '/opening-balances/import/confirm',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    excelUpload.single('file'),
+    validator(importProductionOpeningBalanceSchema),
+    asyncHandler(productionOpeningBalanceService.confirmProductionOpeningBalanceImport)
+);
+router.post(
+    '/opening-balances/:id/void',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(voidProductionOpeningBalanceSchema),
+    asyncHandler(productionOpeningBalanceService.voidProductionOpeningBalance)
 );
 
 router.get(
