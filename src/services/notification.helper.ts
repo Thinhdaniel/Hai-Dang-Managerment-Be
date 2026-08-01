@@ -5,6 +5,7 @@ import Notification from '@/models/Notification';
 import { ROLE_GROUPS } from '@/constant/permissions';
 import { sendWebPushToUser } from '@/services/web-push.service';
 import { sendTelegramToUser } from '@/services/telegram.service';
+import type { WebPushSendOptions } from '@/services/web-push.service';
 
 /**
  * Get actor display name by userId
@@ -31,6 +32,13 @@ export type NotificationDeliverySummary = {
     webPushSent: number;
     telegramSent: number;
     failedChannels: number;
+};
+
+type UpsertedNotifyOptions = {
+    dedupeKey: string;
+    deliveryTag: string;
+    webPush?: WebPushSendOptions;
+    telegramMode?: 'off' | 'fallback' | 'always';
 };
 
 /**
@@ -155,6 +163,71 @@ export const notifyUserTracked = async (
         summary.failedChannels = webPush.failed + telegram.failed;
     } catch (error) {
         console.error('[Notification] Error notifying tracked user:', error);
+        summary.failedChannels += 1;
+    }
+
+    return summary;
+};
+
+/**
+ * Thông báo lặp theo một luồng nghiệp vụ: cập nhật cùng document thay vì
+ * tăng badge và tạo hàng loạt bản ghi mới sau mỗi chu kỳ.
+ */
+export const notifyUserUpserted = async (
+    userId: string,
+    data: any,
+    options: UpsertedNotifyOptions
+): Promise<NotificationDeliverySummary> => {
+    const summary: NotificationDeliverySummary = {
+        inAppCreated: 0,
+        webPushSent: 0,
+        telegramSent: 0,
+        failedChannels: 0,
+    };
+
+    try {
+        const existing = await Notification.findOne({ userId, dedupeKey: options.dedupeKey }).select('_id').lean();
+        const notification = await Notification.findOneAndUpdate(
+            { userId, dedupeKey: options.dedupeKey },
+            {
+                $set: {
+                    title: data.title,
+                    message: data.message,
+                    type: data.type || 'info',
+                    actionType: data.actionType || 'system',
+                    actionId: data.actionId,
+                    actionData: data.actionData,
+                    deliveryTag: options.deliveryTag,
+                    isRead: false,
+                    readAt: null,
+                    // Đưa nhắc việc đang còn hiệu lực trở lại đầu danh sách và
+                    // gia hạn TTL, nhưng vẫn chỉ giữ một document cho cả ngày.
+                    createdAt: new Date(),
+                },
+                $setOnInsert: { userId, dedupeKey: options.dedupeKey },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+        summary.inAppCreated = existing ? 0 : 1;
+        const payload = notification.toObject();
+        emitToUser(userId, 'notify:new', payload);
+
+        const webPush = await sendWebPushToUser(userId, payload, {
+            ...options.webPush,
+            tag: options.webPush?.tag || options.deliveryTag,
+        });
+        summary.webPushSent = webPush.sent;
+        summary.failedChannels += webPush.failed;
+
+        const shouldSendTelegram =
+            options.telegramMode === 'always' || (options.telegramMode === 'fallback' && webPush.sent === 0);
+        if (shouldSendTelegram) {
+            const telegram = await sendTelegramToUser(userId, payload);
+            summary.telegramSent = telegram.sent;
+            summary.failedChannels += telegram.failed;
+        }
+    } catch (error) {
+        console.error('[Notification] Error upserting notification:', error);
         summary.failedChannels += 1;
     }
 

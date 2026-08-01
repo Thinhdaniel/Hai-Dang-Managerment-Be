@@ -30,6 +30,13 @@ type PushSendSummary = {
     failed: number;
 };
 
+export type WebPushSendOptions = {
+    ttlSeconds?: number;
+    urgency?: 'very-low' | 'low' | 'normal' | 'high';
+    tag?: string;
+    url?: string;
+};
+
 const DETAILED_PUSH_TRUST_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 const configureWebPush = () => {
@@ -60,6 +67,16 @@ export const buildActionUrl = (notification: Pick<INotification, 'actionType' | 
     if (actionType === 'floor_map') {
         return `/assets/floor-map?reality=1${actionId ? `&plantId=${encodeURIComponent(actionId)}` : ''}`;
     }
+    if (actionType === 'production') {
+        const data = notification.actionData || {};
+        const params = new URLSearchParams();
+        if (data.plantId) params.set('plantId', String(data.plantId));
+        if (data.productionDate) params.set('date', String(data.productionDate));
+        if (data.slotKey) params.set('slot', String(data.slotKey));
+        if (data.focus) params.set('focus', String(data.focus));
+        if (notification.actionId) params.set('dayId', String(notification.actionId));
+        return `/production${params.size ? `?${params.toString()}` : ''}`;
+    }
 
     return '/dashboard';
 };
@@ -88,9 +105,17 @@ const isDetailedPushAllowed = (subscription: any) => {
     return Date.now() - new Date(confirmedAt).getTime() <= DETAILED_PUSH_TRUST_WINDOW_MS;
 };
 
-const getNotificationPayload = (notification: INotification | any, unreadCount: number, detailed: boolean) => {
+const getNotificationPayload = (
+    notification: INotification | any,
+    unreadCount: number,
+    detailed: boolean,
+    options: WebPushSendOptions = {}
+) => {
     const notificationId = String(notification._id ?? '');
-    const tag = `${notification.actionType ?? 'system'}:${notification.actionId ?? notification._id ?? Date.now()}`;
+    const tag =
+        options.tag ||
+        notification.deliveryTag ||
+        `${notification.actionType ?? 'system'}:${notification.actionId ?? notification._id ?? Date.now()}`;
 
     if (!detailed) {
         return JSON.stringify({
@@ -99,7 +124,7 @@ const getNotificationPayload = (notification: INotification | any, unreadCount: 
             body: 'Bạn có thông báo mới cần xem trong hệ thống.',
             type: notification.type ?? 'info',
             actionType: 'system',
-            url: '/dashboard',
+            url: options.url || '/dashboard',
             tag,
             createdAt: notification.createdAt ?? new Date().toISOString(),
             unreadCount,
@@ -114,7 +139,7 @@ const getNotificationPayload = (notification: INotification | any, unreadCount: 
         type: notification.type ?? 'info',
         actionType: notification.actionType ?? 'system',
         actionId: notification.actionId,
-        url: buildActionUrl(notification),
+        url: options.url || buildActionUrl(notification),
         tag,
         createdAt: notification.createdAt ?? new Date().toISOString(),
         unreadCount,
@@ -462,7 +487,8 @@ export const sendTestNotification = async (req: Request, res: Response, _next: N
 
 export const sendWebPushToUser = async (
     userId: string,
-    notification: INotification | any
+    notification: INotification | any,
+    options: WebPushSendOptions = {}
 ): Promise<PushSendSummary> => {
     if (!isConfigured) {
         return { enabled: false, attempted: 0, sent: 0, failed: 0 };
@@ -476,12 +502,14 @@ export const sendWebPushToUser = async (
     await Promise.all(
         subscriptions.map(async (subscription) => {
             const detailed = isDetailedPushAllowed(subscription);
-            const payload = getNotificationPayload(notification, unreadCount, detailed);
+            const payload = getNotificationPayload(notification, unreadCount, detailed, options);
             const attemptedAt = new Date();
             try {
                 await webPush.sendNotification(toWebPushSubscription(subscription), payload, {
-                    TTL: 60 * 60 * 24,
-                    urgency: notification.type === 'error' || notification.type === 'warning' ? 'high' : 'normal',
+                    TTL: Math.max(60, Math.min(60 * 60 * 24, Number(options.ttlSeconds ?? 60 * 60 * 24))),
+                    urgency:
+                        options.urgency ||
+                        (notification.type === 'error' || notification.type === 'warning' ? 'high' : 'normal'),
                 });
                 sent += 1;
                 const completedAt = new Date();

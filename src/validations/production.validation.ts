@@ -122,6 +122,40 @@ export const transitionProductionDaySchema = z.object({
     note: z.string().trim().max(500).optional(),
 });
 
+export const updateProductionReminderSettingsSchema = z
+    .object({
+        plantId: zObjectId('Cơ sở'),
+        enabled: z.boolean(),
+        graceMinutes: z.number().int().min(0).max(15),
+        repeatMinutes: z.number().int().min(5).max(30),
+        escalationMinutes: z.number().int().min(5).max(120),
+        escalateToManagers: z.boolean(),
+        telegramFallback: z.boolean(),
+        underTargetEnabled: z.boolean(),
+        underTargetThreshold: z.number().int().min(10).max(100),
+        additionalRecipientIds: z.array(zObjectId('Người nhận')).max(50).default([]),
+    })
+    .superRefine((value, ctx) => {
+        if (value.escalationMinutes < value.repeatMinutes) {
+            ctx.addIssue({
+                code: 'custom',
+                message: 'Thời gian báo quản lý phải sau ít nhất một chu kỳ nhắc',
+                path: ['escalationMinutes'],
+            });
+        }
+        if (new Set(value.additionalRecipientIds).size !== value.additionalRecipientIds.length) {
+            ctx.addIssue({
+                code: 'custom',
+                message: 'Danh sách người nhận đang bị trùng',
+                path: ['additionalRecipientIds'],
+            });
+        }
+    });
+
+export const testProductionReminderSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+});
+
 export const addProductionDayLineSchema = z.object({
     lineId: zObjectId('Chuyền'),
 });

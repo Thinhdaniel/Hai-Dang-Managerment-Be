@@ -6,6 +6,7 @@ import { validateObjectIdParams } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import * as productionOpeningBalanceService from '@/services/production-opening-balance.service';
 import * as productionPlanService from '@/services/production-plan.service';
+import * as productionReminderService from '@/services/production-reminder.service';
 import * as productionReportService from '@/services/production-report.service';
 import * as productionService from '@/services/production.service';
 import asyncHandler from '@/utils/asyncHandler';
@@ -29,6 +30,8 @@ import {
     updateProductionTimeSlotsSchema,
     upsertHourlyProductionEntrySchema,
     transitionProductionDaySchema,
+    testProductionReminderSchema,
+    updateProductionReminderSettingsSchema,
     voidProductionOpeningBalanceSchema,
 } from '@/validations/production.validation';
 import { Router } from 'express';
@@ -161,6 +164,23 @@ router.post(
 
 router.get('/monitor', authorize(...ROLE_GROUPS.MANAGEMENT), asyncHandler(productionService.getProductionMonitor));
 router.get('/board', authorize(...ROLE_GROUPS.MANAGEMENT), asyncHandler(productionService.getProductionBoard));
+router.get('/reminders/status', asyncHandler(productionReminderService.getProductionReminderStatus));
+router.post(
+    '/reminders/test',
+    validator(testProductionReminderSchema),
+    asyncHandler(productionReminderService.sendProductionReminderTest)
+);
+router.get(
+    '/reminders/settings',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionReminderService.getProductionReminderSettings)
+);
+router.put(
+    '/reminders/settings',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(updateProductionReminderSettingsSchema),
+    asyncHandler(productionReminderService.updateProductionReminderSettings)
+);
 router.get('/days/lookup', asyncHandler(productionService.lookupProductionDay));
 router.get('/days', asyncHandler(productionService.listProductionDays));
 router.post('/days', validator(createProductionDaySchema), asyncHandler(productionService.createProductionDay));

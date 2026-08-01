@@ -6,6 +6,7 @@ import customResponse from '@/utils/response';
 import { StatusCodes } from 'http-status-codes';
 import { evaluateAllRealityOperations } from '@/services/reality-operations.service';
 import { ensureLatestExecutiveBriefings } from '@/services/executive-briefing.service';
+import { evaluateProductionReminders } from '@/services/production-reminder.service';
 import type { BriefingPeriodType } from '@/types/executiveBriefing';
 
 const router = Router();
@@ -76,6 +77,34 @@ router.post(
         );
     })
 );
+
+const runProductionReminders = asyncHandler(async (req, res) => {
+    const secret = req.headers['x-internal-cron-secret'] || (req.query.secret as string | undefined);
+    if (!assertInternalSecret(secret)) {
+        return res.status(StatusCodes.UNAUTHORIZED).json(
+            customResponse({
+                data: null,
+                message: 'Internal cron secret khong hop le',
+                status: StatusCodes.UNAUTHORIZED,
+                success: false,
+            })
+        );
+    }
+    const result = await evaluateProductionReminders('internal');
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: result,
+            message: 'Da kiem tra nhac nhap san luong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+});
+
+// POST + header là cách ưu tiên. GET + query secret dành cho monitor miễn phí
+// không hỗ trợ custom header; chỉ dùng qua HTTPS và phải xoay secret nếu URL lộ.
+router.post('/production-reminders', runProductionReminders);
+router.get('/production-reminders', runProductionReminders);
 
 router.post(
     '/reality-operations',

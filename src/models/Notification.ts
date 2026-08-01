@@ -16,6 +16,7 @@ export type NotificationActionType =
     | 'digest'
     | 'briefing'
     | 'floor_map'
+    | 'production'
     | 'system';
 
 export interface INotification {
@@ -26,6 +27,9 @@ export interface INotification {
     type: NotificationType;
     actionType: NotificationActionType;
     actionId?: string;
+    actionData?: Record<string, unknown>;
+    dedupeKey?: string;
+    deliveryTag?: string;
     isRead: boolean;
     readAt?: Date;
     createdAt: Date;
@@ -63,11 +67,15 @@ const NotificationSchema = new mongoose.Schema<INotification>(
                 'digest',
                 'briefing',
                 'floor_map',
+                'production',
                 'system',
             ],
             default: 'system',
         },
         actionId: { type: String },
+        actionData: { type: mongoose.Schema.Types.Mixed },
+        dedupeKey: { type: String, trim: true, maxlength: 220 },
+        deliveryTag: { type: String, trim: true, maxlength: 220 },
         isRead: { type: Boolean, default: false },
         readAt: { type: Date },
     },
@@ -79,6 +87,14 @@ const NotificationSchema = new mongoose.Schema<INotification>(
 
 NotificationSchema.index({ userId: 1, createdAt: -1 });
 NotificationSchema.index({ isRead: 1 });
+NotificationSchema.index(
+    { userId: 1, dedupeKey: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { dedupeKey: { $type: 'string' } },
+        name: 'notification_user_dedupe_key',
+    }
+);
 // TTL: Mongo tự xoá thông báo sau 90 ngày để collection không phình vô hạn
 NotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 
