@@ -154,6 +154,7 @@ export const updateProductionReminderSettingsSchema = z
 
 export const testProductionReminderSchema = z.object({
     plantId: zObjectId('Cơ sở'),
+    recipientId: zObjectId('Người nhận').optional(),
 });
 
 export const addProductionDayLineSchema = z.object({

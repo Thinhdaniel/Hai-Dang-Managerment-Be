@@ -2,6 +2,7 @@ import { CronJob } from 'cron';
 import mongoose from 'mongoose';
 import type { Request, Response } from 'express';
 import { USER_ROLE } from '@/constant/allowedRoles';
+import { ROLE_GROUPS } from '@/constant/permissions';
 import { BadRequestError, NotFoundError, UnAuthorizedError } from '@/errors/customError';
 import Plant from '@/models/Plant';
 import ProductionDay from '@/models/ProductionDay';
@@ -630,22 +631,63 @@ export const updateProductionReminderSettings = async (req: Request, res: Respon
 export const sendProductionReminderTest = async (req: Request, res: Response) => {
     const plant = await resolvePlant(req, req.body?.plantId);
     if (!req.userId) throw new UnAuthorizedError('Phiên đăng nhập không hợp lệ');
+    const requesterId = String(req.userId);
+    const recipientId = String(req.body?.recipientId || requesterId);
+    const targetsAnotherAccount = recipientId !== requesterId;
+    const canTestOtherAccount = (ROLE_GROUPS.MANAGEMENT as readonly string[]).includes(String(req.role));
+
+    if (targetsAnotherAccount && !canTestOtherAccount) {
+        throw new UnAuthorizedError('Bạn không có quyền gửi thử tới tài khoản khác');
+    }
+
+    const recipient: any = await User.findOne({
+        _id: recipientId,
+        ...(targetsAnotherAccount ? { plantId: plant.id } : {}),
+        isDeleted: { $ne: true },
+        isActive: true,
+        status: { $ne: false },
+    })
+        .select('fullname username email role plantId telegramChatId telegramDisabledAt')
+        .lean();
+    if (!recipient) throw new NotFoundError('Không tìm thấy tài khoản nhận thông báo thử');
+
+    if (
+        targetsAnotherAccount &&
+        ![USER_ROLE.LINE_LEADER, USER_ROLE.STAFF, USER_ROLE.MANAGER].includes(recipient.role as USER_ROLE)
+    ) {
+        throw new BadRequestError('Tài khoản này không thuộc nhóm nhận nhắc sản lượng');
+    }
+
+    const recipientName = String(recipient.fullname || recipient.username || recipient.email || 'người nhận');
     const productionDate = getProductionLocalDate();
     const result = await notifyUserUpserted(
-        String(req.userId),
+        recipientId,
         {
             type: 'warning',
             actionType: 'production',
             actionData: { plantId: plant.id, productionDate, focus: 'missing' },
             title: 'Thử nhắc nhập sản lượng',
-            message: 'Thiết bị này đã sẵn sàng nhận nhắc theo khung giờ.',
+            message: `Thông báo thử cho ${recipientName}. Chạm để mở màn hình nhập sản lượng.`,
         },
         {
-            dedupeKey: `production-test:${req.userId}`,
-            deliveryTag: `production-test:${req.userId}`,
+            dedupeKey: `production-test:${recipientId}`,
+            deliveryTag: `production-test:${recipientId}`,
             webPush: { ttlSeconds: 10 * 60, urgency: 'high' },
             telegramMode: 'fallback',
         }
     );
-    return sendSuccess(res, result, 'Đã gửi thông báo nhắc thử nghiệm');
+    const [readiness] = await deliveryReadiness([recipient]);
+    return sendSuccess(
+        res,
+        {
+            ...result,
+            recipient: readiness,
+            channel: {
+                pushDeviceCount: readiness?.pushDeviceCount || 0,
+                telegramLinked: Boolean(readiness?.telegramLinked),
+                ready: Boolean((readiness?.pushDeviceCount || 0) > 0 || readiness?.telegramLinked),
+            },
+        },
+        `Đã kiểm tra kênh nhận của ${recipientName}`
+    );
 };

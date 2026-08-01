@@ -42,10 +42,11 @@ Query secret có thể xuất hiện trong dashboard/log của dịch vụ monit
 
 1. Vào `Sản xuất > Nhập theo giờ`, mở cài đặt hình chuông.
 2. Kiểm tra mỗi tổ trưởng có ít nhất một kênh `Push` hoặc `Telegram`.
-3. Trên điện thoại tổ trưởng, bấm `Bật trên máy này` rồi bấm nút gửi thử.
-4. Tạo một ngày thử có khung kết thúc gần hiện tại, để một chuyền chưa nhập và xác nhận thông báo xuất hiện sau thời gian chờ.
-5. Nhập bù chuyền đó và xác nhận dải cảnh báo biến mất sau lần đồng bộ tiếp theo.
-6. Kiểm tra lịch sử UptimeRobot trả HTTP 200 liên tục.
+3. Trên điện thoại tổ trưởng, đăng nhập đúng tài khoản, bấm `Bật trên máy này` và giữ nguyên quyền thông báo của hệ điều hành. Chỉ đăng nhập chưa đủ để tạo Web Push subscription.
+4. Trên máy quản lý, mở danh sách người nhận và bấm nút gửi thử ở đúng dòng tổ trưởng. Kết quả phải báo số thiết bị Push đã gửi; nếu hiện `Cần bật`, quay lại bước 3 trên chính điện thoại đó.
+5. Tạo một ngày thử có khung kết thúc gần hiện tại, để một chuyền chưa nhập và xác nhận thông báo xuất hiện sau thời gian chờ.
+6. Nhập bù chuyền đó và xác nhận dải cảnh báo biến mất sau lần đồng bộ tiếp theo.
+7. Kiểm tra lịch sử UptimeRobot trả HTTP 200 liên tục.
 
 ## Giới hạn nền tảng
 
