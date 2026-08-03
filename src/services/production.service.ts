@@ -45,6 +45,8 @@ const RECORD_ACTOR_PATHS = [
     { path: 'runs.createdBy', select: ACTOR_SELECT },
     { path: 'entries.enteredBy', select: ACTOR_SELECT },
     { path: 'entries.updatedBy', select: ACTOR_SELECT },
+    { path: 'qcEntries.enteredBy', select: ACTOR_SELECT },
+    { path: 'qcEntries.updatedBy', select: ACTOR_SELECT },
 ];
 
 const getVietnamClock = () => {
@@ -177,6 +179,7 @@ const ensureDayLineRecords = async (day: any) => {
                     workerCount: 0,
                     runs: [],
                     entries: [],
+                    qcEntries: [],
                 },
             },
             upsert: true,
@@ -598,10 +601,11 @@ export const updateProductionTimeSlots = async (req: Request, res: Response) => 
     const day = await loadDayForWrite(req, String(req.params.id));
     const timeSlots = normalizeTimeSlots(req.body.timeSlots);
     const nextKeys = new Set(timeSlots.map((slot) => slot.key));
-    const records = await ProductionLineRecord.find({ dayId: day._id }).select('runs entries').lean();
+    const records = await ProductionLineRecord.find({ dayId: day._id }).select('runs entries qcEntries').lean();
     const usedKeys = new Set<string>();
     records.forEach((record: any) => {
         record.entries?.forEach((entry: any) => usedKeys.add(String(entry.slotKey)));
+        record.qcEntries?.forEach((entry: any) => usedKeys.add(String(entry.slotKey)));
         record.runs?.forEach((run: any) => {
             if (run.startedSlotKey) usedKeys.add(String(run.startedSlotKey));
             if (run.endedSlotKey) usedKeys.add(String(run.endedSlotKey));
@@ -658,6 +662,7 @@ export const addProductionDayLine = async (req: Request, res: Response) => {
         workerCount: 0,
         runs: [],
         entries: [],
+        qcEntries: [],
         updatedBy: req.userId,
     });
     emitProductionChange(day, { changeType: 'day-line-added', lineId: String(line._id) });
@@ -670,7 +675,9 @@ export const removeProductionDayLine = async (req: Request, res: Response) => {
     const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
     if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
     // Gỡ chuyền là thao tác biên chế, không được dùng để xoá số liệu đã báo.
-    if (record.entries?.length) throw new BadRequestError('Chuyền đã có sản lượng, không thể gỡ khỏi ngày');
+    if (record.entries?.length || record.qcEntries?.length) {
+        throw new BadRequestError('Chuyền đã có sản lượng hoặc kết quả QC, không thể gỡ khỏi ngày');
+    }
     if (record.runs?.length) throw new BadRequestError('Chuyền đã gán mã hàng, xóa mã hàng trước khi gỡ');
 
     await ProductionLineRecord.deleteOne({ _id: record._id });
@@ -719,7 +726,7 @@ export const configureProductionLine = async (req: Request, res: Response) => {
                 status: 'active',
                 createdBy: req.userId,
             });
-        } else if (!record.entries.length) {
+        } else if (!record.entries.length && !record.qcEntries.length) {
             const run = record.runs[0];
             run.itemId = item._id;
             run.itemCode = item.code;
@@ -766,7 +773,11 @@ export const createProductionRun = async (req: Request, res: Response) => {
     });
     if (!item) throw new NotFoundError('Không tìm thấy mã hàng đang hoạt động');
 
-    const conflictingSlotKeys = findProductionRunStartConflicts(record.entries, req.body.startedSlotKey, day.timeSlots);
+    const conflictingSlotKeys = findProductionRunStartConflicts(
+        [...record.entries, ...record.qcEntries],
+        req.body.startedSlotKey,
+        day.timeSlots
+    );
     if (conflictingSlotKeys.length) {
         const labels = conflictingSlotKeys
             .map((key) => day.timeSlots.find((slot: any) => String(slot.key) === key)?.label || key)
@@ -857,6 +868,28 @@ export const correctProductionLineSetup = async (req: Request, res: Response) =>
         entry.updatedAt = new Date();
         entryBySlot.set(String(entry.slotKey), entry);
     });
+    const qcEntryBySlot = new Map<string, any>();
+    [...record.qcEntries].forEach((entry: any) => {
+        const existingEntry = qcEntryBySlot.get(String(entry.slotKey));
+        if (existingEntry) {
+            existingEntry.passedQuantity =
+                Number(existingEntry.passedQuantity || 0) + Number(entry.passedQuantity || 0);
+            existingEntry.defectQuantity =
+                Number(existingEntry.defectQuantity || 0) + Number(entry.defectQuantity || 0);
+            existingEntry.totalQuantity =
+                Number(existingEntry.passedQuantity || 0) + Number(existingEntry.defectQuantity || 0);
+            const notes = [existingEntry.note, entry.note].filter(Boolean);
+            existingEntry.note = [...new Set(notes)].join(' · ').slice(0, 500) || undefined;
+            existingEntry.updatedBy = req.userId;
+            existingEntry.updatedAt = new Date();
+            entry.deleteOne();
+            return;
+        }
+        entry.runId = canonicalRunId;
+        entry.updatedBy = req.userId;
+        entry.updatedAt = new Date();
+        qcEntryBySlot.set(String(entry.slotKey), entry);
+    });
     for (let index = record.runs.length - 1; index >= 0; index -= 1) {
         if (String(record.runs[index]._id) !== String(canonicalRunId)) record.runs[index].deleteOne();
     }
@@ -900,8 +933,11 @@ export const deleteProductionRun = async (req: Request, res: Response) => {
     if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
     const run = record.runs.id(runId);
     if (!run) throw new NotFoundError('Không tìm thấy đợt mã hàng');
-    if (record.entries.some((entry: any) => String(entry.runId) === runId)) {
-        throw new BadRequestError('Không thể xóa mã hàng đã có sản lượng');
+    if (
+        record.entries.some((entry: any) => String(entry.runId) === runId) ||
+        record.qcEntries.some((entry: any) => String(entry.runId) === runId)
+    ) {
+        throw new BadRequestError('Không thể xóa mã hàng đã có sản lượng hoặc kết quả QC');
     }
     const wasActive = run.status === 'active';
     run.deleteOne();
@@ -1040,5 +1076,134 @@ export const deleteHourlyProductionEntry = async (req: Request, res: Response) =
         res,
         detail.lines.find((line: any) => line.lineId === lineId),
         'Đã xóa số liệu sản lượng'
+    );
+};
+
+export const upsertHourlyQcEntry = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.params.lineId);
+    const slotKey = String(req.params.slotKey);
+    const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+    if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
+
+    const slotIndex = day.timeSlots.findIndex((slot: any) => slot.key === slotKey && slot.isActive);
+    if (slotIndex < 0) throw new BadRequestError('Khung giờ không hợp lệ hoặc đã tắt');
+    const run = record.runs.id(req.body.runId);
+    if (!run) throw new NotFoundError('Mã hàng không thuộc chuyền này');
+    if (req.body.totalQuantity !== req.body.passedQuantity + req.body.defectQuantity) {
+        throw new BadRequestError('Tổng kiểm phải bằng số đạt cộng số lỗi');
+    }
+
+    const existing = record.qcEntries.find(
+        (entry: any) => entry.slotKey === slotKey && String(entry.runId) === String(run._id)
+    );
+    const startIndex = day.timeSlots.findIndex((slot: any) => slot.key === run.startedSlotKey);
+    const endIndex = run.endedSlotKey
+        ? day.timeSlots.findIndex((slot: any) => slot.key === run.endedSlotKey)
+        : day.timeSlots.length - 1;
+    if (!existing && (slotIndex < startIndex || (endIndex >= 0 && slotIndex > endIndex))) {
+        throw new BadRequestError('Mã hàng không hoạt động tại khung giờ này');
+    }
+
+    const syncDecision = decideProductionEntrySync(existing, {
+        clientMutationId: req.body.clientMutationId,
+        expectedUpdatedAt: req.body.expectedUpdatedAt,
+        hasExpectedUpdatedAt: Object.prototype.hasOwnProperty.call(req.body, 'expectedUpdatedAt'),
+    });
+    if (syncDecision.action === 'conflict') {
+        throw new DuplicateError(
+            'Kết quả QC vừa được cập nhật từ thiết bị khác. Dữ liệu mới nhất đã được giữ lại, vui lòng kiểm tra rồi lưu lại.'
+        );
+    }
+    if (syncDecision.action === 'idempotent') {
+        const detail: any = await loadDayDetail(day, req.role);
+        return sendSuccess(
+            res,
+            detail.lines.find((line: any) => line.lineId === lineId),
+            'Kết quả QC đã được đồng bộ trước đó'
+        );
+    }
+
+    if (existing) {
+        existing.passedQuantity = req.body.passedQuantity;
+        existing.defectQuantity = req.body.defectQuantity;
+        existing.totalQuantity = req.body.totalQuantity;
+        existing.note = req.body.note;
+        existing.updatedBy = req.userId;
+        existing.updatedAt = new Date();
+        existing.lastClientMutationId = req.body.clientMutationId;
+    } else {
+        record.qcEntries.push({
+            slotKey,
+            runId: run._id,
+            passedQuantity: req.body.passedQuantity,
+            defectQuantity: req.body.defectQuantity,
+            totalQuantity: req.body.totalQuantity,
+            note: req.body.note,
+            enteredBy: req.userId,
+            enteredAt: new Date(),
+            updatedBy: req.userId,
+            updatedAt: new Date(),
+            lastClientMutationId: req.body.clientMutationId,
+        });
+    }
+    record.updatedBy = req.userId;
+
+    try {
+        await saveRecord(record);
+    } catch (error) {
+        if (error instanceof DuplicateError && req.body.clientMutationId) {
+            const latestRecord: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+            const latestEntry = latestRecord?.qcEntries?.find(
+                (entry: any) =>
+                    entry.slotKey === slotKey &&
+                    String(entry.runId) === String(run._id) &&
+                    entry.lastClientMutationId === req.body.clientMutationId
+            );
+            if (latestEntry) {
+                const detail: any = await loadDayDetail(day, req.role);
+                return sendSuccess(
+                    res,
+                    detail.lines.find((line: any) => line.lineId === lineId),
+                    'Kết quả QC đã được đồng bộ trước đó'
+                );
+            }
+        }
+        throw error;
+    }
+
+    emitProductionChange(day, {
+        changeType: 'qc-entry-updated',
+        lineId,
+        slotKey,
+        actorId: req.userId,
+        clientMutationId: req.body.clientMutationId,
+    });
+    const detail: any = await loadDayDetail(day, req.role);
+    return sendSuccess(
+        res,
+        detail.lines.find((line: any) => line.lineId === lineId),
+        'Đã lưu kết quả QC'
+    );
+};
+
+export const deleteHourlyQcEntry = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.params.lineId);
+    const entryId = String(req.params.entryId);
+    const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+    if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
+    const entry = record.qcEntries.id(entryId);
+    if (!entry) throw new NotFoundError('Không tìm thấy kết quả QC');
+    const slotKey = entry.slotKey;
+    entry.deleteOne();
+    record.updatedBy = req.userId;
+    await saveRecord(record);
+    emitProductionChange(day, { changeType: 'qc-entry-deleted', lineId, slotKey });
+    const detail: any = await loadDayDetail(day, req.role);
+    return sendSuccess(
+        res,
+        detail.lines.find((line: any) => line.lineId === lineId),
+        'Đã xóa kết quả QC'
     );
 };

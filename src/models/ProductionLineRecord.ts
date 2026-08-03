@@ -39,6 +39,23 @@ const HourlyProductionEntrySchema = new mongoose.Schema(
     { _id: true }
 );
 
+const HourlyQcEntrySchema = new mongoose.Schema(
+    {
+        slotKey: { type: String, required: true, trim: true },
+        runId: { type: mongoose.Schema.Types.ObjectId, required: true },
+        passedQuantity: { type: Number, required: true, min: 0 },
+        defectQuantity: { type: Number, required: true, min: 0 },
+        totalQuantity: { type: Number, required: true, min: 0 },
+        note: { type: String, trim: true, maxlength: 500 },
+        enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        enteredAt: { type: Date, default: Date.now },
+        updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        updatedAt: { type: Date, default: Date.now },
+        lastClientMutationId: { type: String, trim: true, maxlength: 80 },
+    },
+    { _id: true }
+);
+
 const ProductionSetupCorrectionSchema = new mongoose.Schema(
     {
         reason: { type: String, required: true, trim: true, maxlength: 500 },
@@ -68,6 +85,7 @@ const ProductionLineRecordSchema = new mongoose.Schema(
         workerCountConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         runs: { type: [ProductionRunSchema], default: [] },
         entries: { type: [HourlyProductionEntrySchema], default: [] },
+        qcEntries: { type: [HourlyQcEntrySchema], default: [] },
         setupCorrections: { type: [ProductionSetupCorrectionSchema], default: [] },
         updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     },

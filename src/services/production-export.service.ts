@@ -382,6 +382,75 @@ const addEntryLedgerSheet = (workbook: ExcelJS.Workbook, detail: any) => {
     sheet.pageSetup.printArea = `A1:${sheet.getColumn(headers.length).letter}${lastRow}`;
 };
 
+const addQcLedgerSheet = (workbook: ExcelJS.Workbook, detail: any) => {
+    const headers = [
+        'Ngày',
+        'Khung giờ',
+        'Chuyền',
+        'Mã hàng',
+        'SL tổ trưởng báo',
+        'Tổng kiểm',
+        'Đạt',
+        'Lỗi',
+        'Tỷ lệ lỗi',
+        'Chờ kiểm',
+        'Người nhập QC',
+        'Ghi chú',
+    ];
+    const sheet = workbook.addWorksheet('QC THEO GIO');
+    configureSheet(sheet, 'landscape');
+    styleTitle(
+        sheet,
+        headers.length,
+        'SỔ KIỂM TRA CHẤT LƯỢNG THEO GIỜ',
+        `${detail.plantName || 'Cơ sở'} · Tổng kiểm = Đạt + Lỗi · Không cộng vào sản lượng tính lương`
+    );
+    const headerRow = sheet.getRow(5);
+    headerRow.values = headers;
+    styleHeader(headerRow);
+
+    const slotByKey = new Map((detail.timeSlots || []).map((slot: any) => [String(slot.key), slot]));
+    (detail.lines || []).forEach((line: any) => {
+        const runById = new Map((line.runs || []).map((run: any) => [String(run.id), run]));
+        (line.qcSlotValues || [])
+            .filter((value: any) => value.runId)
+            .forEach((value: any) => {
+                const slot: any = slotByKey.get(String(value.key));
+                const run: any = runById.get(String(value.runId));
+                const entry = (line.qcEntries || []).find(
+                    (item: any) => item.slotKey === value.key && String(item.runId) === String(value.runId)
+                );
+                sheet.addRow([
+                    formatProductionDate(detail.productionDate),
+                    slot ? slotRangeLabel(slot) : value.key,
+                    line.lineCode,
+                    run?.itemCode || '',
+                    Number(value.productionActual || 0),
+                    value.reported ? Number(value.totalQuantity || 0) : '',
+                    value.reported ? Number(value.passedQuantity || 0) : '',
+                    value.reported ? Number(value.defectQuantity || 0) : '',
+                    value.reported && Number(value.totalQuantity || 0) > 0
+                        ? Number(value.defectQuantity || 0) / Number(value.totalQuantity || 1)
+                        : '',
+                    Number(value.pendingQuantity || 0),
+                    entry?.updatedByName || entry?.enteredByName || '',
+                    entry?.note || '',
+                ]);
+            });
+    });
+
+    const lastRow = Math.max(6, sheet.rowCount);
+    styleDataArea(sheet, 6, lastRow, headers.length);
+    const widths = [12, 12, 11, 16, 16, 13, 11, 11, 12, 12, 18, 32];
+    widths.forEach((width, index) => (sheet.getColumn(index + 1).width = width));
+    for (let column = 5; column <= 10; column += 1) {
+        sheet.getColumn(column).numFmt = column === 9 ? '0.00%' : '#,##0';
+    }
+    sheet.views = [{ state: 'frozen', xSplit: 4, ySplit: 5 }];
+    sheet.autoFilter = { from: { row: 5, column: 1 }, to: { row: lastRow, column: headers.length } };
+    sheet.pageSetup.printArea = `A1:${sheet.getColumn(headers.length).letter}${lastRow}`;
+};
+
 export const buildProductionWorkbook = async ({ detail }: { detail: any }) => {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Hải Đăng Production';
@@ -392,6 +461,7 @@ export const buildProductionWorkbook = async ({ detail }: { detail: any }) => {
 
     addDailyReportSheet(workbook, detail);
     addEntryLedgerSheet(workbook, detail);
+    addQcLedgerSheet(workbook, detail);
 
     return workbook;
 };

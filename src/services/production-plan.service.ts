@@ -322,6 +322,7 @@ const ensureDayLineRecords = async (day: any, onlyLineIds?: Set<string>, session
                         workerCount: 0,
                         runs: [],
                         entries: [],
+                        qcEntries: [],
                     },
                 },
                 upsert: true,
@@ -434,7 +435,8 @@ const applyPlanToDay = async (plan: any, actorId: string, session?: mongoose.Cli
         const allocations = (allocationsByLine.get(String(record.lineId)) || []).sort(
             (left, right) => Number(slotIndex.get(left.startSlotKey)) - Number(slotIndex.get(right.startSlotKey))
         );
-        if (!record.entries.length) {
+        const recordedEntries = [...record.entries, ...record.qcEntries];
+        if (!recordedEntries.length) {
             if (allocations.length) {
                 record.set(
                     'runs',
@@ -450,7 +452,7 @@ const applyPlanToDay = async (plan: any, actorId: string, session?: mongoose.Cli
                 );
             }
         } else {
-            const entryRunIds = new Set(record.entries.map((entry: any) => String(entry.runId)));
+            const entryRunIds = new Set(recordedEntries.map((entry: any) => String(entry.runId)));
             const allocationIds = new Set(allocations.map((allocation) => String(allocation._id)));
             record.runs = record.runs.filter(
                 (run: any) =>
@@ -460,7 +462,7 @@ const applyPlanToDay = async (plan: any, actorId: string, session?: mongoose.Cli
             );
             const latestEnteredIndex = Math.max(
                 -1,
-                ...record.entries.map((entry: any) => Number(slotIndex.get(String(entry.slotKey)) ?? -1))
+                ...recordedEntries.map((entry: any) => Number(slotIndex.get(String(entry.slotKey)) ?? -1))
             );
             let skipped = false;
             allocations.forEach((allocation) => {

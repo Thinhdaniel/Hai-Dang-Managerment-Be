@@ -207,6 +207,32 @@ export const upsertHourlyProductionEntrySchema = z.object({
     expectedUpdatedAt: z.string().datetime().nullable().optional(),
 });
 
+export const upsertHourlyQcEntrySchema = z
+    .object({
+        runId: zObjectId('Đợt mã hàng'),
+        passedQuantity: z.number().int().min(0).max(100000000),
+        defectQuantity: z.number().int().min(0).max(100000000),
+        totalQuantity: z.number().int().min(0).max(100000000),
+        note: zOptionalString(),
+        clientMutationId: z
+            .string()
+            .trim()
+            .min(8)
+            .max(80)
+            .regex(/^[A-Za-z0-9:_-]+$/, 'Mã đồng bộ không hợp lệ')
+            .optional(),
+        expectedUpdatedAt: z.string().datetime().nullable().optional(),
+    })
+    .superRefine((value, ctx) => {
+        if (value.totalQuantity !== value.passedQuantity + value.defectQuantity) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['totalQuantity'],
+                message: 'Tổng kiểm phải bằng số đạt cộng số lỗi',
+            });
+        }
+    });
+
 const productionPlanAllocationSchema = z.object({
     id: zObjectId('Phân bổ').optional(),
     lineId: zObjectId('Chuyền'),

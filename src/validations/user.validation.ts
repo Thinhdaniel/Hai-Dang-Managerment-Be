@@ -4,15 +4,12 @@ import { z } from 'zod';
 
 // Tổ trưởng bị khóa theo cơ sở và không tự đổi được nên bắt buộc có plantId;
 // thiếu cơ sở thì tài khoản không nhập được sản lượng cho đúng chuyền.
-const requireLineLeaderPlant = (
-    data: { role?: USER_ROLE; plantId?: string },
-    ctx: z.RefinementCtx
-) => {
-    if (data.role === USER_ROLE.LINE_LEADER && !data.plantId) {
+const requireProductionOperatorPlant = (data: { role?: USER_ROLE; plantId?: string }, ctx: z.RefinementCtx) => {
+    if ([USER_ROLE.LINE_LEADER, USER_ROLE.QC].includes(data.role as USER_ROLE) && !data.plantId) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['plantId'],
-            message: 'To truong phai duoc gan co so',
+            message: 'Tai khoan san xuat phai duoc gan co so',
         });
     }
 };
@@ -28,7 +25,7 @@ export const createUserSchema = z
         avatarUrl: zOptionalString(),
         isActive: z.boolean().optional(),
     })
-    .superRefine(requireLineLeaderPlant);
+    .superRefine(requireProductionOperatorPlant);
 
 export const updateUserSchema = z
     .object({
@@ -40,4 +37,4 @@ export const updateUserSchema = z
         avatarUrl: zOptionalString(),
         isActive: z.boolean().optional(),
     })
-    .superRefine(requireLineLeaderPlant);
+    .superRefine(requireProductionOperatorPlant);

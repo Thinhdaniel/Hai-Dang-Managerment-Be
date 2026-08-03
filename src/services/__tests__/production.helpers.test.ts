@@ -10,6 +10,7 @@ import {
     resolveRunForSlot,
     validateProductionDayForSubmission,
 } from '@/services/production.helpers';
+import { upsertHourlyQcEntrySchema } from '@/validations/production.validation';
 
 test('nhãn khung giờ sinh từ mốc phút, có xử lý ca lẻ phút', () => {
     assert.equal(buildTimeSlotLabel(420, 480), '7-8h');
@@ -117,6 +118,66 @@ test('sản lượng bằng 0 vẫn là đã báo và tiền dùng đúng đơn 
     assert.equal(detail.slotSummaries[1].reportedLines, 1);
     assert.equal(line.totalAmount, 90_000);
     assert.equal(detail.summary.itemCount, 2);
+});
+
+test('QC tách đạt, lỗi, tổng và không làm thay đổi sản lượng tính tiền', () => {
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-qc',
+            plantId: 'plant-1',
+            productionDate: '2026-07-18',
+            timeSlots: slots,
+        },
+        [
+            {
+                _id: 'record-qc',
+                dayId: 'day-qc',
+                plantId: 'plant-1',
+                productionDate: '2026-07-18',
+                lineId: 'line-1',
+                lineCode: 'CM1',
+                workerCount: 20,
+                workerCountConfirmedAt: new Date('2026-07-18T00:30:00.000Z'),
+                runs,
+                entries: [{ _id: 'entry-a', slotKey: '08:00', runId: 'run-a', quantity: 100 }],
+                qcEntries: [
+                    {
+                        _id: 'qc-a',
+                        slotKey: '08:00',
+                        runId: 'run-a',
+                        passedQuantity: 96,
+                        defectQuantity: 4,
+                        totalQuantity: 100,
+                    },
+                ],
+            },
+        ]
+    );
+
+    const line = detail.lines[0];
+    assert.equal(line.totalActual, 100);
+    assert.equal(line.totalAmount, 100_000);
+    assert.equal(line.qcTotalQuantity, 100);
+    assert.equal(line.qcPassedQuantity, 96);
+    assert.equal(line.qcDefectQuantity, 4);
+    assert.equal(line.qcDefectRate, 4);
+    assert.equal(line.qcPendingQuantity, 0);
+    assert.equal(line.qcSlotValues[0].reported, true);
+    assert.equal(detail.summary.qcDefectQuantity, 4);
+    assert.equal(detail.slotSummaries[0].qcReportedLines, 1);
+});
+
+test('validation QC bắt buộc tổng bằng đạt cộng lỗi', () => {
+    const base = {
+        runId: '507f1f77bcf86cd799439011',
+        passedQuantity: 96,
+        defectQuantity: 4,
+        totalQuantity: 100,
+    };
+    assert.equal(upsertHourlyQcEntrySchema.safeParse(base).success, true);
+    const invalid = upsertHourlyQcEntrySchema.safeParse({ ...base, totalQuantity: 99 });
+    assert.equal(invalid.success, false);
+    assert.equal(invalid.error?.issues[0]?.path[0], 'totalQuantity');
 });
 
 test('khi đổi mã đúng đầu khung giờ, ưu tiên lần chạy được tạo sau', () => {

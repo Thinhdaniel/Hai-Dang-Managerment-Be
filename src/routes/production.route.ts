@@ -29,6 +29,7 @@ import {
     updateProductionPlanSchema,
     updateProductionTimeSlotsSchema,
     upsertHourlyProductionEntrySchema,
+    upsertHourlyQcEntrySchema,
     transitionProductionDaySchema,
     testProductionReminderSchema,
     updateProductionReminderSettingsSchema,
@@ -183,7 +184,12 @@ router.put(
 );
 router.get('/days/lookup', asyncHandler(productionService.lookupProductionDay));
 router.get('/days', asyncHandler(productionService.listProductionDays));
-router.post('/days', validator(createProductionDaySchema), asyncHandler(productionService.createProductionDay));
+router.post(
+    '/days',
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
+    validator(createProductionDaySchema),
+    asyncHandler(productionService.createProductionDay)
+);
 router.post(
     '/days/:id/submit',
     authorize(...ROLE_GROUPS.FIELD),
@@ -234,12 +240,14 @@ router.delete(
 );
 router.put(
     '/days/:dayId/lines/:lineId',
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
     validateObjectIdParams('dayId', 'lineId'),
     validator(configureProductionLineSchema),
     asyncHandler(productionService.configureProductionLine)
 );
 router.post(
     '/days/:dayId/lines/:lineId/runs',
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
     validateObjectIdParams('dayId', 'lineId'),
     validator(createProductionRunSchema),
     asyncHandler(productionService.createProductionRun)
@@ -259,15 +267,29 @@ router.delete(
 );
 router.put(
     '/days/:dayId/lines/:lineId/entries/:slotKey',
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
     validateObjectIdParams('dayId', 'lineId'),
     validator(upsertHourlyProductionEntrySchema),
     asyncHandler(productionService.upsertHourlyProductionEntry)
 );
 router.delete(
     '/days/:dayId/lines/:lineId/entries/:entryId',
-    authorize(...ROLE_GROUPS.FIELD),
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
     validateObjectIdParams('dayId', 'lineId', 'entryId'),
     asyncHandler(productionService.deleteHourlyProductionEntry)
+);
+router.put(
+    '/days/:dayId/lines/:lineId/qc-entries/:slotKey',
+    authorize(...ROLE_GROUPS.PRODUCTION_QC_ENTRY),
+    validateObjectIdParams('dayId', 'lineId'),
+    validator(upsertHourlyQcEntrySchema),
+    asyncHandler(productionService.upsertHourlyQcEntry)
+);
+router.delete(
+    '/days/:dayId/lines/:lineId/qc-entries/:entryId',
+    authorize(...ROLE_GROUPS.PRODUCTION_QC_ENTRY),
+    validateObjectIdParams('dayId', 'lineId', 'entryId'),
+    asyncHandler(productionService.deleteHourlyQcEntry)
 );
 
 export default router;

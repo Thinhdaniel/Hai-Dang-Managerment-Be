@@ -7,8 +7,9 @@ import { USER_ROLE } from './allowedRoles';
  * - MANAGEMENT : Super Admin + Giám đốc + Quản lý — toàn bộ thao tác vận hành.
  * - FIELD      : tất cả role hiện trường (gồm Bộ phận kỹ thuật) — nghiệp vụ máy qua QR.
  *               KHÔNG gồm Tổ trưởng: tổ trưởng không đụng module máy/vật tư.
- * - PRODUCTION_FIELD: FIELD + Tổ trưởng — chỉ dùng cho lớp base của route sản lượng,
- *               để tổ trưởng nhập được số theo giờ mà các module khác vẫn chặn.
+ * - PRODUCTION_FIELD: FIELD + Tổ trưởng + QC — lớp đọc chung của app sản xuất.
+ * - PRODUCTION_ENTRY: các role được nhập/chỉnh sản lượng và cấu hình đầu ngày.
+ * - PRODUCTION_QC_ENTRY: các role được nhập/chỉnh kết quả QC theo giờ.
  */
 export const ROLE_GROUPS = {
     ADMIN_ONLY: [USER_ROLE.ADMIN],
@@ -21,5 +22,8 @@ export const ROLE_GROUPS = {
         USER_ROLE.MANAGER,
         USER_ROLE.STAFF,
         USER_ROLE.LINE_LEADER,
+        USER_ROLE.QC,
     ],
+    PRODUCTION_ENTRY: [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER, USER_ROLE.STAFF, USER_ROLE.LINE_LEADER],
+    PRODUCTION_QC_ENTRY: [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER, USER_ROLE.QC],
 } as const;

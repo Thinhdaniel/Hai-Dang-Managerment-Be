@@ -51,7 +51,7 @@ test('xuất workbook báo cáo ngày khớp mẫu công ty và đúng khổ in'
 
     assert.deepEqual(
         workbook.worksheets.map((sheet) => sheet.name),
-        ['BC NGAY', 'NHAP LIEU']
+        ['BC NGAY', 'NHAP LIEU', 'QC THEO GIO']
     );
     const bc = workbook.getWorksheet('BC NGAY');
     assert.equal(bc?.pageSetup.paperSize, 9);
@@ -68,14 +68,13 @@ test('xuất workbook báo cáo ngày khớp mẫu công ty và đúng khổ in'
     assert.equal(bc?.getCell('A10').value, 'TỔNG');
     assert.equal(bc?.getCell('E10').value, 90);
     // Khối theo khung giờ + chữ ký phải có mặt
-    const flat = (bc?.getSheetValues() as any[])
-        .flat()
-        .filter((v) => typeof v === 'string');
+    const flat = (bc?.getSheetValues() as any[]).flat().filter((v) => typeof v === 'string');
     assert.ok(flat.includes('SẢN LƯỢNG THỰC TẾ TOÀN XƯỞNG THEO KHUNG GIỜ'));
     assert.ok(flat.includes('NGƯỜI LẬP BIỂU'));
     assert.ok(flat.includes('GIÁM ĐỐC CƠ SỞ'));
 
     assert.equal(workbook.getWorksheet('NHAP LIEU')?.pageSetup.fitToWidth, 1);
+    assert.equal(workbook.getWorksheet('QC THEO GIO')?.getCell('A5').value, 'Ngày');
     assert.ok((await workbook.xlsx.writeBuffer()).byteLength > 5_000);
 });
 

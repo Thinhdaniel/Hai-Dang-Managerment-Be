@@ -20,6 +20,7 @@ const mapRole = (role?: string) => {
     // Tổ trưởng phải giữ nguyên role để FE điều hướng đúng về màn nhập sản lượng;
     // nếu rơi vào 'staff' bên dưới thì FE tưởng là kỹ thuật và hiện app máy.
     if (role === 'line_leader') return 'line_leader';
+    if (role === 'qc') return 'qc';
     return 'staff';
 };
 
