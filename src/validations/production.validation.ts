@@ -209,10 +209,12 @@ export const upsertHourlyProductionEntrySchema = z.object({
 
 export const upsertHourlyQcEntrySchema = z
     .object({
-        runId: zObjectId('Đợt mã hàng'),
+        // Giữ optional để client cũ vẫn có thể gửi runId trong lúc rollout.
+        // Backend không dùng trường này làm khóa nghiệp vụ QC nữa.
+        runId: zObjectId('Đợt mã hàng').optional(),
         passedQuantity: z.number().int().min(0).max(100000000),
         defectQuantity: z.number().int().min(0).max(100000000),
-        totalQuantity: z.number().int().min(0).max(100000000),
+        totalQuantity: z.number().int().min(0).max(100000000).optional(),
         note: zOptionalString(),
         clientMutationId: z
             .string()
@@ -224,11 +226,19 @@ export const upsertHourlyQcEntrySchema = z
         expectedUpdatedAt: z.string().datetime().nullable().optional(),
     })
     .superRefine((value, ctx) => {
-        if (value.totalQuantity !== value.passedQuantity + value.defectQuantity) {
+        const computedTotal = value.passedQuantity + value.defectQuantity;
+        if (value.totalQuantity !== undefined && value.totalQuantity !== computedTotal) {
             ctx.addIssue({
                 code: 'custom',
                 path: ['totalQuantity'],
                 message: 'Tổng kiểm phải bằng số đạt cộng số lỗi',
+            });
+        }
+        if (computedTotal === 0 && String(value.note || '').trim().length < 3) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['note'],
+                message: 'Cần ghi chú khi kết quả kiểm bằng 0',
             });
         }
     });

@@ -435,7 +435,9 @@ const applyPlanToDay = async (plan: any, actorId: string, session?: mongoose.Cli
         const allocations = (allocationsByLine.get(String(record.lineId)) || []).sort(
             (left, right) => Number(slotIndex.get(left.startSlotKey)) - Number(slotIndex.get(right.startSlotKey))
         );
-        const recordedEntries = [...record.entries, ...record.qcEntries];
+        // Kết quả QC độc lập với mã hàng/kế hoạch đang chạy, nên không được
+        // dùng để giữ hoặc khóa các run của kế hoạch sản xuất.
+        const recordedEntries = [...record.entries];
         if (!recordedEntries.length) {
             if (allocations.length) {
                 record.set(

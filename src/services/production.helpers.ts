@@ -211,11 +211,13 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             const qcEntries = (record.qcEntries || []).map((entry: any) => {
                 const passedQuantity = Number(entry.passedQuantity || 0);
                 const defectQuantity = Number(entry.defectQuantity || 0);
-                const totalQuantity = Number(entry.totalQuantity || 0);
+                // Không tin total lưu từ client/bản cũ; tổng QC luôn được suy ra
+                // từ hai số liệu gốc để báo cáo không thể lệch.
+                const totalQuantity = passedQuantity + defectQuantity;
                 return {
                     id: toId(entry),
                     slotKey: entry.slotKey,
-                    runId: toId(entry.runId),
+                    runId: toId(entry.runId) || undefined,
                     passedQuantity,
                     defectQuantity,
                     totalQuantity,
@@ -260,14 +262,10 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             const qcSlotValues = slots.map((slot: any) => {
                 const slotEntries = qcEntries.filter((entry: any) => entry.slotKey === slot.key);
                 const productionSlot: any = productionSlotByKey.get(String(slot.key));
-                const entryRunIds = [...new Set(slotEntries.map((entry: any) => String(entry.runId)))];
-                const recordedRun = entryRunIds.length === 1 ? runById.get(entryRunIds[0]) : undefined;
                 const scheduledRun =
                     slot.isActive === false ? undefined : resolveRunForSlot(runs, String(slot.key), slots);
-                const run =
-                    slot.isActive === false
-                        ? undefined
-                        : recordedRun || runById.get(productionSlot?.runId) || scheduledRun;
+                const referenceRun =
+                    slot.isActive === false ? undefined : runById.get(productionSlot?.runId) || scheduledRun;
                 const passedQuantity = slotEntries.reduce(
                     (sum: number, entry: any) => sum + Number(entry.passedQuantity || 0),
                     0
@@ -276,11 +274,14 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     (sum: number, entry: any) => sum + Number(entry.defectQuantity || 0),
                     0
                 );
-                const totalQuantity = slotEntries.reduce(
-                    (sum: number, entry: any) => sum + Number(entry.totalQuantity || 0),
-                    0
-                );
-                const productionActual = Number(productionSlot?.actual || 0);
+                const totalQuantity = passedQuantity + defectQuantity;
+                const latestEntry = [...slotEntries].sort(
+                    (left: any, right: any) =>
+                        new Date(right.updatedAt || right.enteredAt || 0).getTime() -
+                        new Date(left.updatedAt || left.enteredAt || 0).getTime()
+                )[0];
+                const notes = [...new Set(slotEntries.map((entry: any) => entry.note).filter(Boolean))];
+                const productionActualReference = Number(productionSlot?.actual || 0);
                 return {
                     key: slot.key,
                     overtime: slot.kind === 'overtime',
@@ -288,12 +289,23 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     defectQuantity,
                     totalQuantity,
                     defectRate: totalQuantity > 0 ? round((defectQuantity / totalQuantity) * 100, 2) : 0,
-                    productionActual,
-                    varianceQuantity: totalQuantity - productionActual,
-                    pendingQuantity: Math.max(0, productionActual - totalQuantity),
+                    productionActualReference,
+                    // Các field dưới giữ tạm một phiên bản để FE cũ không vỡ
+                    // trong lúc rollout. Không còn được dùng làm KPI QC.
+                    productionActual: productionActualReference,
+                    varianceQuantity: 0,
+                    pendingQuantity: 0,
                     reported: slotEntries.length > 0,
-                    runId: run?.id,
+                    referenceRunId: referenceRun?.id,
+                    runId: referenceRun?.id,
                     entryIds: slotEntries.map((entry: any) => entry.id),
+                    note: notes.join(' · ').slice(0, 500) || undefined,
+                    enteredBy: latestEntry?.enteredBy,
+                    enteredByName: latestEntry?.enteredByName,
+                    enteredAt: latestEntry?.enteredAt,
+                    updatedBy: latestEntry?.updatedBy,
+                    updatedByName: latestEntry?.updatedByName,
+                    updatedAt: latestEntry?.updatedAt,
                 };
             });
 
@@ -309,9 +321,14 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 0
             );
             const qcTotalQuantity = qcEntries.reduce(
-                (sum: number, entry: any) => sum + Number(entry.totalQuantity || 0),
+                (sum: number, entry: any) =>
+                    sum + Number(entry.passedQuantity || 0) + Number(entry.defectQuantity || 0),
                 0
             );
+            const qcExpectedSlots = slots.filter((slot: any) => slot.isActive !== false).length;
+            const qcReportedSlots = qcSlotValues.filter(
+                (value: any, index: number) => slots[index]?.isActive !== false && value.reported
+            ).length;
             const workerCount = Number(record.workerCount || 0);
 
             return {
@@ -343,8 +360,10 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 qcDefectQuantity,
                 qcTotalQuantity,
                 qcDefectRate: qcTotalQuantity > 0 ? round((qcDefectQuantity / qcTotalQuantity) * 100, 2) : 0,
-                qcPendingQuantity: Math.max(0, totalActual - qcTotalQuantity),
-                qcReportedSlots: qcSlotValues.filter((slot: any) => slot.reported).length,
+                qcPendingQuantity: 0,
+                qcReportedSlots,
+                qcExpectedSlots,
+                qcCoveragePercent: qcExpectedSlots > 0 ? round((qcReportedSlots / qcExpectedSlots) * 100, 1) : 0,
                 configured: Boolean(record.workerCountConfirmedAt && runs.length > 0),
                 updatedBy: toId(record.updatedBy),
                 updatedByName: actorName(record.updatedBy),
@@ -362,6 +381,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             (line: any) =>
                 line.configured && line.slotValues.some((value: any) => value.key === slot.key && value.runId)
         );
+        const qcReportedLines = lines.filter((line: any) =>
+            line.qcSlotValues.some((value: any) => value.key === slot.key && value.reported)
+        ).length;
         return {
             key: slot.key,
             overtime: slot.kind === 'overtime',
@@ -373,9 +395,10 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             qcPassedQuantity: qcValues.reduce((sum: number, value: any) => sum + Number(value?.passedQuantity || 0), 0),
             qcDefectQuantity: qcValues.reduce((sum: number, value: any) => sum + Number(value?.defectQuantity || 0), 0),
             qcTotalQuantity: qcValues.reduce((sum: number, value: any) => sum + Number(value?.totalQuantity || 0), 0),
-            qcReportedLines: dueLines.filter((line: any) =>
-                line.qcSlotValues.some((value: any) => value.key === slot.key && value.reported)
-            ).length,
+            qcReportedLines,
+            qcExpectedLines: slot.isActive === false ? 0 : lines.length,
+            qcCoveragePercent:
+                slot.isActive === false || !lines.length ? 0 : round((qcReportedLines / lines.length) * 100, 1),
             totalLines: dueLines.length,
         };
     });
@@ -387,6 +410,8 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
     const qcPassedQuantity = lines.reduce((sum, line) => sum + line.qcPassedQuantity, 0);
     const qcDefectQuantity = lines.reduce((sum, line) => sum + line.qcDefectQuantity, 0);
     const qcTotalQuantity = lines.reduce((sum, line) => sum + line.qcTotalQuantity, 0);
+    const qcReportedLineSlots = lines.reduce((sum, line) => sum + Number(line.qcReportedSlots || 0), 0);
+    const qcExpectedLineSlots = lines.reduce((sum, line) => sum + Number(line.qcExpectedSlots || 0), 0);
 
     const dataAsOf = [day.updatedAt, ...lines.map((line: any) => line.updatedAt)]
         .filter(Boolean)
@@ -441,7 +466,11 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             qcDefectQuantity,
             qcTotalQuantity,
             qcDefectRate: qcTotalQuantity > 0 ? round((qcDefectQuantity / qcTotalQuantity) * 100, 2) : 0,
-            qcPendingQuantity: Math.max(0, totalActual - qcTotalQuantity),
+            qcPendingQuantity: 0,
+            qcReportedLineSlots,
+            qcExpectedLineSlots,
+            qcCoveragePercent:
+                qcExpectedLineSlots > 0 ? round((qcReportedLineSlots / qcExpectedLineSlots) * 100, 1) : 0,
         },
         slotSummaries,
         createdAt: toIso(day.createdAt),

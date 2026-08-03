@@ -35,6 +35,19 @@ const detail = {
             ],
             entries: [{ runId: 'run-1', slotKey: '08:00', quantity: 90, amount: 900_000 }],
             slotValues: [{ key: '08:00', runId: 'run-1', target: 100, actual: 90, reported: true }],
+            qcSlotValues: [
+                {
+                    key: '08:00',
+                    reported: true,
+                    totalQuantity: 120,
+                    passedQuantity: 114,
+                    defectQuantity: 6,
+                    defectRate: 5,
+                    updatedByName: 'QC Lan',
+                    updatedAt: '2026-07-18T02:15:00.000Z',
+                    note: 'Kiểm cả hàng tồn',
+                },
+            ],
         },
     ],
     summary: {
@@ -74,7 +87,13 @@ test('xuất workbook báo cáo ngày khớp mẫu công ty và đúng khổ in'
     assert.ok(flat.includes('GIÁM ĐỐC CƠ SỞ'));
 
     assert.equal(workbook.getWorksheet('NHAP LIEU')?.pageSetup.fitToWidth, 1);
-    assert.equal(workbook.getWorksheet('QC THEO GIO')?.getCell('A5').value, 'Ngày');
+    const qc = workbook.getWorksheet('QC THEO GIO');
+    assert.equal(qc?.getCell('A5').value, 'Ngày kiểm');
+    assert.equal(qc?.getCell('D5').value, 'Tổng kiểm');
+    assert.equal(qc?.getCell('D6').value, 120);
+    assert.equal(qc?.getCell('E6').value, 114);
+    assert.equal(qc?.getCell('F6').value, 6);
+    assert.equal(qc?.getCell('H6').value, 'QC Lan');
     assert.ok((await workbook.xlsx.writeBuffer()).byteLength > 5_000);
 });
 

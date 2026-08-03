@@ -42,7 +42,10 @@ const HourlyProductionEntrySchema = new mongoose.Schema(
 const HourlyQcEntrySchema = new mongoose.Schema(
     {
         slotKey: { type: String, required: true, trim: true },
-        runId: { type: mongoose.Schema.Types.ObjectId, required: true },
+        // QC ghi nhận khối lượng được kiểm tại thời điểm thực tế. runId chỉ còn
+        // là dữ liệu tương thích cho các bản ghi cũ, không dùng để ràng buộc QC
+        // với sản lượng/mã hàng đang chạy trong cùng khung giờ.
+        runId: { type: mongoose.Schema.Types.ObjectId },
         passedQuantity: { type: Number, required: true, min: 0 },
         defectQuantity: { type: Number, required: true, min: 0 },
         totalQuantity: { type: Number, required: true, min: 0 },
