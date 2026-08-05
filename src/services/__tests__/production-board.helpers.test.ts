@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildProductionBoard } from '@/services/production-board.helpers';
 
-const detail = {
+const detail: any = {
     id: 'day-1',
     plantId: 'plant-1',
     plantName: 'Cơ sở 1',
@@ -145,4 +145,57 @@ test('trước giờ sản xuất hiển thị mã hàng đầu tiên và không
     assert.equal(line.activeItem?.itemCode, 'HD-01');
     assert.equal(line.checkpoint.target, 0);
     assert.equal(line.day.projectedAverageIncome, undefined);
+});
+
+test('bảng chuyền hiển thị tín hiệu công đoạn nhưng không làm thay đổi tổng thành phẩm', () => {
+    const input = structuredClone(detail);
+    input.lines[0].operationTrackSummaries = [
+        {
+            id: 'track-neck',
+            operationCode: 'TRA-CO',
+            operationName: 'Tra cổ',
+            itemCode: 'HD-01',
+            unit: 'SP',
+            required: true,
+            sortOrder: 0,
+        },
+    ];
+    input.lines[0].operationSlotValues = [
+        {
+            key: '08:00',
+            trackId: 'track-neck',
+            due: true,
+            target: 100,
+            actual: 40,
+            reported: true,
+        },
+        {
+            key: '09:00',
+            trackId: 'track-neck',
+            due: true,
+            target: 100,
+            actual: 0,
+            reported: false,
+        },
+        {
+            key: '10:00',
+            trackId: 'track-neck',
+            due: true,
+            target: 100,
+            actual: 0,
+            reported: false,
+        },
+    ];
+
+    const board = buildProductionBoard(input, clock);
+    const line = board.lines[0];
+
+    assert.equal(line.operations.trackedCount, 1);
+    assert.equal(line.operations.missingCount, 1);
+    assert.equal(line.operations.behindCount, 1);
+    assert.equal(line.operations.items[0].status, 'missing');
+    assert.equal(line.operations.currentCount, 1);
+    assert.equal(board.summary.operationTrackCount, 1);
+    assert.equal(board.summary.operationCoveragePercent, 50);
+    assert.equal(board.summary.actual, 200);
 });

@@ -302,6 +302,77 @@ const buildBoardLine = (line: any, detail: any, clock: ProductionBoardClock) => 
     const requiredPer15ForDay =
         effectiveRemainingMinutes > 0 ? (remainingQuantity / effectiveRemainingMinutes) * 15 : 0;
 
+    const operationItems = (line.operationTrackSummaries || []).map((track: any) => {
+        const values = (line.operationSlotValues || []).filter(
+            (value: any) => String(value.trackId) === String(track.id)
+        );
+        const dueValues = values.filter((value: any) => {
+            if (!value.due) return false;
+            const slot = slotByKey.get(String(value.key));
+            return slot ? isDueSlot(detail.productionDate, slot, clock) : false;
+        });
+        const missingValues = track.required ? dueValues.filter((value: any) => !value.reported) : [];
+        const reportedValues = dueValues.filter((value: any) => value.reported);
+        const behindValues = reportedValues.filter(
+            (value: any) =>
+                Number(value.target || 0) > 0 && percent(Number(value.actual || 0), Number(value.target || 0)) < 80
+        );
+        const critical = behindValues.some(
+            (value: any) => percent(Number(value.actual || 0), Number(value.target || 0)) < 50
+        );
+        const currentValue = currentSlotBase
+            ? values.find((value: any) => value.due && String(value.key) === String(currentSlotBase.key))
+            : undefined;
+        const target = dueValues.reduce((sum: number, value: any) => sum + Number(value.target || 0), 0);
+        const actual = dueValues.reduce((sum: number, value: any) => sum + Number(value.actual || 0), 0);
+        const status = missingValues.length
+            ? 'missing'
+            : critical
+              ? 'critical'
+              : behindValues.length
+                ? 'at_risk'
+                : dueValues.length && reportedValues.length
+                  ? track.required
+                      ? 'on_track'
+                      : 'reference'
+                  : dueValues.length
+                    ? 'reference'
+                    : 'waiting';
+        return {
+            trackId: track.id,
+            operationCode: track.operationCode,
+            operationName: track.operationName,
+            itemCode: track.itemCode,
+            unit: track.unit,
+            required: Boolean(track.required),
+            sortOrder: Number(track.sortOrder || 0),
+            status,
+            target: round(target),
+            actual,
+            achievementPercent: percent(actual, target),
+            expectedEntries: track.required ? dueValues.length : 0,
+            reportedEntries: track.required ? reportedValues.length : 0,
+            missingCount: missingValues.length,
+            behindCount: behindValues.length,
+            currentSlot: currentValue
+                ? {
+                      key: currentValue.key,
+                      target: Number(currentValue.target || 0),
+                      actual: Number(currentValue.actual || 0),
+                      reported: Boolean(currentValue.reported),
+                  }
+                : undefined,
+        };
+    });
+    const operationExpectedEntries = operationItems.reduce(
+        (sum: number, operation: any) => sum + Number(operation.expectedEntries || 0),
+        0
+    );
+    const operationReportedEntries = operationItems.reduce(
+        (sum: number, operation: any) => sum + Number(operation.reportedEntries || 0),
+        0
+    );
+
     const guidance = guidanceForLine({
         status,
         lineCode: line.lineCode,
@@ -365,6 +436,19 @@ const buildBoardLine = (line: any, detail: any, clock: ProductionBoardClock) => 
             overQuotaAmount: round(Math.max(0, actualAmountToNow - dayTargetAmount), 0),
         },
         currentSlot,
+        operations: {
+            trackedCount: operationItems.length,
+            expectedEntries: operationExpectedEntries,
+            reportedEntries: operationReportedEntries,
+            missingCount: operationItems.reduce(
+                (sum: number, operation: any) => sum + Number(operation.missingCount || 0),
+                0
+            ),
+            behindCount: operationItems.filter((operation: any) => Number(operation.behindCount || 0) > 0).length,
+            currentCount: operationItems.filter((operation: any) => operation.currentSlot).length,
+            currentReportedCount: operationItems.filter((operation: any) => operation.currentSlot?.reported).length,
+            items: operationItems,
+        },
         guidance,
         missingSlots,
         slots: boardSlots,
@@ -392,6 +476,14 @@ export const buildProductionBoard = (detail: any, clock: ProductionBoardClock) =
     const actual = lines.reduce((sum: number, line: any) => sum + line.day.actual, 0);
     const checkpointTarget = lines.reduce((sum: number, line: any) => sum + line.checkpoint.target, 0);
     const checkpointActual = lines.reduce((sum: number, line: any) => sum + line.checkpoint.actual, 0);
+    const operationExpectedEntries = lines.reduce(
+        (sum: number, line: any) => sum + Number(line.operations.expectedEntries || 0),
+        0
+    );
+    const operationReportedEntries = lines.reduce(
+        (sum: number, line: any) => sum + Number(line.operations.reportedEntries || 0),
+        0
+    );
 
     return {
         asOf: clock.asOf,
@@ -433,6 +525,24 @@ export const buildProductionBoard = (detail: any, clock: ProductionBoardClock) =
             onTrackLines: lines.filter((line: any) => ['on_track', 'ahead'].includes(line.status)).length,
             attentionLines: lines.filter((line: any) => ['critical', 'at_risk'].includes(line.status)).length,
             missingLines: lines.filter((line: any) => line.status === 'missing').length,
+            operationTrackedLines: lines.filter((line: any) => line.operations.trackedCount > 0).length,
+            operationTrackCount: lines.reduce(
+                (sum: number, line: any) => sum + Number(line.operations.trackedCount || 0),
+                0
+            ),
+            operationExpectedEntries,
+            operationReportedEntries,
+            operationCoveragePercent: operationExpectedEntries
+                ? round((operationReportedEntries / operationExpectedEntries) * 100)
+                : 100,
+            missingOperationEntries: lines.reduce(
+                (sum: number, line: any) => sum + Number(line.operations.missingCount || 0),
+                0
+            ),
+            behindOperations: lines.reduce(
+                (sum: number, line: any) => sum + Number(line.operations.behindCount || 0),
+                0
+            ),
         },
         lines,
         updatedAt: detail.updatedAt,

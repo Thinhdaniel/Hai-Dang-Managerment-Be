@@ -6,6 +6,8 @@ type MonitorClock = {
 
 type MonitorAlertSeverity = 'critical' | 'warning' | 'info';
 
+type OperationMonitorStatus = 'waiting' | 'reference' | 'missing' | 'critical' | 'at_risk' | 'on_track';
+
 const round = (value: number, digits = 1) => Number(value.toFixed(digits));
 
 const severityRank: Record<MonitorAlertSeverity, number> = {
@@ -39,6 +41,230 @@ const statusForLine = ({
     return 'on_track';
 };
 
+const statusForOperation = ({
+    required,
+    dueCount,
+    reportedCount,
+    missingCount,
+    lowestReportedPercent,
+}: {
+    required: boolean;
+    dueCount: number;
+    reportedCount: number;
+    missingCount: number;
+    lowestReportedPercent?: number;
+}): OperationMonitorStatus => {
+    if (!dueCount) return 'waiting';
+    if (required && missingCount > 0) return 'missing';
+    if (!reportedCount) return required ? 'missing' : 'reference';
+    if (lowestReportedPercent !== undefined && lowestReportedPercent < 50) return 'critical';
+    if (lowestReportedPercent !== undefined && lowestReportedPercent < 80) return 'at_risk';
+    return required ? 'on_track' : 'reference';
+};
+
+const operationMonitor = (detail: any, dueKeys: Set<string>, slotsByKey: Map<string, any>, clock: MonitorClock) => {
+    const alerts: any[] = [];
+    const currentKey = currentSlotKey(detail, clock);
+
+    const performance = detail.lines.flatMap((line: any) =>
+        (line.operationTrackSummaries || []).map((track: any) => {
+            const values = (line.operationSlotValues || []).filter(
+                (value: any) => String(value.trackId) === String(track.id)
+            );
+            const dueValues = values.filter((value: any) => value.due && dueKeys.has(String(value.key)));
+            const reportedDueValues = dueValues.filter((value: any) => value.reported);
+            const missingValues = track.required ? dueValues.filter((value: any) => !value.reported) : [];
+            const scoredValues = reportedDueValues.filter((value: any) => Number(value.target || 0) > 0);
+            const scoredPercents = scoredValues.map((value: any) =>
+                slotPercent(Number(value.actual || 0), Number(value.target || 0))
+            );
+            const lowestReportedPercent = scoredPercents.length ? Math.min(...scoredPercents) : undefined;
+            const targetToNow = dueValues.reduce((sum: number, value: any) => sum + Number(value.target || 0), 0);
+            const actualToNow = dueValues.reduce((sum: number, value: any) => sum + Number(value.actual || 0), 0);
+            const transitionQuantity = values
+                .filter((value: any) => value.transition)
+                .reduce((sum: number, value: any) => sum + Number(value.actual || 0), 0);
+            const behindValues = scoredValues.filter(
+                (value: any) => slotPercent(Number(value.actual || 0), Number(value.target || 0)) < 80
+            );
+            const latestValue = [...values]
+                .filter((value: any) => value.reported && (value.updatedAt || value.enteredAt))
+                .sort(
+                    (left: any, right: any) =>
+                        new Date(right.updatedAt || right.enteredAt).getTime() -
+                        new Date(left.updatedAt || left.enteredAt).getTime()
+                )[0];
+            const currentValue = currentKey
+                ? values.find((value: any) => value.due && String(value.key) === String(currentKey))
+                : undefined;
+            const status = statusForOperation({
+                required: Boolean(track.required),
+                dueCount: dueValues.length,
+                reportedCount: reportedDueValues.length,
+                missingCount: missingValues.length,
+                lowestReportedPercent,
+            });
+
+            missingValues.forEach((value: any) => {
+                const slot = slotsByKey.get(String(value.key));
+                const minutesLate =
+                    detail.productionDate === clock.localDate
+                        ? Math.max(0, clock.minuteOfDay - Number(slot?.endMinute || clock.minuteOfDay))
+                        : 24 * 60;
+                alerts.push({
+                    id: `missing-operation-${line.lineId}-${track.id}-${value.key}`,
+                    type: 'missing_operation_report',
+                    severity: minutesLate >= 60 ? 'critical' : 'warning',
+                    lineId: line.lineId,
+                    lineCode: line.lineCode,
+                    trackId: track.id,
+                    operationId: track.operationId,
+                    operationCode: track.operationCode,
+                    operationName: track.operationName,
+                    itemCode: track.itemCode,
+                    slotKey: value.key,
+                    slotLabel: slot?.label || value.key,
+                    title: `${line.lineCode} · ${track.operationName} chưa báo ${slot?.label || value.key}`,
+                    description:
+                        minutesLate >= 60
+                            ? `Đã quá giờ ${Math.floor(minutesLate / 60)} giờ ${minutesLate % 60} phút.`
+                            : `Khung giờ đã kết thúc ${minutesLate} phút.`,
+                });
+            });
+
+            scoredValues.forEach((value: any) => {
+                const percent = slotPercent(Number(value.actual || 0), Number(value.target || 0));
+                const slot = slotsByKey.get(String(value.key));
+                if (percent < 80) {
+                    alerts.push({
+                        id: `low-operation-${line.lineId}-${track.id}-${value.key}`,
+                        type: 'low_operation_output',
+                        severity: percent < 50 ? 'critical' : 'warning',
+                        lineId: line.lineId,
+                        lineCode: line.lineCode,
+                        trackId: track.id,
+                        operationId: track.operationId,
+                        operationCode: track.operationCode,
+                        operationName: track.operationName,
+                        itemCode: track.itemCode,
+                        slotKey: value.key,
+                        slotLabel: slot?.label || value.key,
+                        title: `${line.lineCode} · ${track.operationName} chỉ đạt ${round(percent)}%`,
+                        description: `${Number(value.actual || 0).toLocaleString('vi-VN')}/${Number(
+                            value.target || 0
+                        ).toLocaleString('vi-VN')} ${track.unit} tại ${slot?.label || value.key}.`,
+                    });
+                } else if (percent > 160) {
+                    alerts.push({
+                        id: `spike-operation-${line.lineId}-${track.id}-${value.key}`,
+                        type: 'operation_output_spike',
+                        severity: 'warning',
+                        lineId: line.lineId,
+                        lineCode: line.lineCode,
+                        trackId: track.id,
+                        operationId: track.operationId,
+                        operationCode: track.operationCode,
+                        operationName: track.operationName,
+                        itemCode: track.itemCode,
+                        slotKey: value.key,
+                        slotLabel: slot?.label || value.key,
+                        title: `${line.lineCode} · ${track.operationName} đạt ${round(percent)}%`,
+                        description: 'Sản lượng vượt xa khoán công đoạn, cần kiểm tra khả năng nhập nhầm.',
+                    });
+                }
+            });
+
+            return {
+                key: `${line.lineId}:${track.id}`,
+                trackId: track.id,
+                lineId: line.lineId,
+                lineCode: line.lineCode,
+                lineName: line.lineName,
+                leaderName: line.leaderName,
+                itemId: track.itemId,
+                itemCode: track.itemCode,
+                sourceRunId: track.sourceRunId,
+                operationId: track.operationId,
+                operationCode: track.operationCode,
+                operationName: track.operationName,
+                unit: track.unit,
+                required: Boolean(track.required),
+                sortOrder: Number(track.sortOrder || 0),
+                trackStatus: track.status,
+                startedSlotKey: track.startedSlotKey,
+                endedSlotKey: track.endedSlotKey,
+                status,
+                targetToNow: round(targetToNow),
+                actualToNow,
+                achievementPercent: round(slotPercent(actualToNow, targetToNow)),
+                expectedEntries: track.required ? dueValues.length : 0,
+                reportedEntries: reportedDueValues.length,
+                coveragePercent:
+                    track.required && dueValues.length
+                        ? round((reportedDueValues.length / dueValues.length) * 100)
+                        : 100,
+                missingSlotKeys: missingValues.map((value: any) => value.key),
+                behindSlotKeys: behindValues.map((value: any) => value.key),
+                transitionQuantity,
+                currentSlot: currentValue
+                    ? {
+                          key: currentValue.key,
+                          label: slotsByKey.get(String(currentValue.key))?.label || currentValue.key,
+                          target: Number(currentValue.target || 0),
+                          actual: Number(currentValue.actual || 0),
+                          reported: Boolean(currentValue.reported),
+                      }
+                    : undefined,
+                lastEnteredByName: latestValue?.updatedByName || latestValue?.enteredByName,
+                lastUpdatedAt: latestValue?.updatedAt || latestValue?.enteredAt,
+            };
+        })
+    );
+
+    alerts.sort(
+        (left, right) =>
+            severityRank[left.severity as MonitorAlertSeverity] -
+                severityRank[right.severity as MonitorAlertSeverity] ||
+            String(left.lineCode).localeCompare(String(right.lineCode)) ||
+            String(left.operationCode).localeCompare(String(right.operationCode)) ||
+            String(left.slotKey || '').localeCompare(String(right.slotKey || ''))
+    );
+
+    const expectedEntries = performance.reduce(
+        (sum: number, operation: any) => sum + Number(operation.expectedEntries || 0),
+        0
+    );
+    const reportedEntries = performance.reduce(
+        (sum: number, operation: any) => sum + (operation.required ? Number(operation.reportedEntries || 0) : 0),
+        0
+    );
+    const lastUpdatedAt = performance
+        .map((operation: any) => operation.lastUpdatedAt)
+        .filter(Boolean)
+        .sort((left: string, right: string) => right.localeCompare(left))[0];
+
+    return {
+        summary: {
+            trackedLines: new Set(performance.map((operation: any) => operation.lineId)).size,
+            trackCount: performance.length,
+            requiredTrackCount: performance.filter((operation: any) => operation.required).length,
+            expectedEntries,
+            reportedEntries,
+            missingEntries: Math.max(0, expectedEntries - reportedEntries),
+            coveragePercent: expectedEntries ? round((reportedEntries / expectedEntries) * 100) : 100,
+            behindTrackCount: performance.filter((operation: any) => operation.behindSlotKeys.length > 0).length,
+            onTrackTrackCount: performance.filter((operation: any) => operation.status === 'on_track').length,
+            currentTrackCount: performance.filter((operation: any) => operation.currentSlot).length,
+            currentReportedCount: performance.filter((operation: any) => operation.currentSlot?.reported).length,
+            criticalAlerts: alerts.filter((alert) => alert.severity === 'critical').length,
+            warningAlerts: alerts.filter((alert) => alert.severity === 'warning').length,
+            lastUpdatedAt,
+        },
+        alerts,
+        performance,
+    };
+};
+
 const baselineByLine = (baselineDetails: any[]) => {
     const samples = new Map<string, number[]>();
     baselineDetails.forEach((detail) => {
@@ -57,12 +283,14 @@ const baselineByLine = (baselineDetails: any[]) => {
     );
 };
 
-const dueSlotKeys = (detail: any, clock: MonitorClock) => {
+const dueSlotKeys = (detail: any, clock: MonitorClock): Set<string> => {
     const activeSlots = detail.timeSlots.filter((slot: any) => slot.isActive);
-    if (detail.productionDate < clock.localDate) return new Set(activeSlots.map((slot: any) => slot.key));
+    if (detail.productionDate < clock.localDate) return new Set(activeSlots.map((slot: any) => String(slot.key)));
     if (detail.productionDate > clock.localDate) return new Set<string>();
     return new Set(
-        activeSlots.filter((slot: any) => Number(slot.endMinute) <= clock.minuteOfDay).map((slot: any) => slot.key)
+        activeSlots
+            .filter((slot: any) => Number(slot.endMinute) <= clock.minuteOfDay)
+            .map((slot: any) => String(slot.key))
     );
 };
 
@@ -251,6 +479,7 @@ export const buildProductionMonitor = (detail: any, baselineDetails: any[], cloc
         (sum, baseline) => sum + Number(baseline.summary.totalActual || 0),
         0
     );
+    const operations = operationMonitor(detail, dueKeys, slotsByKey as Map<string, any>, clock);
 
     return {
         asOf: clock.asOf,
@@ -280,5 +509,8 @@ export const buildProductionMonitor = (detail: any, baselineDetails: any[], cloc
         alerts,
         linePerformance,
         slotPerformance,
+        operationSummary: operations.summary,
+        operationAlerts: operations.alerts,
+        operationPerformance: operations.performance,
     };
 };
