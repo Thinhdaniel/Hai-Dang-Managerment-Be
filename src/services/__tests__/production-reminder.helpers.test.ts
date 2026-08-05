@@ -85,6 +85,39 @@ test('chỉ cảnh báo dưới khoán sau khi toàn bộ chuyền đã báo', (
     assert.equal(result[0].underTargetLines[0].achievementPercent, 75);
 });
 
+test('vẫn nhắc công đoạn bắt buộc khi sản lượng tổng của chuyền đã báo đủ', () => {
+    const operationRecords = [
+        {
+            lineId: 'line-1',
+            lineCode: 'CM1',
+            workerCountConfirmedAt: '2026-08-01T00:30:00.000Z',
+            runs: [{ _id: 'run-1', startedSlotKey: '08:00', hourlyQuota: 100 }],
+            entries: [{ slotKey: '08:00', runId: 'run-1', quantity: 100 }],
+            operationTracks: [
+                {
+                    _id: 'track-1',
+                    operationCode: 'TRA-CO',
+                    operationName: 'Tra cổ',
+                    itemCode: 'HD-01',
+                    required: true,
+                    startedSlotKey: '08:00',
+                },
+            ],
+            operationEntries: [],
+        },
+    ];
+    const result = evaluateProductionReminderSlots(day, operationRecords, new Date('2026-08-01T02:03:00.000Z'), {
+        graceMinutes: 2,
+    });
+
+    assert.deepEqual(result[0].missingLines, []);
+    assert.equal(result[0].missingOperations.length, 1);
+    assert.equal(result[0].missingOperations[0].label, 'CM1 · TRA-CO · HD-01');
+    const copy = buildProductionReminderCopy(result, false);
+    assert.match(copy.title, /1 công đoạn/);
+    assert.match(copy.message, /TRA-CO/);
+});
+
 test('khung tăng ca không dùng khoán nên không sinh cảnh báo hiệu suất giả', () => {
     const overtimeRecords = records.map((record) => ({
         ...structuredClone(record),
@@ -122,6 +155,7 @@ test('không gửi dồn cảnh báo hiệu suất cũ khi server vừa thức h
         dueLineCount: 1,
         reportedLineCount: 1,
         missingLines: [],
+        missingOperations: [],
         underTargetLines: [{ lineId: 'line-1', lineCode: 'CM1', actual: 70, target: 100, achievementPercent: 70 }],
     };
 

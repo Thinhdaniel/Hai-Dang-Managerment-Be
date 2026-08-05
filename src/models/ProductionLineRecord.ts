@@ -59,6 +59,42 @@ const HourlyQcEntrySchema = new mongoose.Schema(
     { _id: true }
 );
 
+const ProductionOperationTrackSchema = new mongoose.Schema(
+    {
+        operationId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionOperation', required: true },
+        operationCode: { type: String, required: true, trim: true },
+        operationName: { type: String, required: true, trim: true },
+        unit: { type: String, trim: true, default: 'SP' },
+        itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionItem', required: true },
+        itemCode: { type: String, required: true, trim: true },
+        sourceRunId: { type: mongoose.Schema.Types.ObjectId, required: true },
+        hourlyQuota: { type: Number, required: true, min: 0, default: 0 },
+        required: { type: Boolean, default: true },
+        sortOrder: { type: Number, min: 0, default: 0 },
+        startedSlotKey: { type: String, required: true, trim: true },
+        endedSlotKey: { type: String, trim: true },
+        status: { type: String, enum: ['active', 'closed'], default: 'active' },
+        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        createdAt: { type: Date, default: Date.now },
+    },
+    { _id: true }
+);
+
+const HourlyOperationEntrySchema = new mongoose.Schema(
+    {
+        slotKey: { type: String, required: true, trim: true },
+        trackId: { type: mongoose.Schema.Types.ObjectId, required: true },
+        quantity: { type: Number, required: true, min: 0 },
+        note: { type: String, trim: true, maxlength: 500 },
+        enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        enteredAt: { type: Date, default: Date.now },
+        updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        updatedAt: { type: Date, default: Date.now },
+        lastClientMutationId: { type: String, trim: true, maxlength: 100 },
+    },
+    { _id: true }
+);
+
 const ProductionSetupCorrectionSchema = new mongoose.Schema(
     {
         reason: { type: String, required: true, trim: true, maxlength: 500 },
@@ -89,6 +125,9 @@ const ProductionLineRecordSchema = new mongoose.Schema(
         runs: { type: [ProductionRunSchema], default: [] },
         entries: { type: [HourlyProductionEntrySchema], default: [] },
         qcEntries: { type: [HourlyQcEntrySchema], default: [] },
+        operationTrackingEnabled: { type: Boolean, default: false },
+        operationTracks: { type: [ProductionOperationTrackSchema], default: [] },
+        operationEntries: { type: [HourlyOperationEntrySchema], default: [] },
         setupCorrections: { type: [ProductionSetupCorrectionSchema], default: [] },
         updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     },

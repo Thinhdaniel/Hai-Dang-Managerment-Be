@@ -74,9 +74,38 @@ export const serializeProductionItem = (input: any) => {
         name: item.name,
         unit: item.unit || 'SP',
         unitPrice: Number(item.unitPrice || 0),
+        operationTemplates: (item.operationTemplates || [])
+            .map((template: any) => ({
+                operationId: toId(template.operationId),
+                operationCode: template.operationCode,
+                operationName: template.operationName,
+                unit: template.unit || 'SP',
+                hourlyQuota: Number(template.hourlyQuota || 0),
+                required: template.required !== false,
+                sortOrder: Number(template.sortOrder || 0),
+            }))
+            .sort(
+                (left: any, right: any) =>
+                    left.sortOrder - right.sortOrder || left.operationCode.localeCompare(right.operationCode)
+            ),
         isActive: item.isActive !== false,
         createdAt: toIso(item.createdAt),
         updatedAt: toIso(item.updatedAt),
+    };
+};
+
+export const serializeProductionOperation = (input: any) => {
+    const operation = typeof input?.toObject === 'function' ? input.toObject() : input;
+    return {
+        id: toId(operation),
+        plantId: toId(operation.plantId),
+        code: operation.code,
+        name: operation.name,
+        unit: operation.unit || 'SP',
+        sortOrder: Number(operation.sortOrder || 0),
+        isActive: operation.isActive !== false,
+        createdAt: toIso(operation.createdAt),
+        updatedAt: toIso(operation.updatedAt),
     };
 };
 
@@ -231,6 +260,116 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     updatedAt: toIso(entry.updatedAt),
                 };
             });
+            const operationTracks = (record.operationTracks || [])
+                .map((track: any) => ({
+                    id: toId(track),
+                    operationId: toId(track.operationId),
+                    operationCode: track.operationCode,
+                    operationName: track.operationName,
+                    unit: track.unit || 'SP',
+                    itemId: toId(track.itemId),
+                    itemCode: track.itemCode,
+                    sourceRunId: toId(track.sourceRunId),
+                    hourlyQuota: Number(track.hourlyQuota || 0),
+                    required: track.required !== false,
+                    sortOrder: Number(track.sortOrder || 0),
+                    startedSlotKey: track.startedSlotKey,
+                    endedSlotKey: track.endedSlotKey,
+                    status: track.status || 'active',
+                    createdBy: toId(track.createdBy),
+                    createdByName: actorName(track.createdBy),
+                    createdAt: toIso(track.createdAt),
+                }))
+                .sort(
+                    (left: any, right: any) =>
+                        left.sortOrder - right.sortOrder || left.operationCode.localeCompare(right.operationCode)
+                );
+            const operationEntries = (record.operationEntries || []).map((entry: any) => ({
+                id: toId(entry),
+                slotKey: entry.slotKey,
+                trackId: toId(entry.trackId),
+                quantity: Number(entry.quantity || 0),
+                note: entry.note,
+                enteredBy: toId(entry.enteredBy),
+                enteredByName: actorName(entry.enteredBy),
+                enteredAt: toIso(entry.enteredAt),
+                updatedBy: toId(entry.updatedBy),
+                updatedByName: actorName(entry.updatedBy),
+                updatedAt: toIso(entry.updatedAt),
+            }));
+            const slotIndexByKey = new Map(slots.map((slot: any, index: number) => [String(slot.key), index]));
+            const operationSlotValues = operationTracks.flatMap((track: any) => {
+                const startIndex = Number(slotIndexByKey.get(String(track.startedSlotKey)) ?? Number.MAX_SAFE_INTEGER);
+                const endIndex = track.endedSlotKey
+                    ? Number(slotIndexByKey.get(String(track.endedSlotKey)) ?? -1)
+                    : Number.MAX_SAFE_INTEGER;
+                return slots.map((slot: any, slotIndex: number) => {
+                    const slotEntries = operationEntries.filter(
+                        (entry: any) => entry.slotKey === slot.key && String(entry.trackId) === String(track.id)
+                    );
+                    const latestEntry = [...slotEntries].sort(
+                        (left: any, right: any) =>
+                            new Date(right.updatedAt || right.enteredAt || 0).getTime() -
+                            new Date(left.updatedAt || left.enteredAt || 0).getTime()
+                    )[0];
+                    const due = slot.isActive !== false && slotIndex >= startIndex && slotIndex <= endIndex;
+                    const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
+                    const target = due && slot.kind !== 'overtime' ? track.hourlyQuota * durationHours : 0;
+                    const actual = slotEntries.reduce(
+                        (sum: number, entry: any) => sum + Number(entry.quantity || 0),
+                        0
+                    );
+                    return {
+                        key: slot.key,
+                        trackId: track.id,
+                        operationId: track.operationId,
+                        operationCode: track.operationCode,
+                        operationName: track.operationName,
+                        unit: track.unit,
+                        itemId: track.itemId,
+                        itemCode: track.itemCode,
+                        sourceRunId: track.sourceRunId,
+                        required: track.required,
+                        due,
+                        transition: !due && slotEntries.length > 0,
+                        overtime: slot.kind === 'overtime',
+                        target: round(target),
+                        actual,
+                        achievementPercent: target > 0 ? round((actual / target) * 100, 1) : 0,
+                        reported: slotEntries.length > 0,
+                        entryIds: slotEntries.map((entry: any) => entry.id),
+                        note:
+                            [...new Set(slotEntries.map((entry: any) => entry.note).filter(Boolean))]
+                                .join(' · ')
+                                .slice(0, 500) || undefined,
+                        enteredBy: latestEntry?.enteredBy,
+                        enteredByName: latestEntry?.enteredByName,
+                        enteredAt: latestEntry?.enteredAt,
+                        updatedBy: latestEntry?.updatedBy,
+                        updatedByName: latestEntry?.updatedByName,
+                        updatedAt: latestEntry?.updatedAt,
+                    };
+                });
+            });
+            const operationTrackSummaries = operationTracks.map((track: any) => {
+                const values = operationSlotValues.filter((value: any) => value.trackId === track.id);
+                const dueValues = values.filter((value: any) => value.due);
+                const target = dueValues.reduce((sum: number, value: any) => sum + Number(value.target || 0), 0);
+                const actual = values.reduce((sum: number, value: any) => sum + Number(value.actual || 0), 0);
+                const expectedEntries = track.required ? dueValues.length : 0;
+                const reportedEntries = track.required
+                    ? dueValues.filter((value: any) => value.reported).length
+                    : values.filter((value: any) => value.reported).length;
+                return {
+                    ...track,
+                    target: round(target),
+                    actual,
+                    achievementPercent: target > 0 ? round((actual / target) * 100, 1) : 0,
+                    expectedEntries,
+                    reportedEntries,
+                    coveragePercent: expectedEntries > 0 ? round((reportedEntries / expectedEntries) * 100, 1) : 100,
+                };
+            });
 
             const slotValues = slots.map((slot: any) => {
                 // Slot đã tắt không được mang runId: API nhập liệu từ chối slot tắt, nên nếu vẫn gán
@@ -329,6 +468,14 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             const qcReportedSlots = qcSlotValues.filter(
                 (value: any, index: number) => slots[index]?.isActive !== false && value.reported
             ).length;
+            const operationExpectedEntries = operationTrackSummaries.reduce(
+                (sum: number, track: any) => sum + Number(track.expectedEntries || 0),
+                0
+            );
+            const operationReportedEntries = operationTrackSummaries.reduce(
+                (sum: number, track: any) => sum + Number(track.reportedEntries || 0),
+                0
+            );
             const workerCount = Number(record.workerCount || 0);
 
             return {
@@ -351,6 +498,11 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 slotValues,
                 qcEntries,
                 qcSlotValues,
+                operationTrackingEnabled: Boolean(record.operationTrackingEnabled),
+                operationTracks,
+                operationEntries,
+                operationSlotValues,
+                operationTrackSummaries,
                 totalTarget: round(totalTarget),
                 totalActual,
                 achievementPercent: totalTarget > 0 ? round((totalActual / totalTarget) * 100, 1) : 0,
@@ -364,6 +516,15 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 qcReportedSlots,
                 qcExpectedSlots,
                 qcCoveragePercent: qcExpectedSlots > 0 ? round((qcReportedSlots / qcExpectedSlots) * 100, 1) : 0,
+                operationExpectedEntries,
+                operationReportedEntries,
+                operationCoveragePercent:
+                    operationExpectedEntries > 0
+                        ? round((operationReportedEntries / operationExpectedEntries) * 100, 1)
+                        : 100,
+                operationBehindCount: operationTrackSummaries.filter(
+                    (track: any) => track.target > 0 && track.actual < track.target
+                ).length,
                 configured: Boolean(record.workerCountConfirmedAt && runs.length > 0),
                 updatedBy: toId(record.updatedBy),
                 updatedByName: actorName(record.updatedBy),
@@ -375,6 +536,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
     const slotSummaries = slots.map((slot: any) => {
         const values = lines.map((line: any) => line.slotValues.find((value: any) => value.key === slot.key));
         const qcValues = lines.map((line: any) => line.qcSlotValues.find((value: any) => value.key === slot.key));
+        const operationValues = lines.flatMap((line: any) =>
+            line.operationSlotValues.filter((value: any) => value.key === slot.key && value.due && value.required)
+        );
         // Mẫu số chỉ tính chuyền CÓ mã chạy trong khung giờ này — khớp logic validate gửi duyệt,
         // tránh khung chiều báo "3/12 chuyền" khi 9 chuyền đã kết thúc allocation từ trưa.
         const dueLines = lines.filter(
@@ -399,6 +563,19 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             qcExpectedLines: slot.isActive === false ? 0 : lines.length,
             qcCoveragePercent:
                 slot.isActive === false || !lines.length ? 0 : round((qcReportedLines / lines.length) * 100, 1),
+            operationExpectedEntries: operationValues.length,
+            operationReportedEntries: operationValues.filter((value: any) => value.reported).length,
+            operationCoveragePercent:
+                operationValues.length > 0
+                    ? round(
+                          (operationValues.filter((value: any) => value.reported).length / operationValues.length) *
+                              100,
+                          1
+                      )
+                    : 100,
+            operationBehindCount: operationValues.filter(
+                (value: any) => value.reported && value.target > 0 && value.actual < value.target
+            ).length,
             totalLines: dueLines.length,
         };
     });
@@ -412,6 +589,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
     const qcTotalQuantity = lines.reduce((sum, line) => sum + line.qcTotalQuantity, 0);
     const qcReportedLineSlots = lines.reduce((sum, line) => sum + Number(line.qcReportedSlots || 0), 0);
     const qcExpectedLineSlots = lines.reduce((sum, line) => sum + Number(line.qcExpectedSlots || 0), 0);
+    const operationExpectedEntries = lines.reduce((sum, line) => sum + Number(line.operationExpectedEntries || 0), 0);
+    const operationReportedEntries = lines.reduce((sum, line) => sum + Number(line.operationReportedEntries || 0), 0);
+    const operationTrackCount = lines.reduce((sum, line) => sum + Number(line.operationTracks?.length || 0), 0);
 
     const dataAsOf = [day.updatedAt, ...lines.map((line: any) => line.updatedAt)]
         .filter(Boolean)
@@ -471,6 +651,15 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             qcExpectedLineSlots,
             qcCoveragePercent:
                 qcExpectedLineSlots > 0 ? round((qcReportedLineSlots / qcExpectedLineSlots) * 100, 1) : 0,
+            operationTrackedLineCount: lines.filter((line) => line.operationTrackingEnabled).length,
+            operationTrackCount,
+            operationExpectedEntries,
+            operationReportedEntries,
+            operationCoveragePercent:
+                operationExpectedEntries > 0
+                    ? round((operationReportedEntries / operationExpectedEntries) * 100, 1)
+                    : 100,
+            operationBehindCount: lines.reduce((sum, line) => sum + Number(line.operationBehindCount || 0), 0),
         },
         slotSummaries,
         createdAt: toIso(day.createdAt),
@@ -499,6 +688,19 @@ export const validateProductionDayForSubmission = (detail: any) => {
         const preview = missing.slice(0, 5).join(', ');
         const suffix = missing.length > 5 ? ` và ${missing.length - 5} ô khác` : '';
         return { valid: false, message: `Còn thiếu sản lượng: ${preview}${suffix}` };
+    }
+
+    const missingOperations = configuredLines.flatMap((line: any) =>
+        (line.operationSlotValues || [])
+            .filter((value: any) => value.due && value.required && !value.reported)
+            .map(
+                (value: any) => `${line.lineCode} - ${value.operationCode} - ${slotLabels.get(value.key) || value.key}`
+            )
+    );
+    if (missingOperations.length) {
+        const preview = missingOperations.slice(0, 5).join(', ');
+        const suffix = missingOperations.length > 5 ? ` và ${missingOperations.length - 5} ô khác` : '';
+        return { valid: false, message: `Còn thiếu công đoạn bắt buộc: ${preview}${suffix}` };
     }
 
     return { valid: true };

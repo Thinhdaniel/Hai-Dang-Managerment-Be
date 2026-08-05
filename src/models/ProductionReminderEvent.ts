@@ -28,6 +28,7 @@ const ProductionReminderEventSchema = new mongoose.Schema(
         },
         missingLineIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
         missingLineCodes: { type: [String], default: [] },
+        missingOperationLabels: { type: [String], default: [] },
         underTargetLineCodes: { type: [String], default: [] },
         firstDetectedAt: { type: Date, default: Date.now, required: true },
         lastDetectedAt: { type: Date, default: Date.now, required: true },

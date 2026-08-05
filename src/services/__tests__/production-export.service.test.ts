@@ -48,6 +48,24 @@ const detail = {
                     note: 'Kiểm cả hàng tồn',
                 },
             ],
+            operationSlotValues: [
+                {
+                    key: '08:00',
+                    trackId: 'track-1',
+                    itemCode: '416',
+                    operationCode: 'TRA-CO',
+                    operationName: 'Tra cổ',
+                    unit: 'SP',
+                    target: 80,
+                    actual: 75,
+                    required: true,
+                    due: true,
+                    reported: true,
+                    transition: false,
+                    updatedByName: 'Tổ trưởng A',
+                    updatedAt: '2026-07-18T02:10:00.000Z',
+                },
+            ],
         },
     ],
     summary: {
@@ -64,7 +82,7 @@ test('xuất workbook báo cáo ngày khớp mẫu công ty và đúng khổ in'
 
     assert.deepEqual(
         workbook.worksheets.map((sheet) => sheet.name),
-        ['BC NGAY', 'NHAP LIEU', 'QC THEO GIO']
+        ['BC NGAY', 'NHAP LIEU', 'QC THEO GIO', 'CONG DOAN THEO GIO']
     );
     const bc = workbook.getWorksheet('BC NGAY');
     assert.equal(bc?.pageSetup.paperSize, 9);
@@ -94,6 +112,10 @@ test('xuất workbook báo cáo ngày khớp mẫu công ty và đúng khổ in'
     assert.equal(qc?.getCell('E6').value, 114);
     assert.equal(qc?.getCell('F6').value, 6);
     assert.equal(qc?.getCell('H6').value, 'QC Lan');
+    const operations = workbook.getWorksheet('CONG DOAN THEO GIO');
+    assert.equal(operations?.getCell('E6').value, 'TRA-CO');
+    assert.equal(operations?.getCell('H6').value, 80);
+    assert.equal(operations?.getCell('I6').value, 75);
     assert.ok((await workbook.xlsx.writeBuffer()).byteLength > 5_000);
 });
 

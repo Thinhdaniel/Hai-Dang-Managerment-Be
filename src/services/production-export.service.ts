@@ -457,6 +457,75 @@ const addQcLedgerSheet = (workbook: ExcelJS.Workbook, detail: any) => {
     sheet.pageSetup.printArea = `A1:${sheet.getColumn(headers.length).letter}${lastRow}`;
 };
 
+const addOperationLedgerSheet = (workbook: ExcelJS.Workbook, detail: any) => {
+    const headers = [
+        'Ngày',
+        'Khung giờ',
+        'Chuyền',
+        'Mã hàng',
+        'Mã công đoạn',
+        'Tên công đoạn',
+        'ĐVT',
+        'Khoán',
+        'Thực tế',
+        '% đạt',
+        'Yêu cầu nhập',
+        'Trạng thái',
+        'Người nhập',
+        'Cập nhật lúc',
+        'Ghi chú',
+    ];
+    const sheet = workbook.addWorksheet('CONG DOAN THEO GIO');
+    configureSheet(sheet, 'landscape');
+    styleTitle(
+        sheet,
+        headers.length,
+        'SỔ SẢN LƯỢNG CÔNG ĐOẠN TRỌNG YẾU',
+        `${detail.plantName || 'Cơ sở'} · Dữ liệu bán thành phẩm độc lập, không cộng vào sản lượng thành phẩm hoặc tiền lương`
+    );
+    const headerRow = sheet.getRow(5);
+    headerRow.values = headers;
+    styleHeader(headerRow);
+
+    const slotByKey = new Map((detail.timeSlots || []).map((slot: any) => [String(slot.key), slot]));
+    (detail.lines || []).forEach((line: any) => {
+        (line.operationSlotValues || [])
+            .filter((value: any) => value.due || value.reported)
+            .forEach((value: any) => {
+                const slot: any = slotByKey.get(String(value.key));
+                sheet.addRow([
+                    formatProductionDate(detail.productionDate),
+                    slot ? slotRangeLabel(slot) : value.key,
+                    line.lineCode,
+                    value.itemCode || '',
+                    value.operationCode || '',
+                    value.operationName || '',
+                    value.unit || 'SP',
+                    Number(value.target || 0),
+                    value.reported ? Number(value.actual || 0) : '',
+                    value.reported && Number(value.target || 0) > 0
+                        ? Number(value.actual || 0) / Number(value.target || 1)
+                        : '',
+                    value.required ? 'Bắt buộc' : 'Tham khảo',
+                    value.reported ? (value.transition ? 'Hàng chuyển tiếp' : 'Đã nhập') : 'Chưa nhập',
+                    value.updatedByName || value.enteredByName || '',
+                    formatVietnamTimestamp(value.updatedAt || value.enteredAt),
+                    value.note || '',
+                ]);
+            });
+    });
+
+    const lastRow = Math.max(6, sheet.rowCount);
+    styleDataArea(sheet, 6, lastRow, headers.length);
+    const widths = [12, 13, 11, 15, 16, 25, 8, 12, 12, 11, 13, 16, 20, 18, 32];
+    widths.forEach((width, index) => (sheet.getColumn(index + 1).width = width));
+    [8, 9].forEach((column) => (sheet.getColumn(column).numFmt = '#,##0'));
+    sheet.getColumn(10).numFmt = '0.0%';
+    sheet.views = [{ state: 'frozen', xSplit: 7, ySplit: 5 }];
+    sheet.autoFilter = { from: { row: 5, column: 1 }, to: { row: lastRow, column: headers.length } };
+    sheet.pageSetup.printArea = `A1:${sheet.getColumn(headers.length).letter}${lastRow}`;
+};
+
 export const buildProductionWorkbook = async ({ detail }: { detail: any }) => {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Hải Đăng Production';
@@ -468,6 +537,7 @@ export const buildProductionWorkbook = async ({ detail }: { detail: any }) => {
     addDailyReportSheet(workbook, detail);
     addEntryLedgerSheet(workbook, detail);
     addQcLedgerSheet(workbook, detail);
+    addOperationLedgerSheet(workbook, detail);
 
     return workbook;
 };

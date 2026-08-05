@@ -131,6 +131,69 @@ test('phân loại ngoại lệ và không coi ngày khóa sổ là ngày mở',
     assert.equal(report.exceptionSummary.critical, 2);
 });
 
+test('tổng hợp công đoạn theo chuyền và cảnh báo lượt bắt buộc còn thiếu', () => {
+    const detail: any = makeDetail({ date: '2026-07-20', quantities: [100, 100], secondReported: true });
+    detail.lines[0].operationTrackSummaries = [
+        {
+            id: 'track-1',
+            operationId: 'operation-1',
+            operationCode: 'TRA-CO',
+            operationName: 'Tra cổ',
+            itemId: 'item-1',
+            itemCode: 'HD-01',
+            unit: 'SP',
+            required: true,
+            target: 160,
+            actual: 70,
+            expectedEntries: 2,
+            reportedEntries: 1,
+        },
+    ];
+    detail.lines[0].operationSlotValues = [
+        {
+            key: '08:00',
+            trackId: 'track-1',
+            operationId: 'operation-1',
+            operationCode: 'TRA-CO',
+            operationName: 'Tra cổ',
+            itemId: 'item-1',
+            itemCode: 'HD-01',
+            unit: 'SP',
+            required: true,
+            due: true,
+            reported: true,
+            target: 80,
+            actual: 70,
+        },
+        {
+            key: '09:00',
+            trackId: 'track-1',
+            operationId: 'operation-1',
+            operationCode: 'TRA-CO',
+            operationName: 'Tra cổ',
+            itemId: 'item-1',
+            itemCode: 'HD-01',
+            unit: 'SP',
+            required: true,
+            due: true,
+            reported: false,
+            target: 80,
+            actual: 0,
+        },
+    ];
+
+    const report = buildProductionReport([detail], [makePlan('2026-07-20')], options);
+
+    assert.equal(report.operations.length, 1);
+    assert.equal(report.operations[0].actualQuantity, 70);
+    assert.equal(report.operations[0].coveragePercent, 50);
+    assert.equal(report.operations[0].behindSlots, 1);
+    assert.equal(report.summary.operationCoveragePercent, 50);
+    assert.equal(report.exceptionSummary.missingOperationReports, 1);
+    assert.equal(report.summary.actualQuantity, 200);
+    assert.equal(report.summary.totalAmount, 2_000);
+});
+
 test('ẩn toàn bộ giá trị tài chính và tính so sánh kỳ trước', () => {
     const current = makeDetail({ date: '2026-07-20', quantities: [120, 80], secondReported: true });
     const previous = makeDetail({ date: '2026-07-19', quantities: [80, 20], secondReported: true });

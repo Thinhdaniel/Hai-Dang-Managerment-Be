@@ -53,6 +53,7 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
     const lineMap = new Map<string, any>();
     const itemMap = new Map<string, any>();
     const orderMap = new Map<string, any>();
+    const operationMap = new Map<string, any>();
     const exceptions: any[] = [];
 
     const ensureLine = (source: any) => {
@@ -126,6 +127,36 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
         return order;
     };
 
+    const ensureOperation = (source: any, line: any) => {
+        const lineId = String(line.lineId || line.lineCode || 'unknown-line');
+        const itemId = String(source.itemId || source.itemCode || 'unknown-item');
+        const operationId = String(source.operationId || source.operationCode || 'unknown-operation');
+        const key = `${lineId}:${itemId}:${operationId}`;
+        if (!operationMap.has(key)) {
+            operationMap.set(key, {
+                key,
+                lineId,
+                lineCode: line.lineCode || 'N/A',
+                leaderName: line.leaderName,
+                itemId,
+                itemCode: source.itemCode || 'N/A',
+                operationId,
+                operationCode: source.operationCode || 'N/A',
+                operationName: source.operationName || 'Công đoạn',
+                unit: source.unit || 'SP',
+                required: source.required !== false,
+                activeDays: new Set<string>(),
+                targetQuantity: 0,
+                actualQuantity: 0,
+                expectedEntries: 0,
+                reportedEntries: 0,
+                behindSlots: 0,
+                transitionQuantity: 0,
+            });
+        }
+        return operationMap.get(key);
+    };
+
     allocations.forEach((allocation: any) => {
         const line = ensureLine(allocation);
         line.plannedQuantity += Number(allocation.plannedQuantity || 0);
@@ -145,6 +176,9 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
         let expectedReports = 0;
         let reportedEntries = 0;
         let plannedActualQuantity = 0;
+        let operationExpectedEntries = 0;
+        let operationReportedEntries = 0;
+        let operationBehindCount = 0;
 
         if (detail.status !== 'locked') {
             exceptions.push({
@@ -263,6 +297,45 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
                     });
                 }
             });
+
+            (line.operationTrackSummaries || []).forEach((track: any) => {
+                const operation = ensureOperation(track, line);
+                operation.activeDays.add(String(detail.productionDate));
+                operation.targetQuantity += Number(track.target || 0);
+                operation.actualQuantity += Number(track.actual || 0);
+                operation.expectedEntries += Number(track.expectedEntries || 0);
+                operation.reportedEntries += Number(track.reportedEntries || 0);
+            });
+
+            (line.operationSlotValues || []).forEach((value: any) => {
+                const operation = ensureOperation(value, line);
+                if (value.transition && value.reported) {
+                    operation.transitionQuantity += Number(value.actual || 0);
+                }
+                if (!value.due || value.required === false) return;
+                operationExpectedEntries += 1;
+                if (value.reported) operationReportedEntries += 1;
+                const slotLabel = detail.timeSlots?.find((slot: any) => slot.key === value.key)?.label || value.key;
+                if (!value.reported) {
+                    exceptions.push({
+                        id: `missing-operation-${detail.id}-${line.lineId}-${value.trackId}-${value.key}`,
+                        type: 'missing_operation_report',
+                        severity: 'warning',
+                        productionDate: detail.productionDate,
+                        lineId: line.lineId,
+                        lineCode: line.lineCode,
+                        slotKey: value.key,
+                        slotLabel,
+                        title: `${line.lineCode} thiếu công đoạn ${value.operationCode}`,
+                        description: `Khung ${slotLabel}, mã ${value.itemCode || 'không xác định'} chưa nhập ${value.operationName}.`,
+                    });
+                    return;
+                }
+                if (Number(value.target || 0) > 0 && Number(value.actual || 0) < Number(value.target || 0)) {
+                    operation.behindSlots += 1;
+                    operationBehindCount += 1;
+                }
+            });
         });
 
         const plannedQuantity = (dayPlan?.allocations || []).reduce(
@@ -281,6 +354,10 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
             expectedReports,
             reportedEntries,
             reportingRate: percentage(reportedEntries, expectedReports),
+            operationExpectedEntries,
+            operationReportedEntries,
+            operationCoveragePercent: percentage(operationReportedEntries, operationExpectedEntries),
+            operationBehindCount,
             workers: Number(detail.summary?.totalWorkers || 0),
             configuredLines: Number(detail.summary?.configuredLineCount || 0),
             totalLines: Number(detail.summary?.lineCount || 0),
@@ -294,6 +371,9 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
     const totalPlannedActual = trend.reduce((sum, day) => sum + day.plannedActualQuantity, 0);
     const totalExpectedReports = trend.reduce((sum, day) => sum + day.expectedReports, 0);
     const totalReportedEntries = trend.reduce((sum, day) => sum + day.reportedEntries, 0);
+    const totalOperationExpectedEntries = trend.reduce((sum, day) => sum + day.operationExpectedEntries, 0);
+    const totalOperationReportedEntries = trend.reduce((sum, day) => sum + day.operationReportedEntries, 0);
+    const totalOperationBehindCount = trend.reduce((sum, day) => sum + day.operationBehindCount, 0);
     const totalWorkerDays = trend.reduce((sum, day) => sum + day.workers, 0);
     const totalAmount = financialsVisible
         ? trend.reduce((sum, day) => sum + Number(day.totalAmount || 0), 0)
@@ -369,6 +449,37 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
                 String(left.orderCode || '').localeCompare(String(right.orderCode || ''))
         );
 
+    const operations = [...operationMap.values()]
+        .map((operation) => ({
+            key: operation.key,
+            lineId: operation.lineId,
+            lineCode: operation.lineCode,
+            leaderName: operation.leaderName,
+            itemId: operation.itemId,
+            itemCode: operation.itemCode,
+            operationId: operation.operationId,
+            operationCode: operation.operationCode,
+            operationName: operation.operationName,
+            unit: operation.unit,
+            required: operation.required,
+            activeDays: operation.activeDays.size,
+            targetQuantity: round(operation.targetQuantity, 1),
+            actualQuantity: round(operation.actualQuantity, 1),
+            achievementPercent: percentage(operation.actualQuantity, operation.targetQuantity),
+            expectedEntries: operation.expectedEntries,
+            reportedEntries: operation.reportedEntries,
+            coveragePercent:
+                operation.expectedEntries > 0 ? percentage(operation.reportedEntries, operation.expectedEntries) : 100,
+            behindSlots: operation.behindSlots,
+            transitionQuantity: round(operation.transitionQuantity, 1),
+        }))
+        .sort(
+            (left, right) =>
+                left.lineCode.localeCompare(right.lineCode) ||
+                left.itemCode.localeCompare(right.itemCode) ||
+                left.operationCode.localeCompare(right.operationCode)
+        );
+
     const severityRank: Record<string, number> = { critical: 0, warning: 1, info: 2 };
     exceptions.sort(
         (left, right) =>
@@ -378,11 +489,16 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
     );
 
     const reportingRate = percentage(totalReportedEntries, totalExpectedReports);
+    const operationCoveragePercent = percentage(totalOperationReportedEntries, totalOperationExpectedEntries);
     const achievementPercent = percentage(totalActual, totalTarget);
     const health =
-        reportingRate < 90 || (totalTarget > 0 && achievementPercent < 80)
+        reportingRate < 90 ||
+        (totalOperationExpectedEntries > 0 && operationCoveragePercent < 90) ||
+        (totalTarget > 0 && achievementPercent < 80)
             ? 'critical'
-            : reportingRate < 98 || (totalTarget > 0 && achievementPercent < 95)
+            : reportingRate < 98 ||
+                (totalOperationExpectedEntries > 0 && operationCoveragePercent < 98) ||
+                (totalTarget > 0 && achievementPercent < 95)
               ? 'warning'
               : 'healthy';
 
@@ -399,6 +515,11 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
             expectedReports: totalExpectedReports,
             reportedEntries: totalReportedEntries,
             reportingRate,
+            operationExpectedEntries: totalOperationExpectedEntries,
+            operationReportedEntries: totalOperationReportedEntries,
+            operationCoveragePercent,
+            operationBehindCount: totalOperationBehindCount,
+            operationCount: operations.length,
             averageWorkers: details.length > 0 ? round(totalWorkerDays / details.length, 1) : 0,
             outputPerWorkerDay: totalWorkerDays > 0 ? round(totalActual / totalWorkerDays, 1) : 0,
             averageDailyActual: details.length > 0 ? round(totalActual / details.length, 1) : 0,
@@ -412,11 +533,16 @@ const buildCoreReport = (details: any[], plans: any[], financialsVisible: boolea
         lines,
         items,
         orders,
+        operations,
         exceptions,
     };
 };
 
-const buildCarrySnapshot = (entries: any[], tracked: ReturnType<typeof buildCoreReport>, financialsVisible: boolean) => {
+const buildCarrySnapshot = (
+    entries: any[],
+    tracked: ReturnType<typeof buildCoreReport>,
+    financialsVisible: boolean
+) => {
     const lineMap = new Map<string, any>();
     const itemMap = new Map<string, any>();
     const orderMap = new Map<string, any>();
@@ -546,11 +672,7 @@ const buildCarrySnapshot = (entries: any[], tracked: ReturnType<typeof buildCore
 
 const enrichLines = (current: any[], opening: any, cumulative: any, financialsVisible: boolean) => {
     const currentById = new Map(current.map((row) => [String(row.lineId), row]));
-    const keys = new Set<string>([
-        ...currentById.keys(),
-        ...opening.lines.keys(),
-        ...cumulative.lines.keys(),
-    ]);
+    const keys = new Set<string>([...currentById.keys(), ...opening.lines.keys(), ...cumulative.lines.keys()]);
     return [...keys]
         .map((key) => {
             const period = currentById.get(key);
@@ -578,8 +700,7 @@ const enrichLines = (current: any[], opening: any, cumulative: any, financialsVi
                 outputPerWorkerDay: Number(period?.outputPerWorkerDay || 0),
                 underTargetDays: Number(period?.underTargetDays || 0),
                 unallocatedOpeningQuantity: round(Number(openingRow?.unallocatedQuantity || 0), 1),
-                openingAmountComplete:
-                    Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
+                openingAmountComplete: Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
                 ...(financialsVisible
                     ? {
                           totalAmount: Number(period?.totalAmount || 0),
@@ -598,11 +719,7 @@ const enrichLines = (current: any[], opening: any, cumulative: any, financialsVi
 
 const enrichItems = (current: any[], opening: any, cumulative: any, financialsVisible: boolean) => {
     const currentById = new Map(current.map((row) => [String(row.itemId), row]));
-    const keys = new Set<string>([
-        ...currentById.keys(),
-        ...opening.items.keys(),
-        ...cumulative.items.keys(),
-    ]);
+    const keys = new Set<string>([...currentById.keys(), ...opening.items.keys(), ...cumulative.items.keys()]);
     return [...keys]
         .map((key) => {
             const period = currentById.get(key);
@@ -626,8 +743,7 @@ const enrichItems = (current: any[], opening: any, cumulative: any, financialsVi
                 plannedQuantity: Number(period?.plannedQuantity || 0),
                 plannedActualQuantity: Number(period?.plannedActualQuantity || 0),
                 planAttainmentPercent: Number(period?.planAttainmentPercent || 0),
-                openingAmountComplete:
-                    Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
+                openingAmountComplete: Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
                 ...(financialsVisible
                     ? {
                           totalAmount: Number(period?.totalAmount || 0),
@@ -646,11 +762,7 @@ const enrichItems = (current: any[], opening: any, cumulative: any, financialsVi
 
 const enrichOrders = (current: any[], opening: any, cumulative: any, financialsVisible: boolean) => {
     const currentById = new Map(current.map((row) => [String(row.orderKey), row]));
-    const keys = new Set<string>([
-        ...currentById.keys(),
-        ...opening.orders.keys(),
-        ...cumulative.orders.keys(),
-    ]);
+    const keys = new Set<string>([...currentById.keys(), ...opening.orders.keys(), ...cumulative.orders.keys()]);
     return [...keys]
         .map((key) => {
             const period = currentById.get(key);
@@ -679,8 +791,7 @@ const enrichOrders = (current: any[], opening: any, cumulative: any, financialsV
                 plannedQuantity: Number(period?.plannedQuantity || 0),
                 plannedActualQuantity: Number(period?.plannedActualQuantity || 0),
                 planAttainmentPercent: Number(period?.planAttainmentPercent || 0),
-                openingAmountComplete:
-                    Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
+                openingAmountComplete: Number(openingRow?.valuedQuantity || 0) >= Number(openingRow?.quantity || 0),
                 ...(financialsVisible
                     ? {
                           totalAmount: Number(period?.totalAmount || 0),
@@ -710,11 +821,7 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
     const cumulativeAvailable = !cutoffDate || options.to >= cutoffDate;
     const openingEntries = cumulativeAvailable ? options.openingBalance?.entries || [] : [];
     const prePeriod = buildCoreReport(options.prePeriodDetails || [], [], options.financialsVisible);
-    const cumulativeTracked = buildCoreReport(
-        options.cumulativeDetails || details,
-        [],
-        options.financialsVisible
-    );
+    const cumulativeTracked = buildCoreReport(options.cumulativeDetails || details, [], options.financialsVisible);
     const openingSnapshot = buildCarrySnapshot(openingEntries, prePeriod, options.financialsVisible);
     const cumulativeSnapshot = buildCarrySnapshot(openingEntries, cumulativeTracked, options.financialsVisible);
     const lines = enrichLines(current.lines, openingSnapshot, cumulativeSnapshot, options.financialsVisible);
@@ -753,9 +860,7 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
             ? {
                   periodAmount: Number(current.summary.totalAmount || 0),
                   openingAmount: Number(openingSnapshot.summary.amount || 0),
-                  cumulativeAmount: cumulativeAvailable
-                      ? Number(cumulativeSnapshot.summary.amount || 0)
-                      : undefined,
+                  cumulativeAmount: cumulativeAvailable ? Number(cumulativeSnapshot.summary.amount || 0) : undefined,
                   cumulativeAmountComplete,
               }
             : {}),
@@ -857,12 +962,15 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
         lines,
         items,
         orders,
+        operations: current.operations,
         exceptionSummary: {
             total: current.exceptions.length,
             critical: current.exceptions.filter((item) => item.severity === 'critical').length,
             warning: current.exceptions.filter((item) => item.severity === 'warning').length,
             info: current.exceptions.filter((item) => item.severity === 'info').length,
             missingReports: current.exceptions.filter((item) => item.type === 'missing_report').length,
+            missingOperationReports: current.exceptions.filter((item) => item.type === 'missing_operation_report')
+                .length,
             underTarget: current.exceptions.filter((item) => item.type === 'under_target').length,
             zeroWithoutNote: current.exceptions.filter((item) => item.type === 'zero_without_note').length,
             unconfiguredLines: current.exceptions.filter((item) => item.type === 'unconfigured_line').length,

@@ -239,6 +239,120 @@ test('QC vẫn ghi nhận được hàng tồn khi chuyền không có mã chạ
     assert.equal(detail.slotSummaries[0].qcExpectedLines, 1);
 });
 
+test('công đoạn trọng yếu được theo dõi riêng, không cộng vào thành phẩm và tiền lương', () => {
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-operation',
+            plantId: 'plant-1',
+            productionDate: '2026-08-05',
+            timeSlots: slots,
+        },
+        [
+            {
+                _id: 'record-operation',
+                dayId: 'day-operation',
+                plantId: 'plant-1',
+                productionDate: '2026-08-05',
+                lineId: 'line-1',
+                lineCode: 'CM1',
+                workerCount: 20,
+                workerCountConfirmedAt: new Date('2026-08-05T00:30:00.000Z'),
+                runs,
+                entries: [
+                    { _id: 'entry-a', slotKey: '08:00', runId: 'run-a', quantity: 90 },
+                    { _id: 'entry-b', slotKey: '09:00', runId: 'run-b', quantity: 80 },
+                ],
+                operationTrackingEnabled: true,
+                operationTracks: [
+                    {
+                        _id: 'track-neck',
+                        operationId: 'operation-neck',
+                        operationCode: 'TRA-CO',
+                        operationName: 'Tra cổ',
+                        unit: 'SP',
+                        itemId: 'item-b',
+                        itemCode: 'B-02',
+                        sourceRunId: 'run-b',
+                        hourlyQuota: 60,
+                        required: true,
+                        sortOrder: 0,
+                        startedSlotKey: '09:00',
+                        status: 'active',
+                    },
+                ],
+                operationEntries: [{ _id: 'operation-entry', slotKey: '09:00', trackId: 'track-neck', quantity: 25 }],
+            },
+        ]
+    );
+
+    const line = detail.lines[0];
+    assert.equal(line.totalActual, 170);
+    assert.equal(line.totalAmount, 250_000);
+    assert.equal(line.operationTracks.length, 1);
+    assert.equal(line.operationTrackSummaries[0].target, 30);
+    assert.equal(line.operationTrackSummaries[0].actual, 25);
+    assert.equal(line.operationExpectedEntries, 1);
+    assert.equal(line.operationReportedEntries, 1);
+    assert.equal(line.operationBehindCount, 1);
+    assert.equal(detail.summary.operationCoveragePercent, 100);
+});
+
+test('hàng chuyển tiếp công đoạn cũ được giữ lịch sử nhưng không làm đổi tổng sản', () => {
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-operation-transition',
+            plantId: 'plant-1',
+            productionDate: '2026-08-05',
+            timeSlots: slots,
+        },
+        [
+            {
+                _id: 'record-operation-transition',
+                dayId: 'day-operation-transition',
+                plantId: 'plant-1',
+                productionDate: '2026-08-05',
+                lineId: 'line-1',
+                lineCode: 'CM1',
+                workerCount: 20,
+                workerCountConfirmedAt: new Date('2026-08-05T00:30:00.000Z'),
+                runs,
+                entries: [{ _id: 'entry-b', slotKey: '09:00', runId: 'run-b', quantity: 80 }],
+                operationTrackingEnabled: true,
+                operationTracks: [
+                    {
+                        _id: 'track-old',
+                        operationId: 'operation-old',
+                        operationCode: 'MAY-TAY',
+                        operationName: 'May tay',
+                        unit: 'SP',
+                        itemId: 'item-a',
+                        itemCode: 'A-01',
+                        sourceRunId: 'run-a',
+                        hourlyQuota: 100,
+                        required: true,
+                        sortOrder: 0,
+                        startedSlotKey: '08:00',
+                        endedSlotKey: '08:00',
+                        status: 'closed',
+                    },
+                ],
+                operationEntries: [
+                    { _id: 'operation-transition', slotKey: '09:00', trackId: 'track-old', quantity: 40 },
+                ],
+            },
+        ]
+    );
+
+    const transition = detail.lines[0].operationSlotValues.find(
+        (value: any) => value.trackId === 'track-old' && value.key === '09:00'
+    );
+    assert.equal(transition.transition, true);
+    assert.equal(transition.due, false);
+    assert.equal(transition.actual, 40);
+    assert.equal(detail.lines[0].totalActual, 80);
+    assert.equal(detail.lines[0].totalAmount, 160_000);
+});
+
 test('khi đổi mã đúng đầu khung giờ, ưu tiên lần chạy được tạo sau', () => {
     const sameSlotRuns = [
         { ...runs[0], startedSlotKey: '09:00', endedSlotKey: '09:00', createdAt: new Date('2026-07-18T01:00:00Z') },
@@ -337,6 +451,32 @@ test('không cho gửi duyệt khi một khung giờ có mã chạy nhưng chưa
 
     assert.equal(result.valid, false);
     assert.match(result.message || '', /CM1 - 9h30/);
+});
+
+test('không cho gửi duyệt khi công đoạn bắt buộc đến hạn chưa được nhập', () => {
+    const result = validateProductionDayForSubmission({
+        timeSlots: slots,
+        lines: [
+            {
+                lineCode: 'CM1',
+                configured: true,
+                entries: [{ quantity: 10 }],
+                slotValues: [{ key: '08:00', runId: 'run-a', reported: true }],
+                operationSlotValues: [
+                    {
+                        key: '08:00',
+                        operationCode: 'TRA-CO',
+                        due: true,
+                        required: true,
+                        reported: false,
+                    },
+                ],
+            },
+        ],
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.message || '', /TRA-CO/);
 });
 
 test('cho gửi duyệt khi tất cả khung giờ đang chạy đã được báo, kể cả sản lượng bằng 0', () => {

@@ -6,6 +6,7 @@ import ProductionDay from '@/models/ProductionDay';
 import ProductionItem from '@/models/ProductionItem';
 import ProductionLine from '@/models/ProductionLine';
 import ProductionLineRecord from '@/models/ProductionLineRecord';
+import ProductionOperation from '@/models/ProductionOperation';
 import ProductionPlan from '@/models/ProductionPlan';
 import { buildPaginatedResponse } from '@/utils/pagination';
 import type { Request, Response } from 'express';
@@ -20,6 +21,7 @@ import {
     redactProductionFinancials,
     serializeProductionItem,
     serializeProductionLine,
+    serializeProductionOperation,
     validateProductionDayForSubmission,
 } from './production.helpers';
 import { buildProductionWorkbook } from './production-export.service';
@@ -47,6 +49,9 @@ const RECORD_ACTOR_PATHS = [
     { path: 'entries.updatedBy', select: ACTOR_SELECT },
     { path: 'qcEntries.enteredBy', select: ACTOR_SELECT },
     { path: 'qcEntries.updatedBy', select: ACTOR_SELECT },
+    { path: 'operationTracks.createdBy', select: ACTOR_SELECT },
+    { path: 'operationEntries.enteredBy', select: ACTOR_SELECT },
+    { path: 'operationEntries.updatedBy', select: ACTOR_SELECT },
 ];
 
 const getVietnamClock = () => {
@@ -244,6 +249,74 @@ const saveRecord = async (record: any) => {
     }
 };
 
+const resolveOperationConfigs = async (plantId: any, configs: any[]) => {
+    const ids = configs.map((config) => String(config.operationId));
+    if (!ids.length) return [];
+    const operations: any[] = await ProductionOperation.find({
+        _id: { $in: ids },
+        plantId,
+        isActive: true,
+    });
+    const operationById = new Map(operations.map((operation) => [String(operation._id), operation]));
+    const missing = ids.find((id) => !operationById.has(id));
+    if (missing) throw new BadRequestError('Có công đoạn không tồn tại hoặc đã ngừng sử dụng');
+    return configs
+        .map((config) => {
+            const operation = operationById.get(String(config.operationId));
+            return {
+                operationId: operation._id,
+                operationCode: operation.code,
+                operationName: operation.name,
+                unit: operation.unit || 'SP',
+                hourlyQuota: Number(config.hourlyQuota || 0),
+                required: config.required !== false,
+                sortOrder: Number(config.sortOrder || 0),
+            };
+        })
+        .sort(
+            (left, right) => left.sortOrder - right.sortOrder || left.operationCode.localeCompare(right.operationCode)
+        );
+};
+
+const replaceOperationTracksForRun = (
+    record: any,
+    run: any,
+    operationConfigs: any[],
+    actorId: unknown,
+    enabled: boolean
+) => {
+    const existingTracks = record.operationTracks.filter((track: any) => String(track.sourceRunId) === String(run._id));
+    const trackIds = new Set(existingTracks.map((track: any) => String(track._id)));
+    const hasEntries = record.operationEntries.some((entry: any) => trackIds.has(String(entry.trackId)));
+    if (hasEntries) {
+        throw new BadRequestError('Công đoạn của mã hàng đã có số liệu; không thể thay đổi cấu hình theo dõi');
+    }
+    [...existingTracks].forEach((track: any) => track.deleteOne());
+    if (!enabled) return;
+    operationConfigs.forEach((config) => {
+        record.operationTracks.push({
+            ...config,
+            itemId: run.itemId,
+            itemCode: run.itemCode,
+            sourceRunId: run._id,
+            startedSlotKey: run.startedSlotKey,
+            endedSlotKey: run.endedSlotKey,
+            status: run.status === 'closed' ? 'closed' : 'active',
+            createdBy: actorId,
+            createdAt: new Date(),
+        });
+    });
+};
+
+const closeOperationTracksForRun = (record: any, runId: unknown, endedSlotKey: string) => {
+    record.operationTracks
+        .filter((track: any) => String(track.sourceRunId) === String(runId) && track.status === 'active')
+        .forEach((track: any) => {
+            track.status = 'closed';
+            track.endedSlotKey = endedSlotKey;
+        });
+};
+
 const buildDetailsForDays = async (days: any[], role?: string) => {
     if (!days.length) return [];
     await Promise.all(days.map((day) => day.populate(DAY_ACTOR_PATHS)));
@@ -380,6 +453,53 @@ export const updateProductionLine = async (req: Request, res: Response) => {
         throw error;
     }
     return sendSuccess(res, serializeProductionLine(item), 'Đã cập nhật chuyền');
+};
+
+export const listProductionOperations = async (req: Request, res: Response) => {
+    const plantId = resolvePlantId(req, req.query.plantId);
+    const filter: Record<string, unknown> = { plantId };
+    if (req.query.includeInactive !== 'true') filter.isActive = true;
+    if (req.query.search) {
+        const search = new RegExp(escapeRegex(String(req.query.search).trim()), 'i');
+        filter.$or = [{ code: search }, { name: search }];
+    }
+    const operations = await ProductionOperation.find(filter).sort({ sortOrder: 1, code: 1 });
+    return sendSuccess(res, operations.map(serializeProductionOperation), 'Lấy danh mục công đoạn thành công');
+};
+
+export const createProductionOperation = async (req: Request, res: Response) => {
+    const plantId = resolvePlantId(req, req.body.plantId);
+    await assertPlantExists(plantId);
+    try {
+        const operation = await ProductionOperation.create({
+            ...req.body,
+            plantId,
+            code: String(req.body.code).trim().toUpperCase(),
+            createdBy: req.userId,
+            updatedBy: req.userId,
+        });
+        return sendSuccess(res, serializeProductionOperation(operation), 'Đã thêm công đoạn', StatusCodes.CREATED);
+    } catch (error: any) {
+        if (error?.code === 11000) throw new DuplicateError('Mã công đoạn đã tồn tại trong cơ sở');
+        throw error;
+    }
+};
+
+export const updateProductionOperation = async (req: Request, res: Response) => {
+    const operation = await ProductionOperation.findById(req.params.id);
+    if (!operation) throw new NotFoundError('Không tìm thấy công đoạn');
+    assertPlantAccess(req, String(operation.plantId));
+    Object.assign(operation, req.body, {
+        ...(req.body.code ? { code: String(req.body.code).trim().toUpperCase() } : {}),
+        updatedBy: req.userId,
+    });
+    try {
+        await operation.save();
+    } catch (error: any) {
+        if (error?.code === 11000) throw new DuplicateError('Mã công đoạn đã tồn tại trong cơ sở');
+        throw error;
+    }
+    return sendSuccess(res, serializeProductionOperation(operation), 'Đã cập nhật công đoạn');
 };
 
 export const listProductionItems = async (req: Request, res: Response) => {
@@ -520,6 +640,16 @@ export const updateProductionItem = async (req: Request, res: Response) => {
     return sendSuccess(res, serializeProductionItem(item), 'Đã cập nhật mã hàng');
 };
 
+export const updateProductionItemOperations = async (req: Request, res: Response) => {
+    const item: any = await ProductionItem.findById(req.params.id);
+    if (!item) throw new NotFoundError('Không tìm thấy mã hàng');
+    assertPlantAccess(req, String(item.plantId));
+    item.operationTemplates = await resolveOperationConfigs(item.plantId, req.body.operations);
+    item.updatedBy = req.userId;
+    await item.save();
+    return sendSuccess(res, serializeProductionItem(item), 'Đã cập nhật template công đoạn');
+};
+
 export const lookupProductionDay = async (req: Request, res: Response) => {
     const plantId = resolvePlantId(req, req.query.plantId);
     const productionDate = assertValidDate(req.query.date);
@@ -611,11 +741,18 @@ export const updateProductionTimeSlots = async (req: Request, res: Response) => 
     const day = await loadDayForWrite(req, String(req.params.id));
     const timeSlots = normalizeTimeSlots(req.body.timeSlots);
     const nextKeys = new Set(timeSlots.map((slot) => slot.key));
-    const records = await ProductionLineRecord.find({ dayId: day._id }).select('runs entries qcEntries').lean();
+    const records = await ProductionLineRecord.find({ dayId: day._id })
+        .select('runs entries qcEntries operationTracks operationEntries')
+        .lean();
     const usedKeys = new Set<string>();
     records.forEach((record: any) => {
         record.entries?.forEach((entry: any) => usedKeys.add(String(entry.slotKey)));
         record.qcEntries?.forEach((entry: any) => usedKeys.add(String(entry.slotKey)));
+        record.operationEntries?.forEach((entry: any) => usedKeys.add(String(entry.slotKey)));
+        record.operationTracks?.forEach((track: any) => {
+            if (track.startedSlotKey) usedKeys.add(String(track.startedSlotKey));
+            if (track.endedSlotKey) usedKeys.add(String(track.endedSlotKey));
+        });
         record.runs?.forEach((run: any) => {
             if (run.startedSlotKey) usedKeys.add(String(run.startedSlotKey));
             if (run.endedSlotKey) usedKeys.add(String(run.endedSlotKey));
@@ -685,8 +822,8 @@ export const removeProductionDayLine = async (req: Request, res: Response) => {
     const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
     if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
     // Gỡ chuyền là thao tác biên chế, không được dùng để xoá số liệu đã báo.
-    if (record.entries?.length || record.qcEntries?.length) {
-        throw new BadRequestError('Chuyền đã có sản lượng hoặc kết quả QC, không thể gỡ khỏi ngày');
+    if (record.entries?.length || record.qcEntries?.length || record.operationEntries?.length) {
+        throw new BadRequestError('Chuyền đã có sản lượng, công đoạn hoặc kết quả QC, không thể gỡ khỏi ngày');
     }
     if (record.runs?.length) throw new BadRequestError('Chuyền đã gán mã hàng, xóa mã hàng trước khi gỡ');
 
@@ -708,6 +845,9 @@ export const configureProductionLine = async (req: Request, res: Response) => {
     } else {
         record.workerCountConfirmedAt = undefined;
         record.workerCountConfirmedBy = undefined;
+    }
+    if (req.body.operationTrackingEnabled !== undefined) {
+        record.operationTrackingEnabled = req.body.operationTrackingEnabled;
     }
 
     const hasPublishedPlanRuns = record.runs.some((run: any) => run.source === 'plan');
@@ -757,6 +897,17 @@ export const configureProductionLine = async (req: Request, res: Response) => {
         }
     }
 
+    if (req.body.operationTrackingEnabled !== undefined && record.runs.length) {
+        const run = [...record.runs].reverse().find((item: any) => item.status === 'active') || record.runs[0];
+        const item: any = await ProductionItem.findOne({ _id: run.itemId, plantId: day.plantId });
+        if (!item) throw new NotFoundError('Không tìm thấy mã hàng của chuyền');
+        const configs = await resolveOperationConfigs(day.plantId, item.operationTemplates || []);
+        if (req.body.operationTrackingEnabled && !configs.length) {
+            throw new BadRequestError('Mã hàng chưa có template công đoạn để theo dõi');
+        }
+        replaceOperationTracksForRun(record, run, configs, req.userId, Boolean(req.body.operationTrackingEnabled));
+    }
+
     record.updatedBy = req.userId;
     await saveRecord(record);
     emitProductionChange(day, { changeType: 'line-configured', lineId });
@@ -799,6 +950,7 @@ export const createProductionRun = async (req: Request, res: Response) => {
         if (run.status === 'active') {
             run.status = 'closed';
             run.endedSlotKey = previousSlotKey;
+            closeOperationTracksForRun(record, run._id, previousSlotKey);
         }
     });
     record.runs.push({
@@ -812,6 +964,11 @@ export const createProductionRun = async (req: Request, res: Response) => {
         status: 'active',
         createdBy: req.userId,
     });
+    const newRun = record.runs[record.runs.length - 1];
+    if (record.operationTrackingEnabled && item.operationTemplates?.length) {
+        const configs = await resolveOperationConfigs(day.plantId, item.operationTemplates);
+        replaceOperationTracksForRun(record, newRun, configs, req.userId, true);
+    }
     record.updatedBy = req.userId;
     await saveRecord(record);
     emitProductionChange(day, { changeType: 'run-created', lineId, slotKey: req.body.startedSlotKey });
@@ -824,6 +981,27 @@ export const createProductionRun = async (req: Request, res: Response) => {
     );
 };
 
+export const configureProductionOperationTracks = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.params.lineId);
+    const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+    if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
+    const run = record.runs.id(req.body.runId);
+    if (!run) throw new NotFoundError('Mã hàng không thuộc chuyền này');
+    const configs = req.body.enabled ? await resolveOperationConfigs(day.plantId, req.body.operations) : [];
+    replaceOperationTracksForRun(record, run, configs, req.userId, req.body.enabled);
+    record.operationTrackingEnabled = req.body.enabled;
+    record.updatedBy = req.userId;
+    await saveRecord(record);
+    emitProductionChange(day, { changeType: 'operation-tracks-updated', lineId, runId: String(run._id) });
+    const detail: any = await loadDayDetail(day, req.role);
+    return sendSuccess(
+        res,
+        detail.lines.find((line: any) => line.lineId === lineId),
+        req.body.enabled ? 'Đã cập nhật công đoạn theo dõi' : 'Đã tắt theo dõi công đoạn'
+    );
+};
+
 export const correctProductionLineSetup = async (req: Request, res: Response) => {
     const day = await loadDayForWrite(req, String(req.params.dayId));
     const lineId = String(req.params.lineId);
@@ -832,6 +1010,9 @@ export const correctProductionLineSetup = async (req: Request, res: Response) =>
     if (!record.runs.length) throw new BadRequestError('Chuyền chưa có mã hàng để sửa');
     if (record.runs.some((run: any) => run.source === 'plan')) {
         throw new BadRequestError('Chuyền đang dùng kế hoạch đã phát hành; hãy sửa và phát hành lại kế hoạch');
+    }
+    if (record.operationEntries?.length) {
+        throw new BadRequestError('Chuyền đã có sản lượng công đoạn; cần xóa số công đoạn trước khi sửa toàn bộ mã');
     }
 
     const item: any = await ProductionItem.findOne({
@@ -856,6 +1037,8 @@ export const correctProductionLineSetup = async (req: Request, res: Response) =>
     const canonicalRunId = canonicalRun._id;
     const previousItemCodes = [...new Set(record.runs.map((run: any) => String(run.itemCode)).filter(Boolean))];
     const previousUnitPrices = [...new Set(record.runs.map((run: any) => Number(run.unitPriceSnapshot || 0)))];
+
+    record.operationTracks.splice(0);
 
     const entryBySlot = new Map<string, any>();
     [...record.entries].forEach((entry: any) => {
@@ -886,6 +1069,11 @@ export const correctProductionLineSetup = async (req: Request, res: Response) =>
     canonicalRun.startedSlotKey = firstSlotKey;
     canonicalRun.endedSlotKey = undefined;
     canonicalRun.status = 'active';
+
+    if (record.operationTrackingEnabled && item.operationTemplates?.length) {
+        const configs = await resolveOperationConfigs(day.plantId, item.operationTemplates);
+        replaceOperationTracksForRun(record, canonicalRun, configs, req.userId, true);
+    }
 
     record.setupCorrections.push({
         reason: req.body.reason,
@@ -920,12 +1108,29 @@ export const deleteProductionRun = async (req: Request, res: Response) => {
     if (record.entries.some((entry: any) => String(entry.runId) === runId)) {
         throw new BadRequestError('Không thể xóa mã hàng đã có sản lượng');
     }
+    const operationTrackIds = new Set(
+        record.operationTracks
+            .filter((track: any) => String(track.sourceRunId) === runId)
+            .map((track: any) => String(track._id))
+    );
+    if (record.operationEntries.some((entry: any) => operationTrackIds.has(String(entry.trackId)))) {
+        throw new BadRequestError('Không thể xóa mã hàng đã có sản lượng công đoạn');
+    }
+    [...record.operationTracks]
+        .filter((track: any) => String(track.sourceRunId) === runId)
+        .forEach((track: any) => track.deleteOne());
     const wasActive = run.status === 'active';
     run.deleteOne();
     if (wasActive && record.runs.length) {
         const lastRun = record.runs[record.runs.length - 1];
         lastRun.status = 'active';
         lastRun.endedSlotKey = undefined;
+        record.operationTracks
+            .filter((track: any) => String(track.sourceRunId) === String(lastRun._id))
+            .forEach((track: any) => {
+                track.status = 'active';
+                track.endedSlotKey = undefined;
+            });
     }
     record.updatedBy = req.userId;
     await saveRecord(record);
@@ -1057,6 +1262,117 @@ export const deleteHourlyProductionEntry = async (req: Request, res: Response) =
         res,
         detail.lines.find((line: any) => line.lineId === lineId),
         'Đã xóa số liệu sản lượng'
+    );
+};
+
+export const upsertHourlyOperationEntries = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.params.lineId);
+    const slotKey = String(req.params.slotKey);
+    const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+    if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
+    if (!day.timeSlots.some((slot: any) => slot.key === slotKey && slot.isActive)) {
+        throw new BadRequestError('Khung giờ không hợp lệ hoặc đã tắt');
+    }
+
+    const trackById = new Map(record.operationTracks.map((track: any) => [String(track._id), track]));
+    const prepared = req.body.entries.map((input: any) => {
+        const track: any = trackById.get(String(input.trackId));
+        if (!track) throw new NotFoundError('Công đoạn không thuộc chuyền này');
+        const slotEntries = record.operationEntries.filter(
+            (entry: any) => String(entry.slotKey) === slotKey && String(entry.trackId) === String(track._id)
+        );
+        const existing = [...slotEntries].sort(
+            (left: any, right: any) =>
+                new Date(right.updatedAt || right.enteredAt || 0).getTime() -
+                new Date(left.updatedAt || left.enteredAt || 0).getTime()
+        )[0];
+        const decision = decideProductionEntrySync(existing, {
+            clientMutationId: input.clientMutationId,
+            expectedUpdatedAt: input.expectedUpdatedAt,
+            hasExpectedUpdatedAt: Object.prototype.hasOwnProperty.call(input, 'expectedUpdatedAt'),
+        });
+        return { input, track, slotEntries, existing, decision };
+    });
+
+    const conflicts = prepared.filter((item: any) => item.decision.action === 'conflict');
+    if (conflicts.length) {
+        const names = conflicts
+            .slice(0, 3)
+            .map((item: any) => item.track.operationName)
+            .join(', ');
+        throw new DuplicateError(
+            `Số liệu công đoạn vừa được cập nhật từ thiết bị khác (${names}). Vui lòng kiểm tra dữ liệu mới nhất.`
+        );
+    }
+
+    let changed = false;
+    prepared.forEach(({ input, track, slotEntries, existing, decision }: any) => {
+        if (decision.action === 'idempotent') return;
+        changed = true;
+        if (existing) {
+            existing.quantity = input.quantity;
+            existing.note = input.note;
+            existing.updatedBy = req.userId;
+            existing.updatedAt = new Date();
+            existing.lastClientMutationId = input.clientMutationId;
+            slotEntries.forEach((entry: any) => {
+                if (String(entry._id) !== String(existing._id)) entry.deleteOne();
+            });
+            return;
+        }
+        record.operationEntries.push({
+            slotKey,
+            trackId: track._id,
+            quantity: input.quantity,
+            note: input.note,
+            enteredBy: req.userId,
+            enteredAt: new Date(),
+            updatedBy: req.userId,
+            updatedAt: new Date(),
+            lastClientMutationId: input.clientMutationId,
+        });
+    });
+
+    if (changed) {
+        record.updatedBy = req.userId;
+        await saveRecord(record);
+        emitProductionChange(day, {
+            changeType: 'operation-entries-updated',
+            lineId,
+            slotKey,
+            actorId: req.userId,
+        });
+    }
+    const detail: any = await loadDayDetail(day, req.role);
+    return sendSuccess(
+        res,
+        detail.lines.find((line: any) => line.lineId === lineId),
+        changed ? 'Đã lưu sản lượng công đoạn' : 'Sản lượng công đoạn đã được đồng bộ trước đó'
+    );
+};
+
+export const deleteHourlyOperationEntry = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const lineId = String(req.params.lineId);
+    const entryId = String(req.params.entryId);
+    const record: any = await ProductionLineRecord.findOne({ dayId: day._id, lineId });
+    if (!record) throw new NotFoundError('Chuyền không thuộc ngày sản xuất này');
+    const entry = record.operationEntries.id(entryId);
+    if (!entry) throw new NotFoundError('Không tìm thấy sản lượng công đoạn');
+    const slotKey = String(entry.slotKey);
+    const trackId = String(entry.trackId);
+    [...record.operationEntries]
+        .filter((item: any) => String(item.slotKey) === slotKey && String(item.trackId) === trackId)
+        .forEach((item: any) => item.deleteOne());
+    record.updatedBy = req.userId;
+    await saveRecord(record);
+    emitProductionChange(day, { changeType: 'operation-entry-deleted', lineId, slotKey, trackId });
+    const detail: any = await loadDayDetail(day, req.role);
+    return sendSuccess(
+        res,
+        detail.lines.find((line: any) => line.lineId === lineId),
+        'Đã xóa sản lượng công đoạn'
     );
 };
 

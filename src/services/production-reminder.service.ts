@@ -103,6 +103,7 @@ const serializeEvent = (event: any) => ({
     state: event.state,
     dueAt: event.dueAt?.toISOString?.() ?? event.dueAt,
     missingLineCodes: event.missingLineCodes || [],
+    missingOperationLabels: event.missingOperationLabels || [],
     underTargetLineCodes: event.underTargetLineCodes || [],
     reminderCount: Number(event.reminderCount || 0),
     lastNotifiedAt: event.lastNotifiedAt?.toISOString?.() ?? event.lastNotifiedAt,
@@ -173,7 +174,7 @@ const sendMissingReminder = async ({
         plantId,
         productionDate: day.productionDate,
         slotKey: copy.oldestSlotKey,
-        focus: 'missing',
+        focus: copy.missingLineCount ? 'missing' : 'operations',
     };
     const delivery = emptyDelivery();
     await Promise.all(
@@ -215,7 +216,7 @@ const sendMissingReminder = async ({
                             actionType: 'production',
                             actionId: String(day._id),
                             actionData,
-                            title: `Cảnh báo quản lý: ${copy.missingLineCount} chuyền chậm nhập`,
+                            title: `Cảnh báo quản lý: ${copy.missingLineCount + copy.missingOperationCount} mục chậm nhập`,
                             message: copy.message,
                         },
                         {
@@ -307,7 +308,7 @@ const evaluateProductionDay = async (day: any, rule: any, now: Date) => {
     }
 
     const records = await ProductionLineRecord.find({ dayId: day._id })
-        .select('lineId lineCode workerCountConfirmedAt runs entries')
+        .select('lineId lineCode workerCountConfirmedAt runs entries operationTracks operationEntries')
         .lean();
     const slots = evaluateProductionReminderSlots(day, records, now, rule.toObject?.() || rule);
     const existingEvents = await ProductionReminderEvent.find({
@@ -324,7 +325,8 @@ const evaluateProductionDay = async (day: any, rule: any, now: Date) => {
         const existing: any = eventBySlot.get(slot.slotKey);
         const missingLineCodes = slot.missingLines.map((line) => line.lineCode);
         const missingLineIds = slot.missingLines.map((line) => line.lineId).filter(mongoose.isValidObjectId);
-        const open = missingLineCodes.length > 0;
+        const missingOperationLabels = slot.missingOperations.map((operation) => operation.label);
+        const open = missingLineCodes.length > 0 || missingOperationLabels.length > 0;
         const performanceDue = shouldNotifyProductionPerformance(
             slot,
             Number(rule.repeatMinutes || 5),
@@ -347,6 +349,7 @@ const evaluateProductionDay = async (day: any, rule: any, now: Date) => {
                     state: open ? 'open' : 'resolved',
                     missingLineIds,
                     missingLineCodes,
+                    missingOperationLabels,
                     underTargetLineCodes: slot.underTargetLines.map((line) => line.lineCode),
                     lastDetectedAt: now,
                     nextNotifyAt,
@@ -393,7 +396,7 @@ const evaluateProductionDay = async (day: any, rule: any, now: Date) => {
     const primaryRecipientIds = await getPrimaryRecipientIds(plantId, rule);
     let notified = 0;
     if (eventsToNotify.length) {
-        const allOpenSlots = slots.filter((slot) => slot.missingLines.length > 0);
+        const allOpenSlots = slots.filter((slot) => slot.missingLines.length > 0 || slot.missingOperations.length > 0);
         const newlyEscalatedEvents = eventsToNotify.filter(
             ({ event, slot }) => slot.overdueMinutes >= Number(rule.escalationMinutes || 15) && !event.escalatedAt
         );

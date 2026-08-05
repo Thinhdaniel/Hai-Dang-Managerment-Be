@@ -70,6 +70,37 @@ export const createProductionItemSchema = z.object({
 
 export const updateProductionItemSchema = createProductionItemSchema.omit({ plantId: true }).partial();
 
+export const createProductionOperationSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    code: z.string().trim().min(1).max(40),
+    name: z.string().trim().min(1).max(160),
+    unit: z.string().trim().min(1).max(30).default('SP'),
+    sortOrder: z.number().int().min(0).max(10000).default(0),
+    isActive: z.boolean().default(true),
+});
+
+export const updateProductionOperationSchema = createProductionOperationSchema.omit({ plantId: true }).partial();
+
+const productionOperationConfigSchema = z.object({
+    operationId: zObjectId('Công đoạn'),
+    hourlyQuota: z.number().min(0).max(10000000),
+    required: z.boolean().default(true),
+    sortOrder: z.number().int().min(0).max(10000).default(0),
+});
+
+const uniqueOperationConfigs = (operations: Array<{ operationId: string }>, ctx: z.RefinementCtx) => {
+    const ids = operations.map((operation) => operation.operationId);
+    if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: 'custom', path: ['operations'], message: 'Danh sách công đoạn đang bị trùng' });
+    }
+};
+
+export const updateProductionItemOperationsSchema = z
+    .object({
+        operations: z.array(productionOperationConfigSchema).max(20, 'Mỗi mã hàng theo dõi tối đa 20 công đoạn'),
+    })
+    .superRefine((value, ctx) => uniqueOperationConfigs(value.operations, ctx));
+
 const productionOpeningBalanceEntrySchema = z
     .object({
         lineId: zObjectId('Chuyền'),
@@ -168,6 +199,7 @@ export const configureProductionLineSchema = z
         itemId: zObjectId('Mã hàng').optional(),
         hourlyQuota: z.number().min(0).max(10000000).optional(),
         startSlotKey: zOptionalString(),
+        operationTrackingEnabled: z.boolean().optional(),
     })
     .superRefine((value, ctx) => {
         if (value.itemId && value.hourlyQuota === undefined) {
@@ -183,6 +215,19 @@ export const createProductionRunSchema = z.object({
     hourlyQuota: z.number().min(0).max(10000000),
     startedSlotKey: z.string().trim().min(1).max(24),
 });
+
+export const configureProductionOperationTracksSchema = z
+    .object({
+        runId: zObjectId('Đợt mã hàng'),
+        enabled: z.boolean(),
+        operations: z.array(productionOperationConfigSchema).max(20, 'Mỗi tổ theo dõi tối đa 20 công đoạn'),
+    })
+    .superRefine((value, ctx) => {
+        if (value.enabled && !value.operations.length) {
+            ctx.addIssue({ code: 'custom', path: ['operations'], message: 'Cần chọn ít nhất một công đoạn' });
+        }
+        uniqueOperationConfigs(value.operations, ctx);
+    });
 
 export const correctProductionLineSetupSchema = z.object({
     itemId: zObjectId('Mã hàng'),
@@ -240,6 +285,37 @@ export const upsertHourlyQcEntrySchema = z
                 path: ['note'],
                 message: 'Cần ghi chú khi kết quả kiểm bằng 0',
             });
+        }
+    });
+
+const hourlyOperationEntrySchema = z
+    .object({
+        trackId: zObjectId('Theo dõi công đoạn'),
+        quantity: z.number().int().min(0).max(100000000),
+        note: zOptionalString(),
+        clientMutationId: z
+            .string()
+            .trim()
+            .min(8)
+            .max(100)
+            .regex(/^[A-Za-z0-9:_-]+$/, 'Mã đồng bộ không hợp lệ')
+            .optional(),
+        expectedUpdatedAt: z.string().datetime().nullable().optional(),
+    })
+    .superRefine((value, ctx) => {
+        if (value.quantity === 0 && String(value.note || '').trim().length < 3) {
+            ctx.addIssue({ code: 'custom', path: ['note'], message: 'Cần ghi chú khi sản lượng công đoạn bằng 0' });
+        }
+    });
+
+export const upsertHourlyOperationEntriesSchema = z
+    .object({
+        entries: z.array(hourlyOperationEntrySchema).min(1).max(20),
+    })
+    .superRefine((value, ctx) => {
+        const ids = value.entries.map((entry) => entry.trackId);
+        if (new Set(ids).size !== ids.length) {
+            ctx.addIssue({ code: 'custom', path: ['entries'], message: 'Một công đoạn chỉ được nhập một lần' });
         }
     });
 

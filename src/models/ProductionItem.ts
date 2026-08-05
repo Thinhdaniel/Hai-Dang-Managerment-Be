@@ -10,6 +10,19 @@ const ProductionItemPriceSchema = new mongoose.Schema(
     { _id: false }
 );
 
+const ProductionItemOperationTemplateSchema = new mongoose.Schema(
+    {
+        operationId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionOperation', required: true },
+        operationCode: { type: String, required: true, trim: true },
+        operationName: { type: String, required: true, trim: true },
+        unit: { type: String, trim: true, default: 'SP' },
+        hourlyQuota: { type: Number, min: 0, default: 0 },
+        required: { type: Boolean, default: true },
+        sortOrder: { type: Number, min: 0, default: 0 },
+    },
+    { _id: false }
+);
+
 const ProductionItemSchema = new mongoose.Schema(
     {
         plantId: {
@@ -43,6 +56,10 @@ const ProductionItemSchema = new mongoose.Schema(
         },
         priceHistory: {
             type: [ProductionItemPriceSchema],
+            default: [],
+        },
+        operationTemplates: {
+            type: [ProductionItemOperationTemplateSchema],
             default: [],
         },
         isActive: {

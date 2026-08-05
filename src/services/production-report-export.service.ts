@@ -36,11 +36,93 @@ const severityLabel = (severity: string) =>
 const typeLabel = (type: string) =>
     ({
         missing_report: 'Thiếu báo',
+        missing_operation_report: 'Thiếu báo công đoạn',
         under_target: 'Hụt khoán',
         zero_without_note: 'Sản lượng 0',
         unconfigured_line: 'Thiếu cấu hình',
         open_day: 'Chưa khóa sổ',
     })[type] || type;
+
+const addOperationSheet = (workbook: ExcelJS.Workbook, report: any) => {
+    const sheet = workbook.addWorksheet('Theo công đoạn');
+    setupSheet(sheet, 'landscape');
+    const headers = [
+        'STT',
+        'Chuyền',
+        'Tổ trưởng',
+        'Mã hàng',
+        'Mã công đoạn',
+        'Tên công đoạn',
+        'ĐVT',
+        'Ngày theo dõi',
+        'Khoán trong kỳ',
+        'Thực tế trong kỳ',
+        '% đạt',
+        'Lượt phải nhập',
+        'Lượt đã nhập',
+        '% độ phủ',
+        'Khung dưới khoán',
+        'SL chuyển tiếp',
+    ];
+    addTitle(
+        sheet,
+        'BÁO CÁO CÔNG ĐOẠN TRỌNG YẾU',
+        `${report.meta.plantName}  |  ${formatDate(report.meta.from)} - ${formatDate(report.meta.to)}  |  Không cộng vào sản lượng thành phẩm`,
+        headers.length
+    );
+    const headerRow = 5;
+    sheet.getRow(headerRow).values = headers;
+    styleHeader(sheet.getRow(headerRow));
+    (report.operations || []).forEach((operation: any, index: number) => {
+        sheet.addRow([
+            index + 1,
+            operation.lineCode,
+            operation.leaderName || '',
+            operation.itemCode,
+            operation.operationCode,
+            operation.operationName,
+            operation.unit,
+            operation.activeDays,
+            operation.targetQuantity,
+            operation.actualQuantity,
+            operation.targetQuantity > 0 ? operation.achievementPercent / 100 : '',
+            operation.expectedEntries,
+            operation.reportedEntries,
+            operation.expectedEntries > 0 ? operation.coveragePercent / 100 : '',
+            operation.behindSlots,
+            operation.transitionQuantity,
+        ]);
+    });
+    styleRows(sheet, headerRow + 1, Math.max(headerRow + 1, sheet.rowCount), headers.length);
+    for (let row = headerRow + 1; row <= sheet.rowCount; row += 1) {
+        sheet.getCell(row, 11).numFmt = '0.0%';
+        sheet.getCell(row, 14).numFmt = '0.0%';
+        [9, 10, 12, 13, 15, 16].forEach((column) => (sheet.getCell(row, column).numFmt = '#,##0'));
+    }
+    sheet.autoFilter = {
+        from: { row: headerRow, column: 1 },
+        to: { row: Math.max(headerRow, sheet.rowCount), column: headers.length },
+    };
+    sheet.views = [{ state: 'frozen', ySplit: headerRow, xSplit: 4, showGridLines: false }];
+    sheet.columns = [
+        { width: 7 },
+        { width: 12 },
+        { width: 19 },
+        { width: 16 },
+        { width: 17 },
+        { width: 28 },
+        { width: 8 },
+        { width: 13 },
+        { width: 15 },
+        { width: 16 },
+        { width: 10 },
+        { width: 14 },
+        { width: 14 },
+        { width: 11 },
+        { width: 16 },
+        { width: 15 },
+    ];
+};
 
 const setupSheet = (sheet: ExcelJS.Worksheet, orientation: 'portrait' | 'landscape' = 'landscape') => {
     sheet.views = [{ state: 'frozen', ySplit: 6, showGridLines: false }];
@@ -115,8 +197,18 @@ const addOverviewSheet = (workbook: ExcelJS.Workbook, report: any) => {
 
     const summary = report.summary;
     const metrics = [
-        ['Sản lượng chuyển tiếp', summary.carryInQuantity || 0, 'Sản lượng trong kỳ', summary.periodQuantity ?? summary.actualQuantity],
-        ['Ghi nhận trên hệ thống', summary.trackedToDateQuantity || 0, 'Lũy kế đến cuối kỳ', summary.cumulativeQuantity || 0],
+        [
+            'Sản lượng chuyển tiếp',
+            summary.carryInQuantity || 0,
+            'Sản lượng trong kỳ',
+            summary.periodQuantity ?? summary.actualQuantity,
+        ],
+        [
+            'Ghi nhận trên hệ thống',
+            summary.trackedToDateQuantity || 0,
+            'Lũy kế đến cuối kỳ',
+            summary.cumulativeQuantity || 0,
+        ],
         ['Sản lượng mục tiêu kỳ', summary.targetQuantity, 'Tỷ lệ đạt kỳ', summary.achievementPercent / 100],
         ['Số ngày có dữ liệu', summary.dayCount, 'Tỷ lệ báo đủ', summary.reportingRate / 100],
         ['Nhân sự bình quân', summary.averageWorkers, 'SP/người-ngày', summary.outputPerWorkerDay],
@@ -480,9 +572,7 @@ const addDailySheet = (workbook: ExcelJS.Workbook, report: any) => {
             Number(day.planAttainmentPercent || 0) / 100,
             Number(day.reportingRate || 0) / 100,
             day.workers,
-            ...(report.meta.financialsVisible
-                ? [day.totalAmount || 0, day.cumulativeAmount || 0]
-                : []),
+            ...(report.meta.financialsVisible ? [day.totalAmount || 0, day.cumulativeAmount || 0] : []),
         ]);
     });
     styleRows(sheet, headerRow + 1, sheet.rowCount, headers.length);
@@ -530,7 +620,10 @@ const addReconciliationSheet = (workbook: ExcelJS.Workbook, report: any) => {
     const summary = report.summary;
     const overview = [
         ['Ngày chốt đầu kỳ', coverage.cutoffDate ? formatDate(coverage.cutoffDate) : 'Chưa khai báo'],
-        ['Ngày bắt đầu dữ liệu giờ', coverage.trackingStartDate ? formatDate(coverage.trackingStartDate) : 'Chưa xác định'],
+        [
+            'Ngày bắt đầu dữ liệu giờ',
+            coverage.trackingStartDate ? formatDate(coverage.trackingStartDate) : 'Chưa xác định',
+        ],
         ['Sản lượng chuyển tiếp', summary.carryInQuantity || 0],
         ['Sản lượng hệ thống đến cuối kỳ', summary.trackedToDateQuantity || 0],
         ['Lũy kế toàn bộ', { formula: 'B5+B6', result: summary.cumulativeQuantity || 0 }],
@@ -549,7 +642,16 @@ const addReconciliationSheet = (workbook: ExcelJS.Workbook, report: any) => {
     sheet.getCell(9, 2).numFmt = '0.0%';
 
     const headerRow = 12;
-    const headers = ['STT', 'Chuyền', 'Trước kỳ', 'Trong kỳ', 'Lũy kế báo cáo', 'Đối soát công thức', 'Chênh lệch', 'Chưa phân bổ'];
+    const headers = [
+        'STT',
+        'Chuyền',
+        'Trước kỳ',
+        'Trong kỳ',
+        'Lũy kế báo cáo',
+        'Đối soát công thức',
+        'Chênh lệch',
+        'Chưa phân bổ',
+    ];
     sheet.getRow(headerRow).values = headers;
     styleHeader(sheet.getRow(headerRow));
     report.lines.forEach((line: any, index: number) => {
@@ -647,6 +749,7 @@ export const buildProductionReportWorkbook = async (report: any) => {
     addLineSheet(workbook, report);
     addItemSheet(workbook, report);
     addOrderSheet(workbook, report);
+    addOperationSheet(workbook, report);
     addDailySheet(workbook, report);
     addReconciliationSheet(workbook, report);
     addExceptionSheet(workbook, report);

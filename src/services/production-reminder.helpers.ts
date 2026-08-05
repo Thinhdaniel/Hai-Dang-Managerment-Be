@@ -21,6 +21,16 @@ export type ProductionReminderLineState = {
     achievementPercent: number;
 };
 
+export type ProductionReminderOperationState = {
+    lineId: string;
+    lineCode: string;
+    trackId: string;
+    operationCode: string;
+    operationName: string;
+    itemCode: string;
+    label: string;
+};
+
 export type ProductionReminderSlotState = {
     slotKey: string;
     slotLabel: string;
@@ -29,6 +39,7 @@ export type ProductionReminderSlotState = {
     dueLineCount: number;
     reportedLineCount: number;
     missingLines: ProductionReminderLineState[];
+    missingOperations: ProductionReminderOperationState[];
     underTargetLines: ProductionReminderLineState[];
 };
 
@@ -56,8 +67,16 @@ export const buildProductionReminderBucketKey = (date: Date, repeatMinutes: numb
 export const buildProductionReminderMissingHash = (slots: ProductionReminderSlotState[]) =>
     createHash('sha256')
         .update(
-            slots
-                .flatMap((slot) => slot.missingLines.map((line) => `${slot.slotKey}:${line.lineId}:${line.lineCode}`))
+            [
+                ...slots.flatMap((slot) =>
+                    slot.missingLines.map((line) => `${slot.slotKey}:line:${line.lineId}:${line.lineCode}`)
+                ),
+                ...slots.flatMap((slot) =>
+                    slot.missingOperations.map(
+                        (operation) => `${slot.slotKey}:operation:${operation.lineId}:${operation.trackId}`
+                    )
+                ),
+            ]
                 .sort()
                 .join('|')
         )
@@ -79,6 +98,7 @@ export const evaluateProductionReminderSlots = (
     const slots = [...(day.timeSlots || [])].sort(
         (left: any, right: any) => Number(left.startMinute || 0) - Number(right.startMinute || 0)
     );
+    const slotIndexByKey = new Map(slots.map((slot: any, index: number) => [String(slot.key), index]));
 
     return slots
         .filter((slot: any) => slot.isActive !== false)
@@ -90,6 +110,7 @@ export const evaluateProductionReminderSlots = (
             if (dueAt.getTime() > now.getTime()) return undefined;
 
             const dueLines: Array<ProductionReminderLineState & { reported: boolean }> = [];
+            const missingOperations: ProductionReminderOperationState[] = [];
             recordInputs.forEach((input) => {
                 const record = typeof input?.toObject === 'function' ? input.toObject() : input;
                 if (!record?.workerCountConfirmedAt || !(record.runs || []).length) return;
@@ -109,13 +130,43 @@ export const evaluateProductionReminderSlots = (
                     achievementPercent: target > 0 ? round((actual / target) * 100, 1) : 0,
                     reported: entries.length > 0,
                 });
+
+                const slotIndex = Number(slotIndexByKey.get(String(slot.key)) ?? -1);
+                (record.operationTracks || []).forEach((track: any) => {
+                    if (track.required === false) return;
+                    const startIndex = Number(
+                        slotIndexByKey.get(String(track.startedSlotKey)) ?? Number.MAX_SAFE_INTEGER
+                    );
+                    const endIndex = track.endedSlotKey
+                        ? Number(slotIndexByKey.get(String(track.endedSlotKey)) ?? -1)
+                        : Number.MAX_SAFE_INTEGER;
+                    if (slotIndex < startIndex || slotIndex > endIndex) return;
+                    const reported = (record.operationEntries || []).some(
+                        (entry: any) =>
+                            String(entry.slotKey) === String(slot.key) && toId(entry.trackId) === toId(track)
+                    );
+                    if (reported) return;
+                    const lineCode = String(record.lineCode || 'N/A');
+                    const operationCode = String(track.operationCode || 'CĐ');
+                    const operationName = String(track.operationName || 'Công đoạn');
+                    const itemCode = String(track.itemCode || 'N/A');
+                    missingOperations.push({
+                        lineId: toId(record.lineId),
+                        lineCode,
+                        trackId: toId(track),
+                        operationCode,
+                        operationName,
+                        itemCode,
+                        label: `${lineCode} · ${operationCode} · ${itemCode}`,
+                    });
+                });
             });
 
             const missingLines = dueLines
                 .filter((line) => !line.reported)
                 .map(({ reported: _reported, ...line }) => line);
             const underTargetLines =
-                rule.underTargetEnabled === false || missingLines.length > 0
+                rule.underTargetEnabled === false || missingLines.length > 0 || missingOperations.length > 0
                     ? []
                     : dueLines
                           .filter((line) => line.reported && line.target > 0 && line.achievementPercent < threshold)
@@ -129,6 +180,7 @@ export const evaluateProductionReminderSlots = (
                 dueLineCount: dueLines.length,
                 reportedLineCount: dueLines.length - missingLines.length,
                 missingLines,
+                missingOperations,
                 underTargetLines,
             } satisfies ProductionReminderSlotState;
         })
@@ -137,6 +189,7 @@ export const evaluateProductionReminderSlots = (
 
 export const buildProductionReminderCopy = (slots: ProductionReminderSlotState[], escalated: boolean) => {
     const missing = slots.flatMap((slot) => slot.missingLines);
+    const missingOperations = slots.flatMap((slot) => slot.missingOperations);
     const uniqueLineCodes = [...new Set(missing.map((line) => line.lineCode))];
     const oldest = [...slots].sort((left, right) => left.dueAt.getTime() - right.dueAt.getTime())[0];
     const slotCopy =
@@ -145,13 +198,30 @@ export const buildProductionReminderCopy = (slots: ProductionReminderSlotState[]
             : `${slots.length} khung giờ, cũ nhất ${oldest?.slotLabel || ''}`;
     const preview = uniqueLineCodes.slice(0, 5).join(', ');
     const remaining = Math.max(0, uniqueLineCodes.length - 5);
+    const uniqueOperationLabels = [...new Set(missingOperations.map((operation) => operation.label))];
+    const operationPreview = uniqueOperationLabels.slice(0, 3).join(', ');
+    const operationRemaining = Math.max(0, uniqueOperationLabels.length - 3);
+    const title = escalated ? 'Quá hạn nhập sản lượng' : 'Nhắc nhập sản lượng';
+    const countCopy = [
+        uniqueLineCodes.length ? `${uniqueLineCodes.length} chuyền` : '',
+        uniqueOperationLabels.length ? `${uniqueOperationLabels.length} công đoạn` : '',
+    ]
+        .filter(Boolean)
+        .join(', ');
+    const detailCopy = [
+        uniqueLineCodes.length ? `sản lượng: ${preview}${remaining ? ` và ${remaining} chuyền khác` : ''}` : '',
+        uniqueOperationLabels.length
+            ? `công đoạn: ${operationPreview}${operationRemaining ? ` và ${operationRemaining} mục khác` : ''}`
+            : '',
+    ]
+        .filter(Boolean)
+        .join('; ');
     return {
-        title: escalated
-            ? `Quá hạn nhập sản lượng: ${uniqueLineCodes.length} chuyền`
-            : `Nhắc nhập sản lượng: ${uniqueLineCodes.length} chuyền`,
-        message: `${slotCopy} còn thiếu ${preview}${remaining ? ` và ${remaining} chuyền khác` : ''}. Nhấn để nhập ngay.`,
+        title: `${title}: ${countCopy}`,
+        message: `${slotCopy} còn thiếu ${detailCopy}. Nhấn để nhập ngay.`,
         oldestSlotKey: oldest?.slotKey,
         missingLineCount: uniqueLineCodes.length,
+        missingOperationCount: uniqueOperationLabels.length,
     };
 };
 

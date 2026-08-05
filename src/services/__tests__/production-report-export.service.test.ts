@@ -122,6 +122,26 @@ const report = {
             openingAmountComplete: true,
         },
     ],
+    operations: [
+        {
+            key: 'line-1:item-1:operation-1',
+            lineCode: 'C1',
+            leaderName: 'Tổ trưởng A',
+            itemCode: 'HD-01',
+            operationCode: 'TRA-CO',
+            operationName: 'Tra cổ',
+            unit: 'SP',
+            activeDays: 1,
+            targetQuantity: 80,
+            actualQuantity: 75,
+            achievementPercent: 93.75,
+            expectedEntries: 1,
+            reportedEntries: 1,
+            coveragePercent: 100,
+            behindSlots: 1,
+            transitionQuantity: 0,
+        },
+    ],
     exceptionSummary: { total: 1 },
     exceptions: [
         {
@@ -141,7 +161,16 @@ test('xuất báo cáo quản trị đủ sheet và cấu hình A4 một trang n
 
     assert.deepEqual(
         workbook.worksheets.map((sheet) => sheet.name),
-        ['Tổng quan', 'Theo chuyền', 'Theo mã hàng', 'Theo đơn hàng', 'Theo ngày', 'Đối soát đầu kỳ', 'Ngoại lệ']
+        [
+            'Tổng quan',
+            'Theo chuyền',
+            'Theo mã hàng',
+            'Theo đơn hàng',
+            'Theo công đoạn',
+            'Theo ngày',
+            'Đối soát đầu kỳ',
+            'Ngoại lệ',
+        ]
     );
     workbook.worksheets.forEach((sheet) => {
         assert.equal(sheet.pageSetup.paperSize, 9);
@@ -150,5 +179,6 @@ test('xuất báo cáo quản trị đủ sheet và cấu hình A4 một trang n
     });
     assert.equal(workbook.getWorksheet('Tổng quan')?.getCell(11, 11).numFmt, '#,##0 "đ"');
     assert.equal(workbook.getWorksheet('Theo chuyền')?.getCell(6, 10).numFmt, '0.0%');
+    assert.equal(workbook.getWorksheet('Theo công đoạn')?.getCell(6, 5).value, 'TRA-CO');
     assert.equal(workbook.getWorksheet('Đối soát đầu kỳ')?.getCell(13, 6).formula, 'C13+D13');
 });

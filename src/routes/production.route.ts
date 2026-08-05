@@ -14,10 +14,12 @@ import {
     addProductionDayLineSchema,
     carryOverProductionPlanSchema,
     configureProductionLineSchema,
+    configureProductionOperationTracksSchema,
     correctProductionLineSetupSchema,
     createProductionDaySchema,
     createProductionItemSchema,
     createProductionLineSchema,
+    createProductionOperationSchema,
     createProductionOpeningBalanceSchema,
     createProductionPlanSchema,
     createProductionRunSchema,
@@ -26,9 +28,12 @@ import {
     reopenProductionPlanSchema,
     updateProductionItemSchema,
     updateProductionLineSchema,
+    updateProductionOperationSchema,
+    updateProductionItemOperationsSchema,
     updateProductionPlanSchema,
     updateProductionTimeSlotsSchema,
     upsertHourlyProductionEntrySchema,
+    upsertHourlyOperationEntriesSchema,
     upsertHourlyQcEntrySchema,
     transitionProductionDaySchema,
     testProductionReminderSchema,
@@ -59,6 +64,21 @@ router.patch(
     asyncHandler(productionService.updateProductionLine)
 );
 
+router.get('/operations', asyncHandler(productionService.listProductionOperations));
+router.post(
+    '/operations',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(createProductionOperationSchema),
+    asyncHandler(productionService.createProductionOperation)
+);
+router.patch(
+    '/operations/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(updateProductionOperationSchema),
+    asyncHandler(productionService.updateProductionOperation)
+);
+
 router.get('/items', asyncHandler(productionService.listProductionItems));
 router.post(
     '/items',
@@ -72,6 +92,13 @@ router.patch(
     validateObjectIdParams('id'),
     validator(updateProductionItemSchema),
     asyncHandler(productionService.updateProductionItem)
+);
+router.put(
+    '/items/:id/operations',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(updateProductionItemOperationsSchema),
+    asyncHandler(productionService.updateProductionItemOperations)
 );
 
 router.get(
@@ -252,6 +279,13 @@ router.post(
     validator(createProductionRunSchema),
     asyncHandler(productionService.createProductionRun)
 );
+router.put(
+    '/days/:dayId/lines/:lineId/operation-tracks',
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
+    validateObjectIdParams('dayId', 'lineId'),
+    validator(configureProductionOperationTracksSchema),
+    asyncHandler(productionService.configureProductionOperationTracks)
+);
 router.post(
     '/days/:dayId/lines/:lineId/correct-setup',
     authorize(...ROLE_GROUPS.MANAGEMENT),
@@ -277,6 +311,19 @@ router.delete(
     authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
     validateObjectIdParams('dayId', 'lineId', 'entryId'),
     asyncHandler(productionService.deleteHourlyProductionEntry)
+);
+router.put(
+    '/days/:dayId/lines/:lineId/operation-entries/:slotKey',
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
+    validateObjectIdParams('dayId', 'lineId'),
+    validator(upsertHourlyOperationEntriesSchema),
+    asyncHandler(productionService.upsertHourlyOperationEntries)
+);
+router.delete(
+    '/days/:dayId/lines/:lineId/operation-entries/:entryId',
+    authorize(...ROLE_GROUPS.PRODUCTION_ENTRY),
+    validateObjectIdParams('dayId', 'lineId', 'entryId'),
+    asyncHandler(productionService.deleteHourlyOperationEntry)
 );
 router.put(
     '/days/:dayId/lines/:lineId/qc-entries/:slotKey',
