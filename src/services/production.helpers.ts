@@ -187,11 +187,19 @@ export const decideProductionEntrySync = (
     return current === expected ? { action: 'write' } : { action: 'conflict', reason: 'updated-remotely' };
 };
 
-export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => {
+export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcRecordInputs: any[] = []) => {
     const day = typeof dayInput?.toObject === 'function' ? dayInput.toObject() : dayInput;
     const slots = [...(day.timeSlots || [])].sort(
         (left: any, right: any) => Number(left.startMinute || 0) - Number(right.startMinute || 0)
     );
+    const qcRecordsByLine = new Map<string, any[]>();
+    qcRecordInputs.forEach((input) => {
+        const record = typeof input?.toObject === 'function' ? input.toObject() : input;
+        const key = String(toId(record.lineId) || '');
+        const current = qcRecordsByLine.get(key) || [];
+        current.push(record);
+        qcRecordsByLine.set(key, current);
+    });
 
     const lines = recordInputs
         .map((input) => {
@@ -237,7 +245,7 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     updatedAt: toIso(entry.updatedAt),
                 };
             });
-            const qcEntries = (record.qcEntries || []).map((entry: any) => {
+            const legacyQcEntries = (record.qcEntries || []).map((entry: any) => {
                 const passedQuantity = Number(entry.passedQuantity || 0);
                 const defectQuantity = Number(entry.defectQuantity || 0);
                 // Không tin total lưu từ client/bản cũ; tổng QC luôn được suy ra
@@ -247,6 +255,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     id: toId(entry),
                     slotKey: entry.slotKey,
                     runId: toId(entry.runId) || undefined,
+                    inspectionType: 'first_pass',
+                    allocationState: 'unallocated',
+                    legacy: true,
                     passedQuantity,
                     defectQuantity,
                     totalQuantity,
@@ -260,6 +271,77 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     updatedAt: toIso(entry.updatedAt),
                 };
             });
+            const qcSlotRecords = (qcRecordsByLine.get(String(toId(record.lineId) || '')) || [])
+                .map((qcRecord: any) => {
+                    const inspections = (qcRecord.inspections || []).map((entry: any) => {
+                        const passedQuantity = Number(entry.passedQuantity || 0);
+                        const defectQuantity = Number(entry.defectQuantity || 0);
+                        const totalQuantity = passedQuantity + defectQuantity;
+                        return {
+                            id: toId(entry),
+                            itemId: toId(entry.itemId),
+                            itemCode: entry.itemCode,
+                            itemName: entry.itemName,
+                            unit: entry.unit || 'SP',
+                            orderCode: entry.orderCode,
+                            inspectionType: entry.inspectionType || 'first_pass',
+                            sourceType: entry.sourceType || 'current_day',
+                            sourceProductionDate: entry.sourceProductionDate,
+                            passedQuantity,
+                            defectQuantity,
+                            totalQuantity,
+                            defectRate: totalQuantity > 0 ? round((defectQuantity / totalQuantity) * 100, 2) : 0,
+                            note: entry.note,
+                        };
+                    });
+                    const passedQuantity = inspections.reduce(
+                        (sum: number, entry: any) => sum + entry.passedQuantity,
+                        0
+                    );
+                    const defectQuantity = inspections.reduce(
+                        (sum: number, entry: any) => sum + entry.defectQuantity,
+                        0
+                    );
+                    return {
+                        id: toId(qcRecord),
+                        dayId: toId(qcRecord.dayId),
+                        lineId: toId(qcRecord.lineId),
+                        slotKey: qcRecord.slotKey,
+                        inspections,
+                        passedQuantity,
+                        defectQuantity,
+                        totalQuantity: passedQuantity + defectQuantity,
+                        enteredBy: toId(qcRecord.enteredBy),
+                        enteredByName: actorName(qcRecord.enteredBy),
+                        enteredAt: toIso(qcRecord.enteredAt),
+                        updatedBy: toId(qcRecord.updatedBy),
+                        updatedByName: actorName(qcRecord.updatedBy),
+                        updatedAt: toIso(qcRecord.updatedAt),
+                    };
+                })
+                .sort((left: any, right: any) => String(left.slotKey).localeCompare(String(right.slotKey)));
+            const structuredSlots = new Set(qcSlotRecords.map((item: any) => String(item.slotKey)));
+            // Một record QC mới thay thế dữ liệu legacy trong đúng ô giờ đó. Các
+            // ô cũ chưa được phân bổ vẫn giữ nguyên và được đánh dấu rõ ràng.
+            const qcEntries = [
+                ...legacyQcEntries.filter((entry: any) => !structuredSlots.has(String(entry.slotKey))),
+                ...qcSlotRecords.flatMap((qcRecord: any) =>
+                    qcRecord.inspections.map((entry: any) => ({
+                        ...entry,
+                        id: `${qcRecord.id}:${entry.id}`,
+                        recordId: qcRecord.id,
+                        slotKey: qcRecord.slotKey,
+                        allocationState: 'exact',
+                        legacy: false,
+                        enteredBy: qcRecord.enteredBy,
+                        enteredByName: qcRecord.enteredByName,
+                        enteredAt: qcRecord.enteredAt,
+                        updatedBy: qcRecord.updatedBy,
+                        updatedByName: qcRecord.updatedByName,
+                        updatedAt: qcRecord.updatedAt,
+                    }))
+                ),
+            ];
             const operationTracks = (record.operationTracks || [])
                 .map((track: any) => ({
                     id: toId(track),
@@ -414,6 +496,15 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     0
                 );
                 const totalQuantity = passedQuantity + defectQuantity;
+                const firstPassQuantity = slotEntries
+                    .filter((entry: any) => entry.inspectionType !== 'recheck')
+                    .reduce((sum: number, entry: any) => sum + Number(entry.totalQuantity || 0), 0);
+                const recheckQuantity = slotEntries
+                    .filter((entry: any) => entry.inspectionType === 'recheck')
+                    .reduce((sum: number, entry: any) => sum + Number(entry.totalQuantity || 0), 0);
+                const unallocatedQuantity = slotEntries
+                    .filter((entry: any) => entry.allocationState === 'unallocated')
+                    .reduce((sum: number, entry: any) => sum + Number(entry.totalQuantity || 0), 0);
                 const latestEntry = [...slotEntries].sort(
                     (left: any, right: any) =>
                         new Date(right.updatedAt || right.enteredAt || 0).getTime() -
@@ -428,6 +519,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     defectQuantity,
                     totalQuantity,
                     defectRate: totalQuantity > 0 ? round((defectQuantity / totalQuantity) * 100, 2) : 0,
+                    firstPassQuantity,
+                    recheckQuantity,
+                    unallocatedQuantity,
                     productionActualReference,
                     // Các field dưới giữ tạm một phiên bản để FE cũ không vỡ
                     // trong lúc rollout. Không còn được dùng làm KPI QC.
@@ -464,6 +558,15 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                     sum + Number(entry.passedQuantity || 0) + Number(entry.defectQuantity || 0),
                 0
             );
+            const qcFirstPassQuantity = qcEntries
+                .filter((entry: any) => entry.inspectionType !== 'recheck')
+                .reduce((sum: number, entry: any) => sum + Number(entry.totalQuantity || 0), 0);
+            const qcRecheckQuantity = qcEntries
+                .filter((entry: any) => entry.inspectionType === 'recheck')
+                .reduce((sum: number, entry: any) => sum + Number(entry.totalQuantity || 0), 0);
+            const qcUnallocatedQuantity = qcEntries
+                .filter((entry: any) => entry.allocationState === 'unallocated')
+                .reduce((sum: number, entry: any) => sum + Number(entry.totalQuantity || 0), 0);
             const qcExpectedSlots = slots.filter((slot: any) => slot.isActive !== false).length;
             const qcReportedSlots = qcSlotValues.filter(
                 (value: any, index: number) => slots[index]?.isActive !== false && value.reported
@@ -497,6 +600,7 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 entries,
                 slotValues,
                 qcEntries,
+                qcSlotRecords,
                 qcSlotValues,
                 operationTrackingEnabled: Boolean(record.operationTrackingEnabled),
                 operationTracks,
@@ -511,6 +615,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 qcPassedQuantity,
                 qcDefectQuantity,
                 qcTotalQuantity,
+                qcFirstPassQuantity,
+                qcRecheckQuantity,
+                qcUnallocatedQuantity,
                 qcDefectRate: qcTotalQuantity > 0 ? round((qcDefectQuantity / qcTotalQuantity) * 100, 2) : 0,
                 qcPendingQuantity: 0,
                 qcReportedSlots,
@@ -528,7 +635,10 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
                 configured: Boolean(record.workerCountConfirmedAt && runs.length > 0),
                 updatedBy: toId(record.updatedBy),
                 updatedByName: actorName(record.updatedBy),
-                updatedAt: toIso(record.updatedAt),
+                updatedAt: [toIso(record.updatedAt), ...qcSlotRecords.map((item: any) => item.updatedAt)]
+                    .filter(Boolean)
+                    .sort()
+                    .at(-1),
             };
         })
         .sort((left, right) => left.sortOrder - right.sortOrder || left.lineCode.localeCompare(right.lineCode));
@@ -587,6 +697,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
     const qcPassedQuantity = lines.reduce((sum, line) => sum + line.qcPassedQuantity, 0);
     const qcDefectQuantity = lines.reduce((sum, line) => sum + line.qcDefectQuantity, 0);
     const qcTotalQuantity = lines.reduce((sum, line) => sum + line.qcTotalQuantity, 0);
+    const qcFirstPassQuantity = lines.reduce((sum, line) => sum + Number(line.qcFirstPassQuantity || 0), 0);
+    const qcRecheckQuantity = lines.reduce((sum, line) => sum + Number(line.qcRecheckQuantity || 0), 0);
+    const qcUnallocatedQuantity = lines.reduce((sum, line) => sum + Number(line.qcUnallocatedQuantity || 0), 0);
     const qcReportedLineSlots = lines.reduce((sum, line) => sum + Number(line.qcReportedSlots || 0), 0);
     const qcExpectedLineSlots = lines.reduce((sum, line) => sum + Number(line.qcExpectedSlots || 0), 0);
     const operationExpectedEntries = lines.reduce((sum, line) => sum + Number(line.operationExpectedEntries || 0), 0);
@@ -645,6 +758,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[]) => 
             qcPassedQuantity,
             qcDefectQuantity,
             qcTotalQuantity,
+            qcFirstPassQuantity,
+            qcRecheckQuantity,
+            qcUnallocatedQuantity,
             qcDefectRate: qcTotalQuantity > 0 ? round((qcDefectQuantity / qcTotalQuantity) * 100, 2) : 0,
             qcPendingQuantity: 0,
             qcReportedLineSlots,

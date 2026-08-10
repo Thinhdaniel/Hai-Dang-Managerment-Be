@@ -18,7 +18,7 @@
     "ai:action-smoke": "tsx scripts/ai-guided-action-smoke.ts",
     "ai:quality-gate": "npm run ai:policy-check && npm run ai:regression -- --max-bad 0 --max-p95-ms 45000",
     "test:briefing": "tsx --test src/services/__tests__/executive-briefing.helpers.test.ts src/services/__tests__/ai-provider-json-retry.test.ts",
-    "test:production": "tsx --test src/services/__tests__/production.helpers.test.ts src/services/__tests__/production-monitor.helpers.test.ts src/services/__tests__/production-board.helpers.test.ts src/services/__tests__/production-forecast.helpers.test.ts src/services/__tests__/production-export.service.test.ts src/services/__tests__/production-opening-balance.helpers.test.ts src/services/__tests__/production-report.helpers.test.ts src/services/__tests__/production-report-export.service.test.ts src/services/__tests__/production-reminder.helpers.test.ts",
+    "test:production": "tsx --test src/services/__tests__/production.helpers.test.ts src/services/__tests__/production-monitor.helpers.test.ts src/services/__tests__/production-board.helpers.test.ts src/services/__tests__/production-forecast.helpers.test.ts src/services/__tests__/production-export.service.test.ts src/services/__tests__/production-opening-balance.helpers.test.ts src/services/__tests__/production-qc-opening-balance.helpers.test.ts src/services/__tests__/production-report.helpers.test.ts src/services/__tests__/production-report-export.service.test.ts src/services/__tests__/production-reminder.helpers.test.ts src/services/__tests__/production-qc-report.helpers.test.ts",
     "cleanup:dry": "node scripts/data-cleanup-dry-run.mjs",
     "cleanup:apply": "node scripts/data-cleanup-apply.mjs"
   },

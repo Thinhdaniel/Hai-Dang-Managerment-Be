@@ -10,6 +10,7 @@ import { USER_ROLE } from './allowedRoles';
  * - PRODUCTION_FIELD: FIELD + Tổ trưởng + QC — lớp đọc chung của app sản xuất.
  * - PRODUCTION_ENTRY: các role được nhập/chỉnh sản lượng và cấu hình đầu ngày.
  * - PRODUCTION_QC_ENTRY: các role được nhập/chỉnh kết quả QC theo giờ.
+ * - PRODUCTION_QC_REPORT: các role được xem báo cáo QC theo phạm vi cơ sở.
  */
 export const ROLE_GROUPS = {
     ADMIN_ONLY: [USER_ROLE.ADMIN],
@@ -26,4 +27,5 @@ export const ROLE_GROUPS = {
     ],
     PRODUCTION_ENTRY: [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER, USER_ROLE.STAFF, USER_ROLE.LINE_LEADER],
     PRODUCTION_QC_ENTRY: [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER, USER_ROLE.QC],
+    PRODUCTION_QC_REPORT: [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER, USER_ROLE.QC],
 } as const;

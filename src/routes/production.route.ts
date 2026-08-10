@@ -6,6 +6,9 @@ import { validateObjectIdParams } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import * as productionOpeningBalanceService from '@/services/production-opening-balance.service';
 import * as productionPlanService from '@/services/production-plan.service';
+import * as productionQcRecordService from '@/services/production-qc-record.service';
+import * as productionQcOpeningBalanceService from '@/services/production-qc-opening-balance.service';
+import * as productionQcReportService from '@/services/production-qc-report.service';
 import * as productionReminderService from '@/services/production-reminder.service';
 import * as productionReportService from '@/services/production-report.service';
 import * as productionService from '@/services/production.service';
@@ -21,9 +24,11 @@ import {
     createProductionLineSchema,
     createProductionOperationSchema,
     createProductionOpeningBalanceSchema,
+    createProductionQcOpeningBalanceSchema,
     createProductionPlanSchema,
     createProductionRunSchema,
     importProductionOpeningBalanceSchema,
+    importProductionQcOpeningBalanceSchema,
     publishProductionPlanSchema,
     reopenProductionPlanSchema,
     updateProductionItemSchema,
@@ -35,10 +40,12 @@ import {
     upsertHourlyProductionEntrySchema,
     upsertHourlyOperationEntriesSchema,
     upsertHourlyQcEntrySchema,
+    upsertProductionQcRecordSchema,
     transitionProductionDaySchema,
     testProductionReminderSchema,
     updateProductionReminderSettingsSchema,
     voidProductionOpeningBalanceSchema,
+    voidProductionQcOpeningBalanceSchema,
 } from '@/validations/production.validation';
 import { Router } from 'express';
 
@@ -99,6 +106,54 @@ router.put(
     validateObjectIdParams('id'),
     validator(updateProductionItemOperationsSchema),
     asyncHandler(productionService.updateProductionItemOperations)
+);
+
+router.get(
+    '/qc/reports/summary',
+    authorize(...ROLE_GROUPS.PRODUCTION_QC_REPORT),
+    asyncHandler(productionQcReportService.getProductionQcReport)
+);
+router.get(
+    '/qc/reports/export',
+    authorize(...ROLE_GROUPS.PRODUCTION_QC_REPORT),
+    asyncHandler(productionQcReportService.exportProductionQcReport)
+);
+router.get(
+    '/qc/opening-balances',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionQcOpeningBalanceService.listProductionQcOpeningBalances)
+);
+router.get(
+    '/qc/opening-balances/template',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionQcOpeningBalanceService.downloadProductionQcOpeningTemplate)
+);
+router.post(
+    '/qc/opening-balances/manual',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(createProductionQcOpeningBalanceSchema),
+    asyncHandler(productionQcOpeningBalanceService.createManualProductionQcOpeningBalance)
+);
+router.post(
+    '/qc/opening-balances/import/preview',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    excelUpload.single('file'),
+    validator(importProductionQcOpeningBalanceSchema),
+    asyncHandler(productionQcOpeningBalanceService.previewProductionQcOpeningImport)
+);
+router.post(
+    '/qc/opening-balances/import/confirm',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    excelUpload.single('file'),
+    validator(importProductionQcOpeningBalanceSchema),
+    asyncHandler(productionQcOpeningBalanceService.confirmProductionQcOpeningImport)
+);
+router.post(
+    '/qc/opening-balances/:id/void',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(voidProductionQcOpeningBalanceSchema),
+    asyncHandler(productionQcOpeningBalanceService.voidProductionQcOpeningBalance)
 );
 
 router.get(
@@ -337,6 +392,19 @@ router.delete(
     authorize(...ROLE_GROUPS.PRODUCTION_QC_ENTRY),
     validateObjectIdParams('dayId', 'lineId', 'entryId'),
     asyncHandler(productionService.deleteHourlyQcEntry)
+);
+router.put(
+    '/days/:dayId/lines/:lineId/qc-records/:slotKey',
+    authorize(...ROLE_GROUPS.PRODUCTION_QC_ENTRY),
+    validateObjectIdParams('dayId', 'lineId'),
+    validator(upsertProductionQcRecordSchema),
+    asyncHandler(productionQcRecordService.upsertProductionQcRecord)
+);
+router.delete(
+    '/days/:dayId/lines/:lineId/qc-records/:slotKey',
+    authorize(...ROLE_GROUPS.PRODUCTION_QC_ENTRY),
+    validateObjectIdParams('dayId', 'lineId'),
+    asyncHandler(productionQcRecordService.deleteProductionQcRecord)
 );
 
 export default router;

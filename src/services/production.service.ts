@@ -8,6 +8,7 @@ import ProductionLine from '@/models/ProductionLine';
 import ProductionLineRecord from '@/models/ProductionLineRecord';
 import ProductionOperation from '@/models/ProductionOperation';
 import ProductionPlan from '@/models/ProductionPlan';
+import ProductionQcRecord from '@/models/ProductionQcRecord';
 import { buildPaginatedResponse } from '@/utils/pagination';
 import type { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
@@ -52,6 +53,10 @@ const RECORD_ACTOR_PATHS = [
     { path: 'operationTracks.createdBy', select: ACTOR_SELECT },
     { path: 'operationEntries.enteredBy', select: ACTOR_SELECT },
     { path: 'operationEntries.updatedBy', select: ACTOR_SELECT },
+];
+const QC_RECORD_ACTOR_PATHS = [
+    { path: 'enteredBy', select: ACTOR_SELECT },
+    { path: 'updatedBy', select: ACTOR_SELECT },
 ];
 
 const getVietnamClock = () => {
@@ -196,15 +201,16 @@ const ensureDayLineRecords = async (day: any) => {
     day.lineRosterSeededAt = new Date();
 };
 
-const loadDayDetail = async (dayInput: any, role?: string) => {
+export const loadDayDetail = async (dayInput: any, role?: string) => {
     const day = typeof dayInput?.toObject === 'function' ? dayInput : await ProductionDay.findById(dayInput);
     if (!day) throw new NotFoundError('Không tìm thấy ngày sản xuất');
     await ensureDayLineRecords(day);
     await day.populate(DAY_ACTOR_PATHS);
-    const records = await ProductionLineRecord.find({ dayId: day._id })
-        .sort({ sortOrder: 1, lineCode: 1 })
-        .populate(RECORD_ACTOR_PATHS);
-    const detail = buildProductionDayDetail(day, records);
+    const [records, qcRecords] = await Promise.all([
+        ProductionLineRecord.find({ dayId: day._id }).sort({ sortOrder: 1, lineCode: 1 }).populate(RECORD_ACTOR_PATHS),
+        ProductionQcRecord.find({ dayId: day._id }).sort({ lineCode: 1, slotKey: 1 }).populate(QC_RECORD_ACTOR_PATHS),
+    ]);
+    const detail = buildProductionDayDetail(day, records, qcRecords);
     return role && ![USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER].includes(role as USER_ROLE)
         ? redactProductionFinancials(detail)
         : { ...detail, financialsVisible: true };
@@ -218,7 +224,7 @@ const loadDayForWrite = async (req: Request, dayId: string) => {
     return day;
 };
 
-const loadDayForQcWrite = async (req: Request, dayId: string) => {
+export const loadDayForQcWrite = async (req: Request, dayId: string) => {
     const day = await ProductionDay.findById(dayId);
     if (!day) throw new NotFoundError('Không tìm thấy ngày sản xuất');
     assertPlantAccess(req, String(day.plantId));
@@ -228,7 +234,7 @@ const loadDayForQcWrite = async (req: Request, dayId: string) => {
     return day;
 };
 
-const emitProductionChange = (day: any, payload: Record<string, unknown>) => {
+export const emitProductionChange = (day: any, payload: Record<string, unknown>) => {
     emitToPlant(String(day.plantId), 'production:updated', {
         dayId: String(day._id),
         plantId: String(day.plantId),

@@ -288,6 +288,139 @@ export const upsertHourlyQcEntrySchema = z
         }
     });
 
+const productionQcInspectionSchema = z
+    .object({
+        id: zObjectId('Dòng QC').optional(),
+        itemId: zObjectId('Mã hàng'),
+        orderCode: z.string().trim().max(80).optional(),
+        inspectionType: z.enum(['first_pass', 'recheck']).default('first_pass'),
+        sourceType: z.enum(['current_day', 'carryover']).default('current_day'),
+        sourceProductionDate: productionDateSchema.optional(),
+        passedQuantity: z.number().int().min(0).max(100000000),
+        defectQuantity: z.number().int().min(0).max(100000000),
+        note: zOptionalString(),
+    })
+    .superRefine((value, ctx) => {
+        const total = value.passedQuantity + value.defectQuantity;
+        if (total <= 0 && String(value.note || '').trim().length < 3) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['note'],
+                message: 'Cần ghi chú khi kết quả kiểm bằng 0',
+            });
+        }
+        if (value.sourceType === 'current_day' && value.sourceProductionDate) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['sourceProductionDate'],
+                message: 'Ngày sản xuất nguồn chỉ dùng cho hàng tồn trước',
+            });
+        }
+        if (value.sourceType === 'carryover' && !value.sourceProductionDate && !String(value.note || '').trim()) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['note'],
+                message: 'Hàng tồn chưa rõ ngày sản xuất cần có ghi chú',
+            });
+        }
+    });
+
+export const upsertProductionQcRecordSchema = z
+    .object({
+        inspections: z.array(productionQcInspectionSchema).min(1).max(30),
+        clientMutationId: z
+            .string()
+            .trim()
+            .min(8)
+            .max(100)
+            .regex(/^[A-Za-z0-9:_-]+$/, 'Mã đồng bộ không hợp lệ')
+            .optional(),
+        expectedUpdatedAt: z.string().datetime().nullable().optional(),
+    })
+    .superRefine((value, ctx) => {
+        const keys = new Set<string>();
+        value.inspections.forEach((entry, index) => {
+            const key = [
+                entry.itemId,
+                String(entry.orderCode || '')
+                    .trim()
+                    .toUpperCase(),
+                entry.inspectionType,
+                entry.sourceType,
+                entry.sourceProductionDate || '',
+            ].join('|');
+            if (keys.has(key)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['inspections', index],
+                    message: 'Dòng QC bị trùng mã hàng, loại kiểm và nguồn hàng',
+                });
+            }
+            keys.add(key);
+        });
+    });
+
+const productionQcOpeningBalanceEntrySchema = z
+    .object({
+        lineId: zObjectId('Chuyền'),
+        itemId: zObjectId('Mã hàng').nullable().optional(),
+        orderCode: z.string().trim().max(80).optional(),
+        mode: z.enum(['full', 'backlog_only']).default('full'),
+        passedQuantity: z.number().int().min(0).max(1_000_000_000).default(0),
+        defectQuantity: z.number().int().min(0).max(1_000_000_000).default(0),
+        pendingQuantity: z.number().int().min(0).max(1_000_000_000),
+    })
+    .superRefine((value, ctx) => {
+        if (!value.itemId && value.orderCode) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['orderCode'],
+                message: 'Cần chọn mã hàng trước khi nhập mã đơn hàng',
+            });
+        }
+        if (value.mode === 'backlog_only' && (value.passedQuantity > 0 || value.defectQuantity > 0)) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['mode'],
+                message: 'Chế độ chỉ biết tồn không nhập số đạt hoặc lỗi lịch sử',
+            });
+        }
+        if (value.mode === 'full' && value.passedQuantity + value.defectQuantity + value.pendingQuantity <= 0) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['pendingQuantity'],
+                message: 'Dòng đầu kỳ phải có số đã kiểm hoặc số còn chờ',
+            });
+        }
+        if (value.mode === 'backlog_only' && value.pendingQuantity <= 0) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['pendingQuantity'],
+                message: 'Số còn chờ QC phải lớn hơn 0',
+            });
+        }
+    });
+
+export const createProductionQcOpeningBalanceSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    cutoffDate: productionDateSchema,
+    note: z.string().trim().min(3, 'Cần ghi rõ nguồn hoặc lý do nhập đầu kỳ').max(500),
+    entries: z
+        .array(productionQcOpeningBalanceEntrySchema)
+        .min(1, 'Cần ít nhất một dòng QC đầu kỳ')
+        .max(200, 'Tối đa 200 dòng khi nhập thủ công'),
+});
+
+export const importProductionQcOpeningBalanceSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    cutoffDate: productionDateSchema,
+    note: z.string().trim().min(3, 'Cần ghi rõ nguồn file đầu kỳ').max(500),
+});
+
+export const voidProductionQcOpeningBalanceSchema = z.object({
+    reason: z.string().trim().min(5, 'Cần ghi rõ lý do hủy số liệu đầu kỳ').max(500),
+});
+
 const hourlyOperationEntrySchema = z
     .object({
         trackId: zObjectId('Theo dõi công đoạn'),

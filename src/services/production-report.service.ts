@@ -4,6 +4,7 @@ import Plant from '@/models/Plant';
 import ProductionDay from '@/models/ProductionDay';
 import ProductionLineRecord from '@/models/ProductionLineRecord';
 import ProductionPlan from '@/models/ProductionPlan';
+import ProductionQcRecord from '@/models/ProductionQcRecord';
 import type { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
@@ -56,17 +57,36 @@ const resolvePlant = async (req: Request) => {
 
 const loadDetails = async (days: any[]) => {
     if (!days.length) return [];
-    const records = await ProductionLineRecord.find({ dayId: { $in: days.map((day) => day._id) } })
-        .sort({ productionDate: 1, sortOrder: 1, lineCode: 1 })
-        .lean();
+    const dayIds = days.map((day) => day._id);
+    const [records, qcRecords] = await Promise.all([
+        ProductionLineRecord.find({ dayId: { $in: dayIds } })
+            .sort({ productionDate: 1, sortOrder: 1, lineCode: 1 })
+            .lean(),
+        ProductionQcRecord.find({ dayId: { $in: dayIds } })
+            .sort({ productionDate: 1, lineCode: 1, slotKey: 1 })
+            .lean(),
+    ]);
     const recordsByDay = new Map<string, any[]>();
+    const qcRecordsByDay = new Map<string, any[]>();
     records.forEach((record: any) => {
         const key = String(record.dayId);
         const current = recordsByDay.get(key) || [];
         current.push(record);
         recordsByDay.set(key, current);
     });
-    return days.map((day) => buildProductionDayDetail(day, recordsByDay.get(String(day._id)) || []));
+    qcRecords.forEach((record: any) => {
+        const key = String(record.dayId);
+        const current = qcRecordsByDay.get(key) || [];
+        current.push(record);
+        qcRecordsByDay.set(key, current);
+    });
+    return days.map((day) =>
+        buildProductionDayDetail(
+            day,
+            recordsByDay.get(String(day._id)) || [],
+            qcRecordsByDay.get(String(day._id)) || []
+        )
+    );
 };
 
 const loadReport = async (req: Request, exceptionLimit = 200) => {
@@ -109,9 +129,7 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
     const previousPlans = plans.filter(
         (plan) => plan.productionDate >= previousFrom && plan.productionDate <= previousTo
     );
-    const cutoffDate = openingBalance.coverage.cutoffDate
-        ? String(openingBalance.coverage.cutoffDate)
-        : undefined;
+    const cutoffDate = openingBalance.coverage.cutoffDate ? String(openingBalance.coverage.cutoffDate) : undefined;
     const prePeriodDetails = cutoffDate
         ? details.filter((day) => day.productionDate > cutoffDate && day.productionDate < from)
         : [];
@@ -149,7 +167,7 @@ export const getProductionReport = async (req: Request, res: Response) => {
             ? `Đã tổng hợp ${report.summary.dayCount} ngày sản xuất`
             : Number(report.summary.cumulativeQuantity || 0) > 0
               ? 'Đã tải lũy kế sản lượng; kỳ lọc chưa có dữ liệu theo giờ'
-            : 'Chưa có dữ liệu sản xuất trong khoảng đã chọn'
+              : 'Chưa có dữ liệu sản xuất trong khoảng đã chọn'
     );
 };
 
