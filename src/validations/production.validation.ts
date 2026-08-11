@@ -68,7 +68,23 @@ export const createProductionItemSchema = z.object({
     isActive: z.boolean().default(true),
 });
 
-export const updateProductionItemSchema = createProductionItemSchema.omit({ plantId: true }).partial();
+export const updateProductionItemSchema = createProductionItemSchema
+    .omit({ plantId: true })
+    .partial()
+    .extend({
+        unitPriceMode: z.enum(['future_only', 'recalculate_from_date']).optional(),
+        unitPriceEffectiveFrom: productionDateSchema.optional(),
+        unitPriceChangeReason: z.string().trim().max(500).optional(),
+    })
+    .superRefine((value, ctx) => {
+        if (value.unitPriceMode === 'recalculate_from_date' && !value.unitPriceEffectiveFrom) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['unitPriceEffectiveFrom'],
+                message: 'Cần chọn ngày bắt đầu tính lại đơn giá',
+            });
+        }
+    });
 
 export const createProductionOperationSchema = z.object({
     plantId: zObjectId('Cơ sở'),

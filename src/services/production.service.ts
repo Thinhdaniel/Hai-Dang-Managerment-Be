@@ -12,6 +12,7 @@ import ProductionQcRecord from '@/models/ProductionQcRecord';
 import { buildPaginatedResponse } from '@/utils/pagination';
 import type { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import mongoose from 'mongoose';
 import { sendSuccess } from './service.helpers';
 import {
     buildProductionDayDetail,
@@ -30,6 +31,7 @@ import { buildProductionBoard } from './production-board.helpers';
 import { buildProductionForecast } from './production-forecast.helpers';
 import { buildProductionMonitor } from './production-monitor.helpers';
 import { serializeProductionPlan } from './production-plan.service';
+import { shouldProcessProductionPriceUpdate, summarizeProductionPriceCorrection } from './production-price.helpers';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const PRODUCTION_STATUSES = new Set(['draft', 'submitted', 'locked']);
@@ -623,27 +625,192 @@ export const createProductionItem = async (req: Request, res: Response) => {
 };
 
 export const updateProductionItem = async (req: Request, res: Response) => {
-    const item: any = await ProductionItem.findById(req.params.id);
-    if (!item) throw new NotFoundError('Không tìm thấy mã hàng');
-    assertPlantAccess(req, String(item.plantId));
-
-    if (req.body.unitPrice !== undefined && Number(req.body.unitPrice) !== Number(item.unitPrice)) {
-        const now = new Date();
-        const currentPrice = item.priceHistory?.[item.priceHistory.length - 1];
-        if (currentPrice && !currentPrice.effectiveTo) currentPrice.effectiveTo = now;
-        item.priceHistory.push({ unitPrice: req.body.unitPrice, effectiveFrom: now, updatedBy: req.userId });
-    }
-    Object.assign(item, req.body, {
-        ...(req.body.code ? { code: String(req.body.code).trim().toUpperCase() } : {}),
-        updatedBy: req.userId,
-    });
+    const session = await mongoose.startSession();
+    let savedItem: any;
+    let affectedDayIds: unknown[] = [];
+    let priceUpdate: any;
     try {
-        await item.save();
+        await session.withTransaction(async () => {
+            const item: any = await ProductionItem.findById(req.params.id).session(session);
+            if (!item) throw new NotFoundError('Không tìm thấy mã hàng');
+            assertPlantAccess(req, String(item.plantId));
+
+            const previousUnitPrice = Number(item.unitPrice || 0);
+            const nextUnitPrice =
+                req.body.unitPrice === undefined ? previousUnitPrice : Number(req.body.unitPrice || 0);
+            const priceChanged = nextUnitPrice !== previousUnitPrice;
+            const unitPriceMode = req.body.unitPriceMode || 'future_only';
+            const unitPriceChangeReason = String(req.body.unitPriceChangeReason || '').trim();
+            const priceUpdateRequested = shouldProcessProductionPriceUpdate({
+                priceChanged,
+                unitPriceMode,
+                unitPriceEffectiveFrom: req.body.unitPriceEffectiveFrom,
+            });
+            const now = new Date();
+
+            if (priceUpdateRequested) {
+                if (unitPriceChangeReason.length < 3) {
+                    throw new BadRequestError('Cần ghi rõ lý do thay đổi đơn giá để truy vết');
+                }
+
+                let impact = summarizeProductionPriceCorrection({
+                    records: [],
+                    plans: [],
+                    itemId: item._id,
+                    nextUnitPrice,
+                });
+                let unitPriceEffectiveFrom: string | undefined;
+
+                if (unitPriceMode === 'recalculate_from_date') {
+                    unitPriceEffectiveFrom = String(req.body.unitPriceEffectiveFrom || '');
+                    if (!DATE_PATTERN.test(unitPriceEffectiveFrom)) {
+                        throw new BadRequestError('Cần chọn ngày bắt đầu tính lại đơn giá');
+                    }
+                    if (unitPriceEffectiveFrom > getVietnamClock().localDate) {
+                        throw new BadRequestError('Ngày tính lại đơn giá không được nằm trong tương lai');
+                    }
+
+                    // MongoDB does not support parallel operations on the same transaction session.
+                    const records = await ProductionLineRecord.find({
+                        plantId: item.plantId,
+                        productionDate: { $gte: unitPriceEffectiveFrom },
+                        'runs.itemId': item._id,
+                    })
+                        .select('_id dayId productionDate runs entries')
+                        .session(session)
+                        .lean();
+                    const plans = await ProductionPlan.find({
+                        plantId: item.plantId,
+                        productionDate: { $gte: unitPriceEffectiveFrom },
+                        'allocations.itemId': item._id,
+                    })
+                        .select('_id allocations')
+                        .session(session)
+                        .lean();
+                    impact = summarizeProductionPriceCorrection({
+                        records,
+                        plans,
+                        itemId: item._id,
+                        nextUnitPrice,
+                    });
+
+                    if (impact.recordIds.length) {
+                        await ProductionLineRecord.updateMany(
+                            { _id: { $in: impact.recordIds } },
+                            {
+                                $set: {
+                                    'runs.$[run].unitPriceSnapshot': nextUnitPrice,
+                                    updatedBy: req.userId,
+                                    updatedAt: now,
+                                },
+                            },
+                            {
+                                arrayFilters: [
+                                    {
+                                        'run.itemId': item._id,
+                                        'run.unitPriceSnapshot': { $ne: nextUnitPrice },
+                                    },
+                                ],
+                                session,
+                                runValidators: true,
+                            }
+                        );
+                    }
+                    if (impact.planIds.length) {
+                        await ProductionPlan.updateMany(
+                            { _id: { $in: impact.planIds } },
+                            {
+                                $set: {
+                                    'allocations.$[allocation].unitPriceSnapshot': nextUnitPrice,
+                                    updatedBy: req.userId,
+                                    updatedAt: now,
+                                },
+                            },
+                            {
+                                arrayFilters: [
+                                    {
+                                        'allocation.itemId': item._id,
+                                        'allocation.unitPriceSnapshot': { $ne: nextUnitPrice },
+                                    },
+                                ],
+                                session,
+                                runValidators: true,
+                            }
+                        );
+                    }
+                }
+
+                const currentPrice = [...(item.priceHistory || [])].reverse().find((entry: any) => !entry.effectiveTo);
+                if (currentPrice) currentPrice.effectiveTo = now;
+                item.priceHistory.push({
+                    unitPrice: nextUnitPrice,
+                    effectiveFrom: now,
+                    updatedBy: req.userId,
+                    changeType: unitPriceMode,
+                    effectiveProductionDate: unitPriceEffectiveFrom,
+                    reason: unitPriceChangeReason,
+                    affectedDayCount: impact.affectedDayCount,
+                    affectedRunCount: impact.affectedRunCount,
+                    affectedEntryCount: impact.affectedEntryCount,
+                    affectedPlanAllocationCount: impact.affectedPlanAllocationCount,
+                });
+                affectedDayIds = impact.dayIds;
+                priceUpdate = {
+                    mode: unitPriceMode,
+                    previousUnitPrice,
+                    nextUnitPrice,
+                    effectiveFrom: unitPriceEffectiveFrom,
+                    affectedDayCount: impact.affectedDayCount,
+                    affectedRecordCount: impact.affectedRecordCount,
+                    affectedRunCount: impact.affectedRunCount,
+                    affectedEntryCount: impact.affectedEntryCount,
+                    affectedPlanCount: impact.affectedPlanCount,
+                    affectedPlanAllocationCount: impact.affectedPlanAllocationCount,
+                };
+            }
+
+            const {
+                unitPriceMode: _unitPriceMode,
+                unitPriceEffectiveFrom: _unitPriceEffectiveFrom,
+                unitPriceChangeReason: _unitPriceChangeReason,
+                ...catalogPatch
+            } = req.body;
+            Object.assign(item, catalogPatch, {
+                ...(req.body.code ? { code: String(req.body.code).trim().toUpperCase() } : {}),
+                updatedBy: req.userId,
+            });
+            savedItem = await item.save({ session });
+        });
     } catch (error: any) {
         if (error?.code === 11000) throw new DuplicateError('Mã hàng đã tồn tại trong cơ sở');
         throw error;
+    } finally {
+        await session.endSession();
     }
-    return sendSuccess(res, serializeProductionItem(item), 'Đã cập nhật mã hàng');
+
+    if (priceUpdate?.mode === 'recalculate_from_date' && affectedDayIds.length) {
+        const affectedDays = await ProductionDay.find({ _id: { $in: affectedDayIds } }).lean();
+        affectedDays.forEach((day) =>
+            emitProductionChange(day, {
+                changeType: 'unit-price-corrected',
+                itemId: String(savedItem._id),
+                itemCode: savedItem.code,
+                effectiveFrom: priceUpdate.effectiveFrom,
+            })
+        );
+    }
+
+    const data = {
+        ...serializeProductionItem(savedItem),
+        ...(priceUpdate ? { priceUpdate } : {}),
+    };
+    const message =
+        priceUpdate?.mode === 'recalculate_from_date'
+            ? `Đã cập nhật mã hàng và tính lại ${priceUpdate.affectedEntryCount} khung nhập trên ${priceUpdate.affectedDayCount} ngày`
+            : priceUpdate
+              ? 'Đã cập nhật mã hàng; đơn giá mới chỉ áp dụng cho lần chạy tạo sau'
+              : 'Đã cập nhật mã hàng';
+    return sendSuccess(res, data, message);
 };
 
 export const updateProductionItemOperations = async (req: Request, res: Response) => {

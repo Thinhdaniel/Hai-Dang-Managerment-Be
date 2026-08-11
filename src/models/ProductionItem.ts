@@ -6,6 +6,13 @@ const ProductionItemPriceSchema = new mongoose.Schema(
         effectiveFrom: { type: Date, required: true },
         effectiveTo: { type: Date },
         updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        changeType: { type: String, enum: ['future_only', 'recalculate_from_date'] },
+        effectiveProductionDate: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },
+        reason: { type: String, trim: true, maxlength: 500 },
+        affectedDayCount: { type: Number, min: 0 },
+        affectedRunCount: { type: Number, min: 0 },
+        affectedEntryCount: { type: Number, min: 0 },
+        affectedPlanAllocationCount: { type: Number, min: 0 },
     },
     { _id: false }
 );
