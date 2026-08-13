@@ -22,17 +22,37 @@ const buildFilter = (query: Request['query']) => {
 const normalizePlantName = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
 
 const sanitizePlantPayload = (payload: Record<string, any>) => {
+    const { productionAccess: _productionAccess, ...safePayload } = payload;
     const sanitizedName = payload.name?.trim().replace(/\s+/g, ' ');
     const sanitizedCode = payload.code?.trim().replace(/\s+/g, ' ');
     const sanitizedAddress = payload.address?.trim().replace(/\s+/g, ' ');
     const sanitizedPhone = payload.phone?.trim().replace(/\s+/g, ' ');
 
     return {
-        ...payload,
+        ...safePayload,
         ...(sanitizedName ? { name: sanitizedName, normalizedName: normalizePlantName(sanitizedName) } : {}),
         ...(sanitizedCode ? { code: sanitizedCode } : {}),
         ...(payload.address !== undefined ? { address: sanitizedAddress || undefined } : {}),
         ...(payload.phone !== undefined ? { phone: sanitizedPhone || undefined } : {}),
+    };
+};
+
+const buildProductionAccessUpdate = (enabled: boolean, actorId?: string) => {
+    const now = new Date();
+    if (enabled) {
+        return {
+            'productionAccess.enabled': true,
+            'productionAccess.enabledAt': now,
+            'productionAccess.enabledBy': actorId,
+            'productionAccess.disabledAt': null,
+            'productionAccess.disabledBy': null,
+        };
+    }
+
+    return {
+        'productionAccess.enabled': false,
+        'productionAccess.disabledAt': now,
+        'productionAccess.disabledBy': actorId,
     };
 };
 
@@ -105,10 +125,18 @@ const sortPlantsNaturally = <T extends { code?: string; name?: string }>(plants:
 
 export const createPlant = async (req: Request, res: Response, next: NextFunction) => {
     const payload = sanitizePlantPayload(req.body);
+    const productionEnabled = req.body.productionAccess?.enabled === true;
 
     await ensurePlantNameAvailable(payload.name);
 
-    const plant = await plantRepository.create({ ...payload, createdBy: req.userId, updatedBy: req.userId });
+    const plant = await plantRepository.create({
+        ...payload,
+        productionAccess: productionEnabled
+            ? { enabled: true, enabledAt: new Date(), enabledBy: req.userId }
+            : { enabled: false },
+        createdBy: req.userId,
+        updatedBy: req.userId,
+    });
 
     return res.status(StatusCodes.CREATED).json(
         customResponse({
@@ -139,7 +167,10 @@ export const getPlantsWithMachineCount = async (req: Request, res: Response, nex
     const plants = await plantRepository.findMany(buildFilter(req.query), { sort: String(req.query.sort || 'name') });
     const machineStats = await assetRepository.getPlantMachineStats();
     const facilities = sortPlantsNaturally(attachMachineCounts(plants, machineStats.countsByPlant).map(serializePlant));
-    const totalMachines = facilities.reduce((sum, facility) => sum + (facility.machineCount ?? facility.assetCount ?? 0), 0);
+    const totalMachines = facilities.reduce(
+        (sum, facility) => sum + (facility.machineCount ?? facility.assetCount ?? 0),
+        0
+    );
 
     return res.status(StatusCodes.OK).json(
         customResponse({
@@ -183,7 +214,21 @@ export const updatePlant = async (req: Request, res: Response, next: NextFunctio
         await ensurePlantNameAvailable(payload.name, plantId);
     }
 
-    const plant = await plantRepository.updateById(plantId, { ...payload, updatedBy: req.userId });
+    const currentPlant = await plantRepository.findById(plantId);
+    if (!currentPlant) throw new NotFoundError('Khong tim thay co so');
+
+    const requestedProductionEnabled = req.body.productionAccess?.enabled;
+    const productionAccessUpdate =
+        typeof requestedProductionEnabled === 'boolean' &&
+        requestedProductionEnabled !== (currentPlant as any).productionAccess?.enabled
+            ? buildProductionAccessUpdate(requestedProductionEnabled, req.userId)
+            : {};
+
+    const plant = await plantRepository.updateById(plantId, {
+        ...payload,
+        ...productionAccessUpdate,
+        updatedBy: req.userId,
+    });
 
     if (!plant) throw new NotFoundError('Khong tim thay co so');
 

@@ -8,6 +8,7 @@ import { initSocketServer } from './lib/socket';
 import { startRealityOperationsSchedule } from './services/reality-operations.service';
 import { startExecutiveBriefingSchedule } from './services/executive-briefing.service';
 import { startProductionReminderSchedule } from './services/production-reminder.service';
+import { ensureProductionAccessDefaults } from './services/production-access.service';
 
 const PORT = config.port || 8080;
 const HOSTNAME = config.hostname;
@@ -18,6 +19,9 @@ const server = http.createServer(app);
 initSocketServer(server);
 
 connectDB().then(async () => {
+    // Giữ CS1 đang vận hành và mặc định khóa Production tại các cơ sở cũ khác.
+    await ensureProductionAccessDefaults();
+
     server.listen(PORT, HOSTNAME, () => {
         console.log(`Listening to port ${PORT}`);
     });

@@ -10,6 +10,12 @@ const zCoordinates = z
     .nullable()
     .optional();
 
+const zProductionAccess = z
+    .object({
+        enabled: z.boolean(),
+    })
+    .optional();
+
 export const createPlantSchema = z.object({
     name: zRequiredString('Ten co so'),
     code: zRequiredString('Ma co so'),
@@ -17,6 +23,7 @@ export const createPlantSchema = z.object({
     phone: zOptionalString(),
     managerId: zObjectId('Quan ly').optional(),
     coordinates: zCoordinates,
+    productionAccess: zProductionAccess,
 });
 
 export const updatePlantSchema = z.object({
@@ -26,4 +33,5 @@ export const updatePlantSchema = z.object({
     phone: zOptionalString(),
     managerId: zObjectId('Quan ly').optional(),
     coordinates: zCoordinates,
+    productionAccess: zProductionAccess,
 });

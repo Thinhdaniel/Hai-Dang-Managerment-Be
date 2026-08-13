@@ -55,6 +55,7 @@ export const serializeBrand = (input: any) => {
 
 export const serializePlant = (input: any) => {
     const plant = toPlain(input);
+    const productionAccess = plant?.productionAccess;
 
     return {
         id: toId(plant),
@@ -67,6 +68,13 @@ export const serializePlant = (input: any) => {
                 ? { lat: plant.coordinates.lat, lng: plant.coordinates.lng }
                 : undefined,
         managerId: toId(plant?.managerId),
+        productionAccess: {
+            enabled: productionAccess?.enabled === true,
+            enabledAt: toIso(productionAccess?.enabledAt),
+            enabledBy: toId(productionAccess?.enabledBy),
+            disabledAt: toIso(productionAccess?.disabledAt),
+            disabledBy: toId(productionAccess?.disabledBy),
+        },
         assetCount: typeof plant?.assetCount === 'number' ? plant.assetCount : undefined,
         machineCount: typeof plant?.machineCount === 'number' ? plant.machineCount : undefined,
         createdAt: toIso(plant?.createdAt),

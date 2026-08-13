@@ -5,6 +5,7 @@ import { excelUpload } from '@/middlewares/multerMiddleware';
 import { validateObjectIdParams } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import * as productionOpeningBalanceService from '@/services/production-opening-balance.service';
+import * as productionAccessService from '@/services/production-access.service';
 import * as productionPlanService from '@/services/production-plan.service';
 import * as productionQcRecordService from '@/services/production-qc-record.service';
 import * as productionQcOpeningBalanceService from '@/services/production-qc-opening-balance.service';
@@ -55,6 +56,10 @@ router.use(authenticate);
 // Lớp base gồm cả Tổ trưởng để họ nhập số theo giờ; các route quản trị bên dưới
 // vẫn tự gate MANAGEMENT nên tổ trưởng chỉ chạm được luồng nhập liệu.
 router.use(authorize(...ROLE_GROUPS.PRODUCTION_FIELD));
+
+// Endpoint trạng thái phải đứng trước middleware chặn để FE có thể giải thích đúng lý do.
+router.get('/access', asyncHandler(productionAccessService.getProductionAccess));
+router.use(productionAccessService.requireProductionEnabled);
 
 router.get('/lines', asyncHandler(productionService.listProductionLines));
 router.post(

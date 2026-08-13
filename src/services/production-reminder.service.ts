@@ -463,7 +463,15 @@ export const evaluateProductionReminders = async (trigger: ReminderTrigger = 'sc
     evaluationRunning = true;
     try {
         const productionDate = getProductionLocalDate(now);
-        const days: any[] = await ProductionDay.find({ productionDate }).sort({ plantId: 1 }).lean();
+        const enabledPlantIds = (await Plant.distinct('_id', {
+            isDeleted: { $ne: true },
+            'productionAccess.enabled': true,
+        })) as mongoose.Types.ObjectId[];
+        const days: any[] = enabledPlantIds.length
+            ? await ProductionDay.find({ productionDate, plantId: { $in: enabledPlantIds } })
+                  .sort({ plantId: 1 })
+                  .lean()
+            : [];
         const results: any[] = [];
         for (const day of days) {
             const plantId = String(day.plantId);

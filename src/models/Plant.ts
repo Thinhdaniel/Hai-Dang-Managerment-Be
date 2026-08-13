@@ -36,6 +36,28 @@ const PlantSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
         },
+        productionAccess: {
+            type: new mongoose.Schema(
+                {
+                    enabled: {
+                        type: Boolean,
+                        default: false,
+                    },
+                    enabledAt: Date,
+                    enabledBy: {
+                        type: mongoose.Schema.Types.ObjectId,
+                        ref: 'User',
+                    },
+                    disabledAt: Date,
+                    disabledBy: {
+                        type: mongoose.Schema.Types.ObjectId,
+                        ref: 'User',
+                    },
+                },
+                { _id: false }
+            ),
+            default: () => ({ enabled: false }),
+        },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
