@@ -84,6 +84,62 @@ const getVietnamClock = () => {
     };
 };
 
+const lineMetadataUpdate = (line: any, actorId?: string) => {
+    const lineName = String(line.name || '').trim();
+    const leaderName = String(line.leaderName || '').trim();
+    const $set: Record<string, unknown> = {
+        lineCode: String(line.code || '')
+            .trim()
+            .toUpperCase(),
+        sortOrder: Number(line.sortOrder || 0),
+        ...(actorId ? { updatedBy: actorId } : {}),
+        ...(lineName ? { lineName } : {}),
+        ...(leaderName ? { leaderName } : {}),
+    };
+    const $unset: Record<string, 1> = {
+        ...(!lineName ? { lineName: 1 as const } : {}),
+        ...(!leaderName ? { leaderName: 1 as const } : {}),
+    };
+    return { $set, ...(Object.keys($unset).length ? { $unset } : {}) };
+};
+
+const hasLineMetadataDrift = (record: any, line: any) =>
+    String(record.lineCode || '')
+        .trim()
+        .toUpperCase() !==
+        String(line.code || '')
+            .trim()
+            .toUpperCase() ||
+    String(record.lineName || '').trim() !== String(line.name || '').trim() ||
+    String(record.leaderName || '').trim() !== String(line.leaderName || '').trim() ||
+    Number(record.sortOrder || 0) !== Number(line.sortOrder || 0);
+
+const syncLineMetadataToOpenDays = async (line: any, actorId?: string) => {
+    const { localDate } = getVietnamClock();
+    const days: any[] = await ProductionDay.find({
+        plantId: line.plantId,
+        productionDate: { $gte: localDate },
+        status: 'draft',
+    })
+        .select('_id plantId productionDate')
+        .lean();
+    if (!days.length) return 0;
+
+    const result = await ProductionLineRecord.updateMany(
+        { dayId: { $in: days.map((day) => day._id) }, lineId: line._id },
+        lineMetadataUpdate(line, actorId)
+    );
+    if (result.modifiedCount) {
+        days.forEach((day) =>
+            emitProductionChange(day, {
+                changeType: 'line-metadata-synced',
+                lineId: String(line._id),
+            })
+        );
+    }
+    return result.modifiedCount;
+};
+
 const userPlantId = (req: Request): string => String(req.user?.plantId?._id ?? req.user?.plantId ?? '');
 
 const assertPlantAccess = (req: Request, plantId: string) => {
@@ -460,6 +516,23 @@ export const updateProductionLine = async (req: Request, res: Response) => {
         if (error?.code === 11000) throw new DuplicateError('Mã chuyền đã tồn tại trong cơ sở');
         throw error;
     }
+    await Promise.all([
+        syncLineMetadataToOpenDays(item, req.userId),
+        ProductionPlan.updateMany(
+            {
+                plantId: item.plantId,
+                productionDate: { $gte: getVietnamClock().localDate },
+                'allocations.lineId': item._id,
+            },
+            {
+                $set: {
+                    'allocations.$[allocation].lineCode': item.code,
+                    'allocations.$[allocation].lineName': item.name || '',
+                },
+            },
+            { arrayFilters: [{ 'allocation.lineId': item._id }] }
+        ),
+    ]);
     return sendSuccess(res, serializeProductionLine(item), 'Đã cập nhật chuyền');
 };
 
@@ -987,6 +1060,48 @@ export const addProductionDayLine = async (req: Request, res: Response) => {
     });
     emitProductionChange(day, { changeType: 'day-line-added', lineId: String(line._id) });
     return sendSuccess(res, await loadDayDetail(day, req.role), `Đã thêm chuyền ${line.code} vào ngày`);
+};
+
+export const syncProductionDayLineMetadata = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.dayId));
+    const records: any[] = await ProductionLineRecord.find({ dayId: day._id });
+    if (!records.length) {
+        return sendSuccess(res, await loadDayDetail(day, req.role), 'Ngày sản xuất chưa có chuyền để đồng bộ');
+    }
+
+    const lines: any[] = await ProductionLine.find({
+        _id: { $in: records.map((record) => record.lineId) },
+        plantId: day.plantId,
+    });
+    const lineById = new Map(lines.map((line) => [String(line._id), line]));
+    const driftedRecords = records.filter((record) => {
+        const line = lineById.get(String(record.lineId));
+        return line && hasLineMetadataDrift(record, line);
+    });
+
+    if (driftedRecords.length) {
+        await ProductionLineRecord.bulkWrite(
+            driftedRecords.map((record) => {
+                const line = lineById.get(String(record.lineId));
+                return {
+                    updateOne: {
+                        filter: { _id: record._id },
+                        update: lineMetadataUpdate(line, req.userId),
+                    },
+                };
+            }) as any,
+            { ordered: false }
+        );
+        emitProductionChange(day, {
+            changeType: 'day-line-metadata-synced',
+            lineIds: driftedRecords.map((record) => String(record.lineId)),
+        });
+    }
+
+    const message = driftedRecords.length
+        ? `Đã đồng bộ thông tin ${driftedRecords.length} chuyền, giữ nguyên toàn bộ số liệu trong ngày`
+        : 'Thông tin chuyền trong ngày đã đồng bộ với danh mục';
+    return sendSuccess(res, await loadDayDetail(day, req.role), message);
 };
 
 export const removeProductionDayLine = async (req: Request, res: Response) => {

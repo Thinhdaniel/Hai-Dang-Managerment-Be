@@ -319,6 +319,12 @@ router.post(
     validator(addProductionDayLineSchema),
     asyncHandler(productionService.addProductionDayLine)
 );
+router.post(
+    '/days/:dayId/lines/sync-catalog',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('dayId'),
+    asyncHandler(productionService.syncProductionDayLineMetadata)
+);
 router.delete(
     '/days/:dayId/lines/:lineId',
     authorize(...ROLE_GROUPS.MANAGEMENT),
