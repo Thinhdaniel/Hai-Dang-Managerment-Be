@@ -797,7 +797,7 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
             .findOneAndUpdate(
                 { _id: req.params.id, status: 'draft', distributionType: 'internal_issue', isDeleted: { $ne: true } },
                 { $set: { status: 'processing' } },
-                { new: false, session }
+                { returnDocument: 'before', session }
             );
 
         if (!record) {
@@ -858,7 +858,7 @@ export const distributeRecord = async (req: Request, res: Response, next: NextFu
         const record = await (DistributionRecord as any).findOneAndUpdate(
             { _id: req.params.id, status: 'pending', isDeleted: { $ne: true } },
             { $set: { status: 'processing' } },
-            { new: false, session }
+            { returnDocument: 'before', session }
         );
 
         if (!record) {

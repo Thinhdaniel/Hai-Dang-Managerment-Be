@@ -315,7 +315,7 @@ const addAssetToBatch = async (asset: any, batch: any, req: Request, overrides: 
         const updatedAsset = await Asset.findByIdAndUpdate(
             asset._id,
             { status: ASSET_STATUS.PENDING_DISPOSAL, statusNote: trim(overrides.note), updatedBy: req.userId },
-            { new: true }
+            { returnDocument: 'after' }
         )
             .populate('brandId')
             .populate('plantId');
@@ -374,7 +374,7 @@ const revertAssetIfNeeded = async (item: any, req: Request) => {
     const updatedAsset = await Asset.findOneAndUpdate(
         { _id: assetId, isDeleted: { $ne: true }, status: ASSET_STATUS.PENDING_DISPOSAL },
         { status: nextStatus, updatedBy: req.userId },
-        { new: true }
+        { returnDocument: 'after' }
     )
         .populate('brandId')
         .populate('plantId');
@@ -495,7 +495,7 @@ export const updateDisposalBatch = async (req: Request, res: Response, _next: Ne
         AssetDisposalBatch.findOneAndUpdate(
             { _id: batch._id, isDeleted: { $ne: true } },
             { ...req.body, updatedBy: req.userId },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         ),
         BATCH_POPULATE
     );
@@ -738,7 +738,7 @@ export const updateDisposalItem = async (req: Request, res: Response, _next: Nex
 
     const updated = await applyPopulate(
         AssetDisposalItem.findOneAndUpdate({ _id: current._id, isDeleted: { $ne: true } }, payload, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         }),
         ITEM_POPULATE
@@ -885,7 +885,7 @@ export const completeDisposalBatch = async (req: Request, res: Response, _next: 
                     statusNote: `Thanh ly theo dot ${batch.code}`,
                     updatedBy: req.userId,
                 },
-                { new: true }
+                { returnDocument: 'after' }
             )
                 .populate('brandId')
                 .populate('plantId');

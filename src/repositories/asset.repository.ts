@@ -53,7 +53,7 @@ export const assetRepository = {
 
     updateById(id: string, update: Record<string, unknown>) {
         return Asset.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         })
             .populate('brandId')
@@ -62,7 +62,7 @@ export const assetRepository = {
 
     softDeleteById(id: string, update: Record<string, unknown>) {
         return Asset.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
         });
     },
 

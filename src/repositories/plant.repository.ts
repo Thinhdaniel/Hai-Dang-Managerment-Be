@@ -35,14 +35,14 @@ export const plantRepository = {
 
     updateById(id: string, update: Record<string, unknown>) {
         return Plant.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         });
     },
 
     softDeleteById(id: string, update: Record<string, unknown>) {
         return Plant.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
         });
     },
 };

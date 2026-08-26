@@ -482,7 +482,7 @@ export const saveFloorZones = async (req: Request, res: Response) => {
             const updated = await FloorZone.findOneAndUpdate(
                 { _id: zone.id, plantId },
                 { $set: payload },
-                { new: true }
+                { returnDocument: 'after' }
             ).lean();
             if (updated) saved.push(updated);
         } else {
@@ -580,7 +580,7 @@ export const saveFloorPositions = async (req: Request, res: Response) => {
             const changed = await Asset.findOneAndUpdate(
                 { _id: asset._id, isDeleted: { $ne: true }, ...currentFilter },
                 update,
-                { new: true }
+                { returnDocument: 'after' }
             );
             if (!changed) {
                 conflicts.push(item.assetId);
@@ -690,7 +690,7 @@ export const rollbackFloorMapRevision = async (req: Request, res: Response) => {
             const asset = await Asset.findOneAndUpdate(
                 { _id: change.assetId, plantId: revision.plantId, isDeleted: { $ne: true }, ...currentFilter },
                 update,
-                { new: true }
+                { returnDocument: 'after' }
             );
             if (asset) reverted += 1;
             else conflicts.push(String(change.assetId));

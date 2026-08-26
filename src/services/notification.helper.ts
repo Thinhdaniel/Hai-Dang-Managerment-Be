@@ -206,7 +206,7 @@ export const notifyUserUpserted = async (
                 },
                 $setOnInsert: { userId, dedupeKey: options.dedupeKey },
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
         summary.inAppCreated = existing ? 0 : 1;
         const payload = notification.toObject();

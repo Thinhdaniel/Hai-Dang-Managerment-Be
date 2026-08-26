@@ -68,7 +68,7 @@ export const transferRepository = {
     updateById(id: string, update: Record<string, unknown>) {
         return applyPopulate(
             Transfer.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-                new: true,
+                returnDocument: 'after',
                 runValidators: true,
             }),
             WORKFLOW_POPULATE.transfer

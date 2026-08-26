@@ -46,7 +46,7 @@ export const materialRepository = {
 
     updateById(id: string, update: Record<string, unknown>) {
         return Material.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         })
             .populate('createdBy')
@@ -55,7 +55,7 @@ export const materialRepository = {
 
     softDeleteById(id: string, update: Record<string, unknown>) {
         return Material.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
         });
     },
 };

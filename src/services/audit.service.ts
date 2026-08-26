@@ -426,7 +426,7 @@ export const runAudit = async (trigger: 'cron' | 'manual', generatedBy?: string)
                 generatedBy: generatedBy || undefined,
             },
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
     );
     return doc;
 };

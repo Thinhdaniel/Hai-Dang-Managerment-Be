@@ -500,7 +500,7 @@ export const markBatchPrinted = async (req: Request, res: Response, next: NextFu
             printedBy: userId,
             updatedBy: userId,
         },
-        { new: true }
+        { returnDocument: 'after' }
     ).populate('plantId');
 
     if (!batch) throw new NotFoundError('Khong tim thay lo tem QR');

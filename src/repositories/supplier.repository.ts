@@ -39,7 +39,7 @@ export const supplierRepository = {
 
     updateById(id: string, update: Record<string, unknown>) {
         return Supplier.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         })
             .populate('createdBy')

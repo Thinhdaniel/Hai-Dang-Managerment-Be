@@ -355,7 +355,7 @@ export const submitIncidentReplayFeedback = async (req: Request, res: Response) 
                 },
             },
         },
-        { new: true }
+        { returnDocument: 'after' }
     ).lean();
     if (!updated) {
         return res.status(StatusCodes.NOT_FOUND).json(
@@ -465,7 +465,7 @@ export const updateIncidentReplayWorkflow = async (req: Request, res: Response) 
                 },
             },
         },
-        { new: true }
+        { returnDocument: 'after' }
     ).lean();
 
     return res.status(StatusCodes.OK).json(

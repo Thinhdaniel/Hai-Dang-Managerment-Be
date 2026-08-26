@@ -50,7 +50,7 @@ const getRule = async (plantId: string) => {
         return await RealityAlertRule.findOneAndUpdate(
             { plantId },
             { $setOnInsert: { plantId, ...DEFAULT_RULE } },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
     } catch (error: any) {
         if (error?.code !== 11000) throw error;
@@ -235,7 +235,7 @@ const runPlantRealityEvaluation = async (plantId: string, options?: { notify?: b
         await RealityHealthSnapshot.findOneAndUpdate(
             { plantId, snapshotKey: dateKey() },
             { $set: snapshotUpdate },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
     } catch (error: any) {
         if (error?.code !== 11000) throw error;
@@ -321,7 +321,7 @@ const runPlantRealityEvaluation = async (plantId: string, options?: { notify?: b
                     ],
                 },
                 { $set: { lastNotifiedAt: now, lastNotifiedMetricHash: hash } },
-                { new: true }
+                { returnDocument: 'after' }
             );
             if (claimed) alertsToNotify.push(claimed);
         }
@@ -474,7 +474,7 @@ export const updateRealityAlertRule = async (req: Request, res: Response) => {
     const rule = await RealityAlertRule.findOneAndUpdate(
         { plantId },
         { $set: { ...req.body, updatedBy: req.userId } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
     void evaluatePlantRealityOperations(plantId, { notify: true }).catch((error) =>
         console.error('[RealityOperations] Rule evaluation failed:', error)

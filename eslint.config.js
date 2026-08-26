@@ -17,6 +17,15 @@ export default tseslint.config(
         rules: {
             '@typescript-eslint/no-explicit-any': 'off',
             '@typescript-eslint/no-unused-vars': 'off',
+            'no-restricted-syntax': [
+                'error',
+                {
+                    selector:
+                        "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(findOneAndUpdate|findByIdAndUpdate|findOneAndReplace|findByIdAndReplace)$/] > ObjectExpression > Property[key.name=/^(new|returnOriginal)$/]",
+                    message:
+                        "Mongoose 9 deprecates 'new' and 'returnOriginal'. Use returnDocument: 'after' or 'before' instead.",
+                },
+            ],
         },
     }
 );

@@ -149,7 +149,7 @@ export const revokeSessionById = async (sessionId?: string) => {
             revoked: true,
             revokedAt: new Date(),
         },
-        { new: true }
+        { returnDocument: 'after' }
     );
 };
 

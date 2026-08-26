@@ -120,7 +120,7 @@ export const updateUser = async (req: Request, res: Response, next: NextFunction
     Object.keys(updateData).forEach((key) => updateData[key] === undefined && delete updateData[key]);
 
     const user = await User.findOneAndUpdate({ _id: userId, isDeleted: { $ne: true } }, updateData, {
-        new: true,
+        returnDocument: 'after',
         runValidators: true,
     }).populate('plantId');
 
@@ -148,7 +148,7 @@ export const deleteUser = async (req: Request, res: Response, next: NextFunction
     const user = await User.findOneAndUpdate(
         { _id: req.params.id, isDeleted: { $ne: true } },
         { isDeleted: true, deletedAt: new Date(), isActive: false },
-        { new: true }
+        { returnDocument: 'after' }
     );
 
     if (!user) throw new NotFoundError('Khong tim thay nguoi dung');

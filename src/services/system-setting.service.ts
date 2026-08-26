@@ -103,7 +103,7 @@ export const uploadNotificationSound = async (req: Request, res: Response, _next
                         : undefined,
             },
         },
-        { new: true, upsert: true }
+        { returnDocument: 'after', upsert: true }
     );
 
     // Xoá file cũ sau khi đã ghi setting mới thành công

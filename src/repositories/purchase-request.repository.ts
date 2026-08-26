@@ -86,7 +86,7 @@ export const purchaseRequestRepository = {
 
     updateById(id: string, update: Record<string, unknown>, session?: ClientSession) {
         const query = PurchaseRequest.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         })
             .populate('plantId')
@@ -112,7 +112,7 @@ export const purchaseRequestRepository = {
 
     softDeleteById(id: string, update: Record<string, unknown>) {
         return PurchaseRequest.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
         });
     },
 };

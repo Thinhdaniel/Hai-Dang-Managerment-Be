@@ -465,7 +465,7 @@ const transitionProductionDay = async (
                 },
             },
         },
-        { new: true, runValidators: true }
+        { returnDocument: 'after', runValidators: true }
     );
     if (!updated) throw new DuplicateError('Trạng thái vừa thay đổi trên thiết bị khác, vui lòng tải lại');
     emitProductionChange(updated, { changeType: 'day-status-updated', status: nextStatus });

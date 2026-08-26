@@ -68,7 +68,7 @@ const getOrCreateRule = async (plantId: string) => {
         return await ProductionReminderRule.findOneAndUpdate(
             { plantId },
             { $setOnInsert: { plantId, ...DEFAULT_RULE } },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
     } catch (error: any) {
         if (error?.code !== 11000) throw error;
@@ -368,7 +368,7 @@ const evaluateProductionDay = async (day: any, rule: any, now: Date) => {
                     expiresAt: new Date(now.getTime() + EVENT_RETENTION_MS),
                 },
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
         if (
             open &&
@@ -634,7 +634,7 @@ export const updateProductionReminderSettings = async (req: Request, res: Respon
             },
             $setOnInsert: { plantId: plant.id },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
     return sendSuccess(res, serializeRule(rule), 'Đã cập nhật cấu hình nhắc sản lượng');
 };

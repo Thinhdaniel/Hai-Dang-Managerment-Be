@@ -62,7 +62,7 @@ const nextSequence = async (prefix: string) => {
     const doc = await Counter.findOneAndUpdate(
         { key: prefix },
         { $inc: { seq: 1 } },
-        { new: true, upsert: true }
+        { returnDocument: 'after', upsert: true }
     );
     return doc?.seq ?? 1;
 };

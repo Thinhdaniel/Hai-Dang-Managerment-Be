@@ -180,7 +180,7 @@ const applyStatusToMaintenanceAssets = async (
             mode === 'maintenance'
                 ? { status: ASSET_STATUS.MAINTENANCE }
                 : { status: getNextAssetStatus(current), lastMaintenanceDate };
-        const next = await Asset.findByIdAndUpdate(id, patch, { new: true }).populate('brandId').populate('plantId');
+        const next = await Asset.findByIdAndUpdate(id, patch, { returnDocument: 'after' }).populate('brandId').populate('plantId');
         if (next) updated.push(next);
     }
     return updated;
@@ -408,7 +408,7 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
                 status === 'in_progress'
                     ? { status: ASSET_STATUS.MAINTENANCE }
                     : { status: getNextAssetStatus(a), lastMaintenanceDate: req.body.endDate };
-            const updated = await Asset.findByIdAndUpdate(a._id, patch, { new: true })
+            const updated = await Asset.findByIdAndUpdate(a._id, patch, { returnDocument: 'after' })
                 .populate('brandId')
                 .populate('plantId');
             if (updated) updatedAssets.push(updated);
@@ -500,7 +500,7 @@ export const updateMaintenance = async (req: Request, res: Response, next: NextF
 
     const item = await applyPopulate(
         Maintenance.findOneAndUpdate({ _id: req.params.id, isDeleted: { $ne: true } }, updatePayload, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         }),
         WORKFLOW_POPULATE.maintenance
@@ -515,7 +515,7 @@ export const deleteMaintenance = async (req: Request, res: Response, next: NextF
     const item = await Maintenance.findOneAndUpdate(
         { _id: req.params.id, isDeleted: { $ne: true } },
         { isDeleted: true, deletedAt: new Date() },
-        { new: true }
+        { returnDocument: 'after' }
     );
 
     if (!item) throw new NotFoundError('Khong tim thay phieu bao tri');
@@ -554,7 +554,7 @@ export const completeMaintenance = async (req: Request, res: Response, next: Nex
                 externalRepair,
                 afterImages: req.body.afterImages ?? (current as any).afterImages ?? [],
             },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         ),
         WORKFLOW_POPULATE.maintenance
     );

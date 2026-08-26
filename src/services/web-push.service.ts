@@ -269,7 +269,7 @@ export const subscribe = async (req: Request, res: Response, _next: NextFunction
                 revokedAt: null,
             },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
     return res.status(StatusCodes.OK).json(
@@ -324,7 +324,7 @@ export const syncDevice = async (req: Request, res: Response, _next: NextFunctio
                 trusted: payload.trusted !== false,
             },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
     return res.status(StatusCodes.OK).json(
@@ -395,7 +395,7 @@ export const updateDevice = async (req: Request, res: Response, _next: NextFunct
     const device = await PushSubscription.findOneAndUpdate(
         { _id: deviceId, userId: req.userId },
         { $set: update },
-        { new: true }
+        { returnDocument: 'after' }
     );
 
     if (!device) {
@@ -429,7 +429,7 @@ export const deactivateDevice = async (req: Request, res: Response, _next: NextF
                 revokedAt: new Date(),
             },
         },
-        { new: true }
+        { returnDocument: 'after' }
     );
 
     if (!device) {

@@ -70,7 +70,7 @@ export const distributionRepository = {
 
     updateById(id: string, update: Record<string, unknown>, session?: ClientSession) {
         const query = DistributionRecord.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, {
-            new: true,
+            returnDocument: 'after',
             runValidators: true,
         })
             .populate('fromPlantId')

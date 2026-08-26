@@ -106,7 +106,7 @@ export const updateBrand = async (req: Request, res: Response, next: NextFunctio
     const brand = await Brand.findOneAndUpdate(
         { _id: req.params.id, isDeleted: { $ne: true } },
         { ...payload, updatedBy: req.userId },
-        { new: true, runValidators: true }
+        { returnDocument: 'after', runValidators: true }
     );
 
     if (!brand) throw new NotFoundError('Khong tim thay nhan hieu');
@@ -125,7 +125,7 @@ export const deleteBrand = async (req: Request, res: Response, next: NextFunctio
     const brand = await Brand.findOneAndUpdate(
         { _id: req.params.id, isDeleted: { $ne: true } },
         { isDeleted: true, deletedAt: new Date() },
-        { new: true }
+        { returnDocument: 'after' }
     );
 
     if (!brand) throw new NotFoundError('Khong tim thay nhan hieu');

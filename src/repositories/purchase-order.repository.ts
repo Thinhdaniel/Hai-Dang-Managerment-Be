@@ -35,7 +35,7 @@ export const purchaseOrderRepository = {
 
     updateById(id: string, update: Record<string, unknown>, session?: ClientSession) {
         const q = withPopulate(
-            PurchaseOrder.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, { new: true, runValidators: true })
+            PurchaseOrder.findOneAndUpdate({ _id: id, isDeleted: { $ne: true } }, update, { returnDocument: 'after', runValidators: true })
         );
         if (session) q.session(session);
         return q;

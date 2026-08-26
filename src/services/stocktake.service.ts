@@ -436,7 +436,7 @@ export const reviewStocktakePositionProposals = async (req: Request, res: Respon
                                 updatedBy: req.userId,
                             },
                         },
-                        { new: true }
+                        { returnDocument: 'after' }
                     );
                     if (updated) {
                         proposal.status = 'approved';
