@@ -85,6 +85,42 @@ test('chỉ cảnh báo dưới khoán sau khi toàn bộ chuyền đã báo', (
     assert.equal(result[0].underTargetLines[0].achievementPercent, 75);
 });
 
+test('nhắc việc dùng cùng khoán nguyên cho hai khung 30 phút', () => {
+    const halfHourDay = {
+        ...day,
+        timeSlots: [
+            { key: '14:00', startMinute: 840, endMinute: 870, kind: 'regular', isActive: true },
+            { key: '14:30', startMinute: 870, endMinute: 900, kind: 'regular', isActive: true },
+        ],
+    };
+    const halfHourRecords = [
+        {
+            lineId: 'line-1',
+            lineCode: 'CM1',
+            workerCountConfirmedAt: '2026-08-01T00:30:00.000Z',
+            runs: [{ _id: 'run-1', startedSlotKey: '14:00', hourlyQuota: 15 }],
+            entries: [
+                { slotKey: '14:00', runId: 'run-1', quantity: 0 },
+                { slotKey: '14:30', runId: 'run-1', quantity: 0 },
+            ],
+        },
+    ];
+
+    const result = evaluateProductionReminderSlots(halfHourDay, halfHourRecords, new Date('2026-08-01T08:01:00.000Z'), {
+        graceMinutes: 0,
+        underTargetEnabled: true,
+    });
+
+    assert.deepEqual(
+        result.map((slot) => slot.underTargetLines[0]?.target),
+        [7, 8]
+    );
+    assert.deepEqual(
+        result.map((slot) => slot.reportedLineCount),
+        [1, 1]
+    );
+});
+
 test('vẫn nhắc công đoạn bắt buộc khi sản lượng tổng của chuyền đã báo đủ', () => {
     const operationRecords = [
         {

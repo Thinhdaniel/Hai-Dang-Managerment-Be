@@ -150,6 +150,45 @@ export const resolveRunForSlot = (runs: any[], slotKey: string, slots: any[]) =>
 
 const round = (value: number, digits = 2) => Number(value.toFixed(digits));
 
+type WholeUnitTargetSegment = {
+    key: string;
+    groupKey?: string;
+    exactTarget: number;
+};
+
+/**
+ * Phân khoán lẻ vào các khung theo lũy kế để mỗi ô luôn là số sản phẩm nguyên.
+ * Ví dụ 15 SP/giờ qua hai khung 30 phút sẽ thành 7 + 8, không phải 7,5 + 7,5
+ * hoặc 8 + 8. Mỗi group (run/công đoạn) được cân độc lập và giữ tổng đã làm tròn.
+ */
+export const allocateWholeUnitTargets = (segments: WholeUnitTargetSegment[]) => {
+    const targets = new Map(segments.map((segment) => [segment.key, 0]));
+    const groups = new Map<string, WholeUnitTargetSegment[]>();
+
+    segments.forEach((segment) => {
+        const exactTarget = Math.max(0, Number(segment.exactTarget || 0));
+        if (!segment.groupKey || exactTarget <= 0) return;
+        const current = groups.get(segment.groupKey) || [];
+        current.push({ ...segment, exactTarget });
+        groups.set(segment.groupKey, current);
+    });
+
+    groups.forEach((group) => {
+        const roundedTotal = Math.round(group.reduce((sum, segment) => sum + segment.exactTarget, 0));
+        let cumulativeExact = 0;
+        let cumulativeAllocated = 0;
+
+        group.forEach((segment, index) => {
+            cumulativeExact += segment.exactTarget;
+            const nextAllocated = index === group.length - 1 ? roundedTotal : Math.floor(cumulativeExact + 1e-9);
+            targets.set(segment.key, Math.max(0, nextAllocated - cumulativeAllocated));
+            cumulativeAllocated = nextAllocated;
+        });
+    });
+
+    return targets;
+};
+
 type ProductionEntrySyncInput = {
     clientMutationId?: string;
     expectedUpdatedAt?: string | null;
@@ -380,6 +419,26 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcR
                 updatedAt: toIso(entry.updatedAt),
             }));
             const slotIndexByKey = new Map(slots.map((slot: any, index: number) => [String(slot.key), index]));
+            const operationTargetByKey = allocateWholeUnitTargets(
+                operationTracks.flatMap((track: any) => {
+                    const startIndex = Number(
+                        slotIndexByKey.get(String(track.startedSlotKey)) ?? Number.MAX_SAFE_INTEGER
+                    );
+                    const endIndex = track.endedSlotKey
+                        ? Number(slotIndexByKey.get(String(track.endedSlotKey)) ?? -1)
+                        : Number.MAX_SAFE_INTEGER;
+                    return slots.map((slot: any, slotIndex: number) => {
+                        const due = slot.isActive !== false && slotIndex >= startIndex && slotIndex <= endIndex;
+                        const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
+                        return {
+                            key: `${track.id}:${slot.key}`,
+                            groupKey: String(track.id),
+                            exactTarget:
+                                due && slot.kind !== 'overtime' ? Number(track.hourlyQuota || 0) * durationHours : 0,
+                        };
+                    });
+                })
+            );
             const operationSlotValues = operationTracks.flatMap((track: any) => {
                 const startIndex = Number(slotIndexByKey.get(String(track.startedSlotKey)) ?? Number.MAX_SAFE_INTEGER);
                 const endIndex = track.endedSlotKey
@@ -395,8 +454,7 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcR
                             new Date(left.updatedAt || left.enteredAt || 0).getTime()
                     )[0];
                     const due = slot.isActive !== false && slotIndex >= startIndex && slotIndex <= endIndex;
-                    const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
-                    const target = due && slot.kind !== 'overtime' ? track.hourlyQuota * durationHours : 0;
+                    const target = operationTargetByKey.get(`${track.id}:${slot.key}`) || 0;
                     const actual = slotEntries.reduce(
                         (sum: number, entry: any) => sum + Number(entry.quantity || 0),
                         0
@@ -415,7 +473,7 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcR
                         due,
                         transition: !due && slotEntries.length > 0,
                         overtime: slot.kind === 'overtime',
-                        target: round(target),
+                        target,
                         actual,
                         achievementPercent: target > 0 ? round((actual / target) * 100, 1) : 0,
                         reported: slotEntries.length > 0,
@@ -453,7 +511,7 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcR
                 };
             });
 
-            const slotValues = slots.map((slot: any) => {
+            const productionSlotContexts = slots.map((slot: any) => {
                 // Slot đã tắt không được mang runId: API nhập liệu từ chối slot tắt, nên nếu vẫn gán
                 // runId thì validate gửi duyệt + báo cáo sẽ đòi số liệu ở ô không bao giờ nhập được.
                 const slotEntries = entries.filter((entry: any) => entry.slotKey === slot.key);
@@ -468,17 +526,30 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcR
                 // Tăng ca KHÔNG nâng khoán: KPI ngày chốt trên giờ hành chính (10 giờ x 200 = 2000),
                 // làm thêm 1-2 tiếng thì sản lượng đó là phần vượt để xét thưởng, không phải chỉ tiêu.
                 const overtime = slot.kind === 'overtime';
-                const target = overtime ? 0 : Number(run?.hourlyQuota || 0) * durationHours;
                 return {
-                    key: slot.key,
+                    slot,
+                    slotEntries,
+                    run,
                     overtime,
-                    target: round(target),
-                    actual: slotEntries.reduce((sum: number, entry: any) => sum + entry.quantity, 0),
-                    reported: slotEntries.length > 0,
-                    runId: run?.id,
-                    entryIds: slotEntries.map((entry: any) => entry.id),
+                    exactTarget: overtime ? 0 : Number(run?.hourlyQuota || 0) * durationHours,
                 };
             });
+            const productionTargetBySlot = allocateWholeUnitTargets(
+                productionSlotContexts.map(({ slot, run, exactTarget }: any) => ({
+                    key: String(slot.key),
+                    groupKey: run?.id ? String(run.id) : undefined,
+                    exactTarget,
+                }))
+            );
+            const slotValues = productionSlotContexts.map(({ slot, slotEntries, run, overtime }: any) => ({
+                key: slot.key,
+                overtime,
+                target: productionTargetBySlot.get(String(slot.key)) || 0,
+                actual: slotEntries.reduce((sum: number, entry: any) => sum + entry.quantity, 0),
+                reported: slotEntries.length > 0,
+                runId: run?.id,
+                entryIds: slotEntries.map((entry: any) => entry.id),
+            }));
             const productionSlotByKey = new Map(slotValues.map((value: any) => [String(value.key), value]));
             const qcSlotValues = slots.map((slot: any) => {
                 const slotEntries = qcEntries.filter((entry: any) => entry.slotKey === slot.key);

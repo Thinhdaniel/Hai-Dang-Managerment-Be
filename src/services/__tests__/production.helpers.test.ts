@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildProductionBoard } from '@/services/production-board.helpers';
 import {
+    allocateWholeUnitTargets,
     buildProductionDayDetail,
     buildTimeSlotLabel,
     decideProductionEntrySync,
@@ -19,6 +20,89 @@ test('nhãn khung giờ sinh từ mốc phút, có xử lý ca lẻ phút', () =
     // Ca lẻ phút phải ghi rõ phút, không được làm tròn mất thông tin
     assert.equal(buildTimeSlotLabel(450, 510), '7h30-8h30');
     assert.equal(buildTimeSlotLabel(480, 510), '8h-8h30');
+});
+
+test('phân khoán lẻ thành sản phẩm nguyên và bảo toàn tổng theo từng nhóm', () => {
+    const targets = allocateWholeUnitTargets([
+        { key: 'run-a:1', groupKey: 'run-a', exactTarget: 7.5 },
+        { key: 'run-a:2', groupKey: 'run-a', exactTarget: 7.5 },
+        { key: 'run-b:1', groupKey: 'run-b', exactTarget: 8.5 },
+        { key: 'run-b:2', groupKey: 'run-b', exactTarget: 8.5 },
+        { key: 'overtime', groupKey: 'run-a', exactTarget: 0 },
+    ]);
+
+    assert.deepEqual([...targets.values()], [7, 8, 8, 9, 0]);
+    assert.equal((targets.get('run-a:1') || 0) + (targets.get('run-a:2') || 0), 15);
+    assert.equal((targets.get('run-b:1') || 0) + (targets.get('run-b:2') || 0), 17);
+});
+
+test('khung 30 phút dùng khoán nguyên cho cả chuyền và công đoạn', () => {
+    const halfHourSlots = [
+        { key: '14:00', label: '14h-14h30', startMinute: 840, endMinute: 870, kind: 'regular', isActive: true },
+        { key: '14:30', label: '14h30-15h', startMinute: 870, endMinute: 900, kind: 'regular', isActive: true },
+    ];
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-half-hour',
+            plantId: 'plant-1',
+            productionDate: '2026-08-26',
+            timeSlots: halfHourSlots,
+        },
+        [
+            {
+                _id: 'record-half-hour',
+                dayId: 'day-half-hour',
+                plantId: 'plant-1',
+                productionDate: '2026-08-26',
+                lineId: 'line-1',
+                lineCode: 'CM1',
+                workerCount: 20,
+                runs: [
+                    {
+                        _id: 'run-half-hour',
+                        itemId: 'item-a',
+                        itemCode: 'A-01',
+                        unit: 'SP',
+                        unitPriceSnapshot: 1_000,
+                        hourlyQuota: 15,
+                        startedSlotKey: '14:00',
+                        status: 'active',
+                    },
+                ],
+                entries: [],
+                operationTracks: [
+                    {
+                        _id: 'track-half-hour',
+                        operationId: 'operation-a',
+                        operationCode: 'CD-A',
+                        operationName: 'Công đoạn A',
+                        unit: 'SP',
+                        itemId: 'item-a',
+                        itemCode: 'A-01',
+                        sourceRunId: 'run-half-hour',
+                        hourlyQuota: 17,
+                        required: true,
+                        sortOrder: 0,
+                        startedSlotKey: '14:00',
+                        status: 'active',
+                    },
+                ],
+                operationEntries: [],
+            },
+        ]
+    );
+
+    const line = detail.lines[0];
+    assert.deepEqual(
+        line.slotValues.map((value: any) => value.target),
+        [7, 8]
+    );
+    assert.equal(line.totalTarget, 15);
+    assert.deepEqual(
+        line.operationSlotValues.map((value: any) => value.target),
+        [8, 9]
+    );
+    assert.equal(line.operationTrackSummaries[0].target, 17);
 });
 
 const slots = [

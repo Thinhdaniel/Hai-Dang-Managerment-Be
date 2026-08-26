@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { resolveRunForSlot } from './production.helpers';
+import { allocateWholeUnitTargets, resolveRunForSlot } from './production.helpers';
 
 export const PRODUCTION_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 const VIETNAM_OFFSET = '+07:00';
@@ -99,6 +99,24 @@ export const evaluateProductionReminderSlots = (
         (left: any, right: any) => Number(left.startMinute || 0) - Number(right.startMinute || 0)
     );
     const slotIndexByKey = new Map(slots.map((slot: any, index: number) => [String(slot.key), index]));
+    const preparedRecords = recordInputs.map((input) => {
+        const record = typeof input?.toObject === 'function' ? input.toObject() : input;
+        const targetBySlot = allocateWholeUnitTargets(
+            slots.map((slot: any) => {
+                const run: any = resolveRunForSlot(record.runs || [], String(slot.key), slots);
+                const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
+                return {
+                    key: String(slot.key),
+                    groupKey: run ? toId(run) : undefined,
+                    exactTarget:
+                        slot.isActive !== false && slot.kind !== 'overtime'
+                            ? Number(run?.hourlyQuota || 0) * durationHours
+                            : 0,
+                };
+            })
+        );
+        return { record, targetBySlot };
+    });
 
     return slots
         .filter((slot: any) => slot.isActive !== false)
@@ -111,8 +129,7 @@ export const evaluateProductionReminderSlots = (
 
             const dueLines: Array<ProductionReminderLineState & { reported: boolean }> = [];
             const missingOperations: ProductionReminderOperationState[] = [];
-            recordInputs.forEach((input) => {
-                const record = typeof input?.toObject === 'function' ? input.toObject() : input;
+            preparedRecords.forEach(({ record, targetBySlot }) => {
                 if (!record?.workerCountConfirmedAt || !(record.runs || []).length) return;
                 const run: any = resolveRunForSlot(record.runs || [], String(slot.key), slots);
                 if (!run) return;
@@ -120,13 +137,12 @@ export const evaluateProductionReminderSlots = (
                     (entry: any) => String(entry.slotKey) === String(slot.key)
                 );
                 const actual = entries.reduce((sum: number, entry: any) => sum + Number(entry.quantity || 0), 0);
-                const durationHours = Math.max(0, Number(slot.endMinute) - Number(slot.startMinute)) / 60;
-                const target = slot.kind === 'overtime' ? 0 : Number(run.hourlyQuota || 0) * durationHours;
+                const target = targetBySlot.get(String(slot.key)) || 0;
                 dueLines.push({
                     lineId: toId(record.lineId),
                     lineCode: String(record.lineCode || 'N/A'),
                     actual,
-                    target: round(target, 1),
+                    target,
                     achievementPercent: target > 0 ? round((actual / target) * 100, 1) : 0,
                     reported: entries.length > 0,
                 });
