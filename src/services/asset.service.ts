@@ -7,7 +7,7 @@ import { confirmAssetImport, previewAssetImport } from '@/services/asset-import.
 import { ensureTypeCode, generateMachineCode } from '@/services/machine-code.service';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import { generateUniqueMachinePublicId } from '@/utils/publicId';
-import { buildSearchRegex } from '@/utils/search';
+import { buildAssetSearchConditions } from '@/utils/assetSearch';
 import { serializeAsset, serializeAssetDisposalItem, serializePublicAsset } from '@/utils/serializers';
 import Brand from '@/models/Brand';
 import AssetDisposalItem from '@/models/AssetDisposalItem';
@@ -47,13 +47,7 @@ const buildFilter = (query: Request['query']) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
     const andConditions: Record<string, any>[] = [];
 
-    const regex = buildSearchRegex(query.search, { flexibleWhitespace: true });
-
-    if (regex) {
-        andConditions.push({
-            $or: [{ name: regex }, { machineCode: regex }, { serial: regex }, { type: regex }, { model: regex }],
-        });
-    }
+    andConditions.push(...buildAssetSearchConditions(query.search));
 
     const status = getQueryValue(query.status);
     const lifecycle = getQueryValue(query.lifecycle);

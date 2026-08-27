@@ -10,6 +10,7 @@ import Brand from '@/models/Brand';
 import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
 import { AT_PLANT_RADIUS_M, MAX_ACCURACY_M } from '@/constant/mislocation';
 import { buildSearchRegex } from '@/utils/search';
+import { buildAssetSearchConditions } from '@/utils/assetSearch';
 import { serializeAsset } from '@/utils/serializers';
 import { aiProviderService } from '@/services/ai/ai-provider.service';
 import { AI_FEATURES, ASSET_SEARCH_TIERS } from '@/constant/aiModels';
@@ -204,15 +205,7 @@ const buildAssetQuery = async (filters: Plan['filters'], plantId?: string, brand
     const and: Record<string, any>[] = [{ isDeleted: { $ne: true } }];
 
     if (filters.search) {
-        // Tách từng từ khoá -> mỗi từ phải khớp ở 1 trường nào đó (AND theo từ). Tránh đòi cụm liền mạch.
-        const tokens = String(filters.search)
-            .split(/\s+/)
-            .map((t) => t.trim())
-            .filter(Boolean);
-        for (const tok of tokens) {
-            const rx = buildSearchRegex(tok);
-            if (rx) and.push({ $or: [{ name: rx }, { machineCode: rx }, { serial: rx }, { type: rx }, { model: rx }] });
-        }
+        and.push(...buildAssetSearchConditions(filters.search));
     }
     const statuses = (filters.status || []).filter((s) => VALID_STATUS.has(s));
     if (statuses.length) and.push({ status: { $in: statuses } });
