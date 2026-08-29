@@ -1,11 +1,14 @@
 import { ASSET_STATUS } from '@/constant/assetStatus';
+import { BORROWING_DIRECTION, BORROWING_ITEM_STATUS } from '@/constant/borrowing';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
+import Borrowing from '@/models/Borrowing';
 import TransferHistory from '@/models/TransferHistory';
 import User from '@/models/User';
 import { transferRepository } from '@/repositories/transfer.repository';
 import { getPagination } from '@/utils/pagination';
 import { serializeTransfer } from '@/utils/serializers';
+import { isAssetStatusBlockedForTransfer } from '@/utils/transferEligibility';
 import { sendSerializedItem, sendSerializedList, sendSerializedPage } from './service.helpers';
 import { notifyAdmins, notifyUser, getActorName } from './notification.helper';
 import { appendWorkflowSystemMessage } from './chat.service';
@@ -83,6 +86,42 @@ const buildSourceAreaSummary = (assets: any[]) => {
     if (!areas.length) return undefined;
     if (areas.length === 1) return areas[0];
     return 'Nhiều khu vực';
+};
+
+const loadTransferableAssets = async (assetIds: string[]) => {
+    const [assets, blockingBorrowings] = await Promise.all([
+        Asset.find({ _id: { $in: assetIds }, isDeleted: { $ne: true } }),
+        Borrowing.find({
+            assetId: { $in: assetIds },
+            direction: BORROWING_DIRECTION.OUTBOUND,
+            status: { $in: [BORROWING_ITEM_STATUS.DRAFT, BORROWING_ITEM_STATUS.ACTIVE] },
+            isDeleted: { $ne: true },
+        }).select('assetId'),
+    ]);
+
+    if (assets.length !== assetIds.length) {
+        throw new NotFoundError('Mot so thiet bi khong ton tai');
+    }
+
+    const blockedLifecycleAssets = assets.filter((asset) => isAssetStatusBlockedForTransfer(asset.status));
+    if (blockedLifecycleAssets.length) {
+        throw new BadRequestError(
+            `Khong the dieu chuyen may dang cho doi tac muon, da dong hoac dang vao quy trinh thanh ly: ${blockedLifecycleAssets.map((asset) => asset.machineCode || asset.name).join(', ')}`
+        );
+    }
+
+    if (blockingBorrowings.length) {
+        const blockedIds = new Set(blockingBorrowings.map((item) => String(item.assetId)));
+        const blockedLabels = assets
+            .filter((asset) => blockedIds.has(String(asset._id)))
+            .map((asset) => asset.machineCode || asset.name)
+            .join(', ');
+        throw new BadRequestError(
+            `Khong the dieu chuyen may dang nam trong lo cho doi tac muon chua ket thuc: ${blockedLabels}`
+        );
+    }
+
+    return assets;
 };
 
 export const getAllTransfers = async (req: Request, res: Response, next: NextFunction) => {
@@ -182,25 +221,7 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
         throw new BadRequestError('Vui long chon thiet bi');
     }
 
-    const assets = await Asset.find({ _id: { $in: requestedAssetIds }, isDeleted: { $ne: true } });
-
-    if (assets.length !== requestedAssetIds.length) {
-        throw new NotFoundError('Mot so thiet bi khong ton tai');
-    }
-
-    const blockedLifecycleAssets = assets.filter((asset) =>
-        [
-            ASSET_STATUS.LOANED_OUT,
-            ASSET_STATUS.RETURNED_TO_PARTNER,
-            ASSET_STATUS.PENDING_DISPOSAL,
-            ASSET_STATUS.DISPOSED,
-        ].includes(asset.status as ASSET_STATUS)
-    );
-    if (blockedLifecycleAssets.length) {
-        throw new BadRequestError(
-            `Khong the dieu chuyen may dang cho doi tac muon, da dong hoac dang vao quy trinh thanh ly: ${blockedLifecycleAssets.map((asset) => asset.name).join(', ')}`
-        );
-    }
+    const assets = await loadTransferableAssets(requestedAssetIds);
 
     const existingOpenTransfers = await transferRepository.findOpenByAssetIds(requestedAssetIds);
 
@@ -299,6 +320,8 @@ export const approveTransfer = async (req: Request, res: Response, next: NextFun
     if (currentTransfer.status !== 'pending') {
         throw new BadRequestError('Chi co the duyet lenh dieu chuyen dang cho xu ly');
     }
+
+    await loadTransferableAssets(getTransferAssetIds(currentTransfer));
 
     const item = await transferRepository.updateById(transferId, {
         status: 'approved',
@@ -414,7 +437,8 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
         throw new BadRequestError('Chi co the hoan thanh lenh dieu chuyen da duoc duyet');
     }
 
-    const currentAssets = getTransferAssets(currentTransfer);
+    const itemAssetIds = getTransferAssetIds(currentTransfer);
+    const currentAssets = await loadTransferableAssets(itemAssetIds);
 
     const item = await transferRepository.updateById(transferId, {
         status: 'completed',
@@ -426,7 +450,6 @@ export const completeTransfer = async (req: Request, res: Response, next: NextFu
 
     if (!item) throw new NotFoundError('Khong tim thay lenh dieu chuyen');
 
-    const itemAssetIds = getTransferAssetIds(item);
     const statusByAssetId = new Map(
         currentAssets.map((asset: any) => [toDocumentId(asset), String(asset.status || ASSET_STATUS.ACTIVE)])
     );

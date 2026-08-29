@@ -460,6 +460,17 @@ export const confirmOutboundHandover = async (req: Request, res: Response, next:
                 .map((item) => toId(item.assetId))
                 .filter((value): value is string => Boolean(value));
 
+            const openTransfer = await Transfer.findOne({
+                status: { $in: OPEN_TRANSFER_STATUSES },
+                isDeleted: { $ne: true },
+                $or: [{ assetId: { $in: affectedAssetIds } }, { assetIds: { $in: affectedAssetIds } }],
+            })
+                .select('_id')
+                .session(session);
+            if (openTransfer) {
+                throw new BadRequestError('Co may dang nam trong lenh dieu chuyen; can huy lenh truoc khi ban giao');
+            }
+
             for (const item of items) {
                 const assetUpdate = await Asset.updateOne(
                     {
