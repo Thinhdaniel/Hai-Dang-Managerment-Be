@@ -19,6 +19,7 @@ import { emitToAll } from '@/lib/socket';
 import { assetRepository } from '@/repositories/asset.repository';
 import { borrowingRepository } from '@/repositories/borrowing.repository';
 import { serializeAsset, serializeBorrowing, serializeBorrowingBatch } from '@/utils/serializers';
+import { getOutboundHandoverTimelineError } from '@/utils/borrowingTimeline';
 import { applyPopulate, sendSuccess, WORKFLOW_POPULATE } from './service.helpers';
 import { getActorName, notifyAdmins, notifyUser } from './notification.helper';
 
@@ -426,9 +427,6 @@ export const confirmOutboundHandover = async (req: Request, res: Response, next:
     const batchId = getParam(req, 'id');
     const userId = getUserId(req);
     const handoverTime = new Date(req.body.handoverTime);
-    if (handoverTime.getTime() > Date.now() + 5 * 60 * 1000) {
-        throw new BadRequestError('Thoi gian ban giao khong duoc nam trong tuong lai');
-    }
     const session = await mongoose.startSession();
     let affectedAssetIds: string[] = [];
 
@@ -440,9 +438,13 @@ export const confirmOutboundHandover = async (req: Request, res: Response, next:
             if (batch.status !== BORROWING_BATCH_STATUS.APPROVED) {
                 throw new BadRequestError('Lo phai duoc duyet truoc khi ban giao may');
             }
-            if (batch.approvedAt && handoverTime < batch.approvedAt) {
-                throw new BadRequestError('Thoi gian ban giao phai sau thoi gian duyet lo');
-            }
+
+            // The workflow is approved now, but the physical handover may be recorded retrospectively.
+            const timelineError = getOutboundHandoverTimelineError({
+                handoverTime,
+                expectedReturnTime: batch.expectedReturnTime,
+            });
+            if (timelineError) throw new BadRequestError(timelineError);
 
             const items = await Borrowing.find({
                 batchId,
