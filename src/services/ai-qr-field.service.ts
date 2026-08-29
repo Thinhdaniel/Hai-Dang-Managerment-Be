@@ -27,6 +27,7 @@ const STATUS_LABEL: Record<string, string> = {
     [ASSET_STATUS.MAINTENANCE]: 'Bảo trì',
     [ASSET_STATUS.BROKEN]: 'Hỏng / lỗi',
     [ASSET_STATUS.BORROWING]: 'Đang mượn',
+    [ASSET_STATUS.LOANED_OUT]: 'Đang cho đối tác mượn',
     [ASSET_STATUS.STORAGE]: 'Tồn kho',
     [ASSET_STATUS.PENDING_DISPOSAL]: 'Chuẩn bị thanh lý',
     [ASSET_STATUS.DISPOSED]: 'Đã thanh lý',
@@ -238,24 +239,46 @@ const buildSuggestions = ({
         });
     }
 
-    if (activeBorrowing || asset.status === ASSET_STATUS.BORROWING || asset.ownershipType !== ASSET_OWNERSHIP_TYPE.OWNED) {
+    if (
+        activeBorrowing ||
+        asset.status === ASSET_STATUS.BORROWING ||
+        asset.status === ASSET_STATUS.LOANED_OUT ||
+        asset.ownershipType !== ASSET_OWNERSHIP_TYPE.OWNED
+    ) {
         suggestions.push({
             key: 'borrowings',
-            label: asset.ownershipType === ASSET_OWNERSHIP_TYPE.RENTAL ? 'Theo dõi máy thuê' : 'Theo dõi mượn/trả',
-            description: 'Kiểm tra đối tác, hạn trả, chi phí và tình trạng tem QR.',
+            label:
+                asset.status === ASSET_STATUS.LOANED_OUT
+                    ? 'Mở lô đang cho mượn'
+                    : asset.ownershipType === ASSET_OWNERSHIP_TYPE.RENTAL
+                      ? 'Theo dõi máy thuê'
+                      : 'Theo dõi mượn/trả',
+            description:
+                asset.status === ASSET_STATUS.LOANED_OUT
+                    ? 'Nhận lại máy theo lô, đối chiếu hiện trạng và giữ nguyên QR chính thức.'
+                    : 'Kiểm tra đối tác, hạn trả, chi phí và tình trạng tem QR.',
             tone: 'violet',
-            priority: 88,
+            priority: asset.status === ASSET_STATUS.LOANED_OUT ? 99 : 88,
             route: '/borrowings',
         });
     }
 
-    suggestions.push({
-        key: 'quick_update',
-        label: 'Cập nhật trạng thái/khu vực',
-        description: 'Dùng khi thực tế khác dữ liệu hệ thống.',
-        tone: 'emerald',
-        priority: asset.area ? 64 : 86,
-    });
+    if (
+        ![
+            ASSET_STATUS.LOANED_OUT,
+            ASSET_STATUS.RETURNED_TO_PARTNER,
+            ASSET_STATUS.PENDING_DISPOSAL,
+            ASSET_STATUS.DISPOSED,
+        ].includes(asset.status as ASSET_STATUS)
+    ) {
+        suggestions.push({
+            key: 'quick_update',
+            label: 'Cập nhật trạng thái/khu vực',
+            description: 'Dùng khi thực tế khác dữ liệu hệ thống.',
+            tone: 'emerald',
+            priority: asset.area ? 64 : 86,
+        });
+    }
 
     suggestions.push({
         key: 'profile',
@@ -389,84 +412,88 @@ export const getQrFieldInsight = async (req: Request, res: Response) => {
         throw new NotFoundError('Không tìm thấy máy');
     }
 
-    const [openMaintenanceDocs, recentMaintenanceDocs, openTransferDocs, recentTransferDocs, activeBorrowingDoc, disposalDocs, recentScanDocs] =
-        await Promise.all([
-            Maintenance.find({
-                isDeleted: { $ne: true },
-                ...openAssetFilter(objectId),
-                status: { $nin: ['completed', 'cancelled'] },
-            })
-                .sort({ createdAt: -1 })
-                .limit(5)
-                .populate('assetId')
-                .populate('assetIds')
-                .populate('plantId')
-                .lean(),
-            Maintenance.find({
-                isDeleted: { $ne: true },
-                ...openAssetFilter(objectId),
-            })
-                .sort({ startDate: -1, createdAt: -1 })
-                .limit(5)
-                .populate('assetId')
-                .populate('assetIds')
-                .populate('plantId')
-                .lean(),
-            Transfer.find({
-                isDeleted: { $ne: true },
-                ...openAssetFilter(objectId),
-                status: { $in: ['pending', 'approved'] },
-            })
-                .sort({ createdAt: -1 })
-                .limit(5)
-                .populate('assetId')
-                .populate('assetIds')
-                .populate('fromPlantId')
-                .populate('toPlantId')
-                .lean(),
-            Transfer.find({
-                isDeleted: { $ne: true },
-                ...openAssetFilter(objectId),
-            })
-                .sort({ transferDate: -1, createdAt: -1 })
-                .limit(5)
-                .populate('assetId')
-                .populate('assetIds')
-                .populate('fromPlantId')
-                .populate('toPlantId')
-                .lean(),
-            Borrowing.findOne({
-                isDeleted: { $ne: true },
-                assetId: objectId,
-                status: 'active',
-            })
-                .sort({ borrowTime: -1, createdAt: -1 })
-                .populate('assetId')
-                .populate('batchId')
-                .populate('borrowerId')
-                .lean(),
-            AssetDisposalItem.find({
-                isDeleted: { $ne: true },
-                assetId: objectId,
-                status: {
-                    $in: [
-                        ASSET_DISPOSAL_ITEM_STATUS.PENDING,
-                        ASSET_DISPOSAL_ITEM_STATUS.CHECKED,
-                        ASSET_DISPOSAL_ITEM_STATUS.APPROVED,
-                    ],
-                },
-            })
-                .sort({ createdAt: -1 })
-                .limit(5)
-                .populate('assetId')
-                .populate('plantId')
-                .populate('batchId')
-                .lean(),
-            QrScanLog.find({ assetId: objectId })
-                .sort({ createdAt: -1 })
-                .limit(6)
-                .lean(),
-        ]);
+    const [
+        openMaintenanceDocs,
+        recentMaintenanceDocs,
+        openTransferDocs,
+        recentTransferDocs,
+        activeBorrowingDoc,
+        disposalDocs,
+        recentScanDocs,
+    ] = await Promise.all([
+        Maintenance.find({
+            isDeleted: { $ne: true },
+            ...openAssetFilter(objectId),
+            status: { $nin: ['completed', 'cancelled'] },
+        })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate('assetId')
+            .populate('assetIds')
+            .populate('plantId')
+            .lean(),
+        Maintenance.find({
+            isDeleted: { $ne: true },
+            ...openAssetFilter(objectId),
+        })
+            .sort({ startDate: -1, createdAt: -1 })
+            .limit(5)
+            .populate('assetId')
+            .populate('assetIds')
+            .populate('plantId')
+            .lean(),
+        Transfer.find({
+            isDeleted: { $ne: true },
+            ...openAssetFilter(objectId),
+            status: { $in: ['pending', 'approved'] },
+        })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate('assetId')
+            .populate('assetIds')
+            .populate('fromPlantId')
+            .populate('toPlantId')
+            .lean(),
+        Transfer.find({
+            isDeleted: { $ne: true },
+            ...openAssetFilter(objectId),
+        })
+            .sort({ transferDate: -1, createdAt: -1 })
+            .limit(5)
+            .populate('assetId')
+            .populate('assetIds')
+            .populate('fromPlantId')
+            .populate('toPlantId')
+            .lean(),
+        Borrowing.findOne({
+            isDeleted: { $ne: true },
+            assetId: objectId,
+            status: 'active',
+        })
+            .sort({ borrowTime: -1, createdAt: -1 })
+            .populate('assetId')
+            .populate('batchId')
+            .populate('borrowerId')
+            .lean(),
+        AssetDisposalItem.find({
+            isDeleted: { $ne: true },
+            assetId: objectId,
+            status: {
+                $in: [
+                    ASSET_DISPOSAL_ITEM_STATUS.PENDING,
+                    ASSET_DISPOSAL_ITEM_STATUS.CHECKED,
+                    ASSET_DISPOSAL_ITEM_STATUS.APPROVED,
+                ],
+            },
+        })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate('assetId')
+            .populate('plantId')
+            .populate('batchId')
+            .lean(),
+        QrScanLog.find({ assetId: objectId }).sort({ createdAt: -1 }).limit(6).lean(),
+    ]);
 
     const asset = serializeAsset(assetDoc);
     const openMaintenances = openMaintenanceDocs.map(serializeMaintenance);
@@ -481,9 +508,12 @@ export const getQrFieldInsight = async (req: Request, res: Response) => {
     const staleScanDays = daysFromNow(lastScanAt);
     const canTransfer =
         openTransfers.length === 0 &&
-        ![ASSET_STATUS.RETURNED_TO_PARTNER, ASSET_STATUS.PENDING_DISPOSAL, ASSET_STATUS.DISPOSED].includes(
-            asset.status as ASSET_STATUS
-        );
+        ![
+            ASSET_STATUS.LOANED_OUT,
+            ASSET_STATUS.RETURNED_TO_PARTNER,
+            ASSET_STATUS.PENDING_DISPOSAL,
+            ASSET_STATUS.DISPOSED,
+        ].includes(asset.status as ASSET_STATUS);
 
     const health = buildHealth({
         asset,
@@ -538,7 +568,10 @@ export const getQrFieldInsight = async (req: Request, res: Response) => {
                     ? `${staleScanDays} ngày trước`
                     : 'Đã ghi nhận'
                 : 'Chưa có log',
-            tone: !lastScanAt || (typeof staleScanDays === 'number' && staleScanDays >= 30) ? ('amber' as Tone) : ('blue' as Tone),
+            tone:
+                !lastScanAt || (typeof staleScanDays === 'number' && staleScanDays >= 30)
+                    ? ('amber' as Tone)
+                    : ('blue' as Tone),
         },
     ];
 
@@ -549,7 +582,10 @@ export const getQrFieldInsight = async (req: Request, res: Response) => {
             severity: 'danger',
             title: 'Máy đang hỏng/lỗi',
             description: 'Ưu tiên tạo phiếu bảo trì hoặc kiểm tra phiếu đang mở trước khi vận hành.',
-            evidence: openMaintenances.slice(0, 2).map((item) => item.description).filter(Boolean) as string[],
+            evidence: openMaintenances
+                .slice(0, 2)
+                .map((item) => item.description)
+                .filter(Boolean) as string[],
         });
     }
     if (openTransfers.length > 0) {
@@ -559,7 +595,10 @@ export const getQrFieldInsight = async (req: Request, res: Response) => {
             description: 'Không nên tạo lệnh điều chuyển trùng nếu chưa xác nhận lệnh hiện tại.',
             evidence: openTransfers
                 .slice(0, 2)
-                .map((item) => `${item.fromPlant?.name || 'Nguồn'} -> ${item.toPlant?.name || 'Đích'} (${TRANSFER_STATUS_LABEL[item.status] || item.status})`),
+                .map(
+                    (item) =>
+                        `${item.fromPlant?.name || 'Nguồn'} -> ${item.toPlant?.name || 'Đích'} (${TRANSFER_STATUS_LABEL[item.status] || item.status})`
+                ),
         });
     }
     if (activeDisposalItems.length > 0 || asset.status === ASSET_STATUS.PENDING_DISPOSAL) {
@@ -569,7 +608,10 @@ export const getQrFieldInsight = async (req: Request, res: Response) => {
             description: 'Cần kiểm tra module thanh lý trước khi cập nhật trạng thái vận hành.',
             evidence: activeDisposalItems
                 .slice(0, 2)
-                .map((item) => `${item.batch?.code || 'Lô thanh lý'} - ${DISPOSAL_STATUS_LABEL[item.status] || item.status}`),
+                .map(
+                    (item) =>
+                        `${item.batch?.code || 'Lô thanh lý'} - ${DISPOSAL_STATUS_LABEL[item.status] || item.status}`
+                ),
         });
     }
     if (asset.locationMismatch?.mismatch) {

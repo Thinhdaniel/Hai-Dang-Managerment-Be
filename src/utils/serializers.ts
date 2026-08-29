@@ -1,4 +1,5 @@
 import { evaluateMislocation } from '@/constant/mislocation';
+import { BORROWING_DIRECTION, resolveBorrowingDirection } from '@/constant/borrowing';
 
 const toPlain = (value: any) => (typeof value?.toObject === 'function' ? value.toObject() : value);
 
@@ -28,6 +29,7 @@ const mapAssetStatus = (status?: string) => {
     if (status === 'maintenance') return 'maintenance';
     if (status === 'broken') return 'broken';
     if (status === 'borrowing') return 'borrowing';
+    if (status === 'loaned_out') return 'loaned_out';
     if (status === 'storage') return 'storage';
     if (status === 'pending_disposal') return 'pending_disposal';
     if (status === 'disposed') return 'disposed';
@@ -368,6 +370,7 @@ export const serializeBorrowing = (input: any) => {
         borrower,
         borrowerName: borrowing?.borrowerName ?? borrower?.name,
         type: borrowing?.type,
+        direction: resolveBorrowingDirection(borrowing?.direction, borrowing?.type),
         borrowTime: toIso(borrowing?.borrowTime),
         returnTime: toIso(borrowing?.returnTime),
         expectedReturnTime: toIso(borrowing?.expectedReturnTime),
@@ -381,13 +384,21 @@ export const serializeBorrowing = (input: any) => {
         returnNote: borrowing?.returnNote,
         receiveCondition: borrowing?.receiveCondition,
         receiveNote: borrowing?.receiveNote,
+        issueCondition: borrowing?.issueCondition,
+        issueNote: borrowing?.issueNote,
+        accessories: borrowing?.accessories ?? [],
+        issueImages: borrowing?.issueImages ?? [],
         returnCondition: borrowing?.returnCondition,
+        returnImages: borrowing?.returnImages ?? [],
         qrReturnAction: borrowing?.qrReturnAction,
         qrReturnNote: borrowing?.qrReturnNote,
         qrRemovedAt: toIso(borrowing?.qrRemovedAt),
         qrRemovedBy: toId(borrowing?.qrRemovedBy),
         returnedInBatchAt: toIso(borrowing?.returnedInBatchAt),
         assetStatusBefore: borrowing?.assetStatusBefore,
+        assetOwnershipTypeBefore: borrowing?.assetOwnershipTypeBefore,
+        assetPlantIdBefore: toId(borrowing?.assetPlantIdBefore),
+        assetAreaBefore: borrowing?.assetAreaBefore,
         createdBy: toId(borrowing?.createdBy),
         returnedBy: toId(borrowing?.returnedBy),
         createdAt: toIso(borrowing?.createdAt),
@@ -397,6 +408,7 @@ export const serializeBorrowing = (input: any) => {
 
 export const serializeBorrowingBatch = (input: any) => {
     const batch = toPlain(input);
+    const direction = resolveBorrowingDirection(batch?.direction, batch?.type);
     const plant =
         batch?.plantId && typeof batch.plantId === 'object' && batch.plantId.name
             ? serializePlant(batch.plantId)
@@ -410,9 +422,14 @@ export const serializeBorrowingBatch = (input: any) => {
         id: toId(batch),
         code: batch?.code,
         type: batch?.type,
+        direction,
         status: batch?.status,
         partnerName: batch?.partnerName,
         contractNo: batch?.contractNo,
+        contactName: batch?.contactName,
+        contactPhone: batch?.contactPhone,
+        partnerAddress: batch?.partnerAddress,
+        purpose: batch?.purpose,
         plantId: plant?.id ?? toId(batch?.plantId),
         plant,
         area: batch?.area,
@@ -429,15 +446,28 @@ export const serializeBorrowingBatch = (input: any) => {
                   printedAt: toIso(qrBatch.printedAt),
               }
             : undefined,
-        labelPolicy: batch?.labelPolicy ?? 'temporary',
-        removeQrOnReturn: batch?.removeQrOnReturn !== false,
+        labelPolicy: batch?.labelPolicy ?? (direction === BORROWING_DIRECTION.OUTBOUND ? 'permanent' : 'temporary'),
+        removeQrOnReturn: direction === BORROWING_DIRECTION.OUTBOUND ? false : batch?.removeQrOnReturn !== false,
         note: batch?.note,
         receivedCount: batch?.receivedCount,
+        selectedCount: batch?.selectedCount,
+        draftCount: batch?.draftCount,
+        issuedCount: batch?.issuedCount,
         activeCount: batch?.activeCount,
         returnedCount: batch?.returnedCount,
         unusedQrCount: batch?.unusedQrCount,
         createdBy: toId(batch?.createdBy),
         updatedBy: toId(batch?.updatedBy),
+        submittedBy: toId(batch?.submittedBy),
+        submittedAt: toIso(batch?.submittedAt),
+        approvedBy: toId(batch?.approvedBy),
+        approvedAt: toIso(batch?.approvedAt),
+        rejectedBy: toId(batch?.rejectedBy),
+        rejectedAt: toIso(batch?.rejectedAt),
+        rejectReason: batch?.rejectReason,
+        handedOverBy: toId(batch?.handedOverBy),
+        handedOverAt: toIso(batch?.handedOverAt),
+        handoverImages: batch?.handoverImages ?? [],
         closedBy: toId(batch?.closedBy),
         closedAt: toIso(batch?.closedAt),
         createdAt: toIso(batch?.createdAt),

@@ -33,15 +33,11 @@ const assetStatusLabel: Record<string, string> = {
     maintenance: 'Đang bảo trì',
     broken: 'Lỗi / hỏng',
     borrowing: 'Đang mượn',
+    loaned_out: 'Đang cho đối tác mượn',
     storage: 'Tồn kho',
 };
 
-const mergeValue = (
-    ws: ExcelJS.Worksheet,
-    range: string,
-    value: unknown,
-    style: Partial<ExcelJS.Style> = {}
-) => {
+const mergeValue = (ws: ExcelJS.Worksheet, range: string, value: unknown, style: Partial<ExcelJS.Style> = {}) => {
     ws.mergeCells(range);
     const topLeft = range.split(':')[0];
     const target = cell(ws, topLeft);
@@ -90,7 +86,9 @@ const getSourceAreaByAsset = (transfer: any, asset: any) => {
 
 const getTransferCode = (transfer: any) =>
     transfer.transferCode ||
-    `PXK-DC-${dayjs(transfer.createdAt || new Date()).format('YYYY')}-${String(transfer.id || '').slice(-5).toUpperCase()}`;
+    `PXK-DC-${dayjs(transfer.createdAt || new Date()).format('YYYY')}-${String(transfer.id || '')
+        .slice(-5)
+        .toUpperCase()}`;
 
 export const generateTransferStockOutXlsx = async (transfer: any): Promise<Buffer> => {
     const workbook = new ExcelJS.Workbook();
@@ -144,10 +142,15 @@ export const generateTransferStockOutXlsx = async (transfer: any): Promise<Buffe
     ws.getRow(4).height = 30;
 
     const issueDate = dayjs(transfer.transferDate || transfer.createdAt || new Date());
-    mergeValue(ws, 'A5:J5', `Ngày ${issueDate.format('DD')} tháng ${issueDate.format('MM')} năm ${issueDate.format('YYYY')}`, {
-        font: { name: FONT, size: 11, italic: true },
-        alignment: { horizontal: 'center', vertical: 'middle' },
-    });
+    mergeValue(
+        ws,
+        'A5:J5',
+        `Ngày ${issueDate.format('DD')} tháng ${issueDate.format('MM')} năm ${issueDate.format('YYYY')}`,
+        {
+            font: { name: FONT, size: 11, italic: true },
+            alignment: { horizontal: 'center', vertical: 'middle' },
+        }
+    );
 
     const assets = getAssets(transfer);
     const assetCount = assets.length || Number(transfer.assetIds?.length || 0) || 1;
@@ -244,10 +247,34 @@ export const generateTransferStockOutXlsx = async (transfer: any): Promise<Buffe
     const hintRow = signatureRow + 1;
     const nameRow = signatureRow + 5;
     const signatures = [
-        { range: `A${signatureRow}:B${signatureRow}`, hint: `A${hintRow}:B${hintRow}`, name: `A${nameRow}:B${nameRow}`, label: 'Người lập phiếu', value: transfer.createdByName || '' },
-        { range: `D${signatureRow}:E${signatureRow}`, hint: `D${hintRow}:E${hintRow}`, name: `D${nameRow}:E${nameRow}`, label: 'Thủ kho / Người xuất', value: transfer.approvedByName || '' },
-        { range: `G${signatureRow}:H${signatureRow}`, hint: `G${hintRow}:H${hintRow}`, name: `G${nameRow}:H${nameRow}`, label: 'Người vận chuyển', value: '' },
-        { range: `I${signatureRow}:J${signatureRow}`, hint: `I${hintRow}:J${hintRow}`, name: `I${nameRow}:J${nameRow}`, label: 'Người nhận', value: transfer.receivedBy || '' },
+        {
+            range: `A${signatureRow}:B${signatureRow}`,
+            hint: `A${hintRow}:B${hintRow}`,
+            name: `A${nameRow}:B${nameRow}`,
+            label: 'Người lập phiếu',
+            value: transfer.createdByName || '',
+        },
+        {
+            range: `D${signatureRow}:E${signatureRow}`,
+            hint: `D${hintRow}:E${hintRow}`,
+            name: `D${nameRow}:E${nameRow}`,
+            label: 'Thủ kho / Người xuất',
+            value: transfer.approvedByName || '',
+        },
+        {
+            range: `G${signatureRow}:H${signatureRow}`,
+            hint: `G${hintRow}:H${hintRow}`,
+            name: `G${nameRow}:H${nameRow}`,
+            label: 'Người vận chuyển',
+            value: '',
+        },
+        {
+            range: `I${signatureRow}:J${signatureRow}`,
+            hint: `I${hintRow}:J${hintRow}`,
+            name: `I${nameRow}:J${nameRow}`,
+            label: 'Người nhận',
+            value: transfer.receivedBy || '',
+        },
     ];
 
     signatures.forEach((signature) => {

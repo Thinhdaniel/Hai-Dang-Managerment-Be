@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { BORROWING_BATCH_STATUS, BORROWING_DIRECTION } from '@/constant/borrowing';
 
 const BorrowingBatchSchema = new mongoose.Schema(
     {
@@ -14,10 +15,15 @@ const BorrowingBatchSchema = new mongoose.Schema(
             enum: ['external', 'rental'],
             required: true,
         },
+        direction: {
+            type: String,
+            enum: [BORROWING_DIRECTION.INBOUND, BORROWING_DIRECTION.OUTBOUND],
+            default: BORROWING_DIRECTION.INBOUND,
+        },
         status: {
             type: String,
-            enum: ['draft', 'receiving', 'active', 'partially_returned', 'returned', 'cancelled'],
-            default: 'draft',
+            enum: Object.values(BORROWING_BATCH_STATUS),
+            default: BORROWING_BATCH_STATUS.DRAFT,
         },
         partnerName: {
             type: String,
@@ -25,6 +31,22 @@ const BorrowingBatchSchema = new mongoose.Schema(
             trim: true,
         },
         contractNo: {
+            type: String,
+            trim: true,
+        },
+        contactName: {
+            type: String,
+            trim: true,
+        },
+        contactPhone: {
+            type: String,
+            trim: true,
+        },
+        partnerAddress: {
+            type: String,
+            trim: true,
+        },
+        purpose: {
             type: String,
             trim: true,
         },
@@ -55,7 +77,7 @@ const BorrowingBatchSchema = new mongoose.Schema(
         },
         labelPolicy: {
             type: String,
-            enum: ['temporary'],
+            enum: ['temporary', 'permanent'],
             default: 'temporary',
         },
         removeQrOnReturn: {
@@ -65,6 +87,42 @@ const BorrowingBatchSchema = new mongoose.Schema(
         note: {
             type: String,
             trim: true,
+        },
+        submittedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        submittedAt: {
+            type: Date,
+        },
+        approvedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        approvedAt: {
+            type: Date,
+        },
+        rejectedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        rejectedAt: {
+            type: Date,
+        },
+        rejectReason: {
+            type: String,
+            trim: true,
+        },
+        handedOverBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        handedOverAt: {
+            type: Date,
+        },
+        handoverImages: {
+            type: [String],
+            default: [],
         },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
@@ -97,6 +155,7 @@ const BorrowingBatchSchema = new mongoose.Schema(
 
 BorrowingBatchSchema.index({ status: 1, borrowTime: -1 });
 BorrowingBatchSchema.index({ type: 1, status: 1 });
+BorrowingBatchSchema.index({ direction: 1, status: 1, borrowTime: -1 });
 BorrowingBatchSchema.index({ partnerName: 1 });
 BorrowingBatchSchema.index({ plantId: 1 });
 BorrowingBatchSchema.index({ qrBatchId: 1 }, { sparse: true });

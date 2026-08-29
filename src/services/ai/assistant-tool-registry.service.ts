@@ -37,6 +37,7 @@ export const ASSISTANT_TOOL_SCHEMAS = {
             'maintenance',
             'broken',
             'borrowing',
+            'loaned_out',
             'storage',
             'pending_disposal',
             'disposed',

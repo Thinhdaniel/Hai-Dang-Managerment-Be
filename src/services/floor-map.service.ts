@@ -15,7 +15,7 @@ import customResponse from '@/utils/response';
 // Sơ đồ mặt bằng xưởng: khu vực (FloorZone) + vị trí máy (asset.floorPos), toạ độ % 0-100.
 // Trạng thái máy trên sơ đồ cập nhật real-time qua sự kiện socket asset:updated sẵn có.
 
-const EXCLUDED_STATUSES = [ASSET_STATUS.DISPOSED, ASSET_STATUS.RETURNED_TO_PARTNER];
+const EXCLUDED_STATUSES = [ASSET_STATUS.LOANED_OUT, ASSET_STATUS.DISPOSED, ASSET_STATUS.RETURNED_TO_PARTNER];
 
 const serializeZone = (zone: any) => ({
     id: String(zone._id),

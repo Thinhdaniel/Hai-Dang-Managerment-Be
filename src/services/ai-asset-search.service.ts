@@ -33,6 +33,7 @@ const STATUS_LABEL: Record<string, string> = {
     [ASSET_STATUS.MAINTENANCE]: 'Bao tri',
     [ASSET_STATUS.BROKEN]: 'Loi / hong',
     [ASSET_STATUS.BORROWING]: 'Dang muon',
+    [ASSET_STATUS.LOANED_OUT]: 'Dang cho doi tac muon',
     [ASSET_STATUS.STORAGE]: 'Ton kho / de khong',
     [ASSET_STATUS.RETURNED_TO_PARTNER]: 'Da tra doi tac',
 };
@@ -69,7 +70,8 @@ const STATUS_KEYWORDS: { keywords: string[]; status: string }[] = [
         keywords: ['dang chay', 'dang hoat dong', 'hoat dong', 'dang dung', 'dang van hanh'],
         status: ASSET_STATUS.ACTIVE,
     },
-    { keywords: ['dang muon', 'cho muon', 'di muon'], status: ASSET_STATUS.BORROWING },
+    { keywords: ['dang cho doi tac muon', 'cho doi tac muon', 'cho muon ra ngoai'], status: ASSET_STATUS.LOANED_OUT },
+    { keywords: ['dang muon', 'di muon', 'muon cua doi tac'], status: ASSET_STATUS.BORROWING },
     { keywords: ['da tra doi tac', 'tra doi tac', 'tra lai doi tac'], status: ASSET_STATUS.RETURNED_TO_PARTNER },
 ];
 
@@ -103,7 +105,8 @@ const buildSystemPrompt = (plantNames: string[], brandNames: string[]) =>
         `- "${ASSET_STATUS.STORAGE}": may de kho, KHONG su dung, nhan roi, ton kho`,
         `- "${ASSET_STATUS.BROKEN}": may loi / hong / hu`,
         `- "${ASSET_STATUS.MAINTENANCE}": may dang bao tri / sua chua`,
-        `- "${ASSET_STATUS.BORROWING}": may dang cho muon / dang muon`,
+        `- "${ASSET_STATUS.BORROWING}": may Hai Dang dang muon cua doi tac`,
+        `- "${ASSET_STATUS.LOANED_OUT}": may Hai Dang dang cho doi tac muon`,
         `- "${ASSET_STATUS.RETURNED_TO_PARTNER}": may da tra lai doi tac`,
         'Khi nguoi dung hoi "may khong su dung", "may khong dung", "may de khong", "may ranh" => status = "' +
             ASSET_STATUS.STORAGE +

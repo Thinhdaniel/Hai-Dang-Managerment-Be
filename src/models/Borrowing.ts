@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { BORROWING_DIRECTION, BORROWING_ITEM_STATUS } from '@/constant/borrowing';
 
 const BorrowingSchema = new mongoose.Schema(
     {
@@ -20,10 +21,14 @@ const BorrowingSchema = new mongoose.Schema(
             enum: ['internal', 'external', 'rental'],
             required: true,
         },
+        direction: {
+            type: String,
+            enum: Object.values(BORROWING_DIRECTION),
+        },
         status: {
             type: String,
-            enum: ['active', 'returned'],
-            default: 'active',
+            enum: Object.values(BORROWING_ITEM_STATUS),
+            default: BORROWING_ITEM_STATUS.ACTIVE,
         },
         borrowerId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -79,9 +84,29 @@ const BorrowingSchema = new mongoose.Schema(
             type: String,
             trim: true,
         },
+        issueCondition: {
+            type: String,
+            trim: true,
+        },
+        issueNote: {
+            type: String,
+            trim: true,
+        },
+        accessories: {
+            type: [String],
+            default: [],
+        },
+        issueImages: {
+            type: [String],
+            default: [],
+        },
         returnCondition: {
             type: String,
             trim: true,
+        },
+        returnImages: {
+            type: [String],
+            default: [],
         },
         qrReturnAction: {
             type: String,
@@ -102,6 +127,18 @@ const BorrowingSchema = new mongoose.Schema(
             type: Date,
         },
         assetStatusBefore: {
+            type: String,
+            trim: true,
+        },
+        assetOwnershipTypeBefore: {
+            type: String,
+            trim: true,
+        },
+        assetPlantIdBefore: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Plant',
+        },
+        assetAreaBefore: {
             type: String,
             trim: true,
         },
@@ -132,6 +169,7 @@ BorrowingSchema.index({ assetId: 1, status: 1 });
 BorrowingSchema.index({ batchId: 1, status: 1 });
 BorrowingSchema.index({ qrLabelId: 1 }, { sparse: true });
 BorrowingSchema.index({ type: 1, status: 1 });
+BorrowingSchema.index({ direction: 1, status: 1 });
 BorrowingSchema.index({ borrowerId: 1 });
 BorrowingSchema.index({ borrowerName: 1 });
 BorrowingSchema.index({ borrowTime: -1 });

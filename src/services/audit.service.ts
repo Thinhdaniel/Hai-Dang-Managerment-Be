@@ -12,6 +12,7 @@ import InventoryStock from '@/models/InventoryStock';
 import User from '@/models/User';
 import AiAudit from '@/models/AiAudit';
 import { ASSET_STATUS } from '@/constant/assetStatus';
+import { BORROWING_DIRECTION, resolveBorrowingDirection } from '@/constant/borrowing';
 import { ASSET_DISPOSAL_ITEM_STATUS } from '@/constant/assetDisposal';
 import { QR_LABEL_STATUS } from '@/constant/qrLabel';
 import { ROLE_GROUPS } from '@/constant/permissions';
@@ -113,15 +114,23 @@ const checkBorrowingDues = async (): Promise<AuditFinding[]> => {
     const now = new Date();
     const openBatches = await BorrowingBatch.find({
         isDeleted: { $ne: true },
-        status: { $in: ['draft', 'receiving', 'active', 'partially_returned'] },
+        status: { $in: ['draft', 'receiving', 'pending_approval', 'approved', 'active', 'partially_returned'] },
     })
-        .select('code partnerName expectedReturnTime')
+        .select('code type direction status partnerName expectedReturnTime')
         .limit(100)
         .lean();
 
     for (const batch of openBatches) {
         const partner = batch.partnerName || 'Chưa xác định';
         const due = batch.expectedReturnTime ? new Date(batch.expectedReturnTime) : null;
+        const outbound = resolveBorrowingDirection(batch.direction, batch.type) === BORROWING_DIRECTION.OUTBOUND;
+        const subject = outbound ? 'Lô Hải Đăng cho mượn' : 'Lô mượn/thuê';
+        const overdueAction = outbound
+            ? 'Liên hệ đối tác để nhận lại máy hoặc gia hạn, rồi cập nhật hạn mới vào lô.'
+            : 'Liên hệ đối tác gia hạn hoặc trả máy, rồi cập nhật hạn mới vào lô.';
+        const dueAction = outbound
+            ? 'Chuẩn bị đối chiếu và nhận lại máy từ đối tác trước hạn.'
+            : 'Chuẩn bị trả máy hoặc đàm phán gia hạn trước hạn.';
 
         if (due && due < now) {
             const daysOver = differenceInCalendarDays(now, due);
@@ -129,8 +138,8 @@ const checkBorrowingDues = async (): Promise<AuditFinding[]> => {
                 code: 'borrowing_overdue',
                 source: 'rule',
                 severity: daysOver > 30 ? 'critical' : 'warning',
-                title: `Lô mượn/thuê ${batch.code} (${partner}) quá hạn trả ${daysOver} ngày`,
-                detail: `Hạn trả ${format(due, 'dd/MM/yyyy')} đã qua mà lô chưa đóng. Liên hệ đối tác gia hạn hoặc trả máy, rồi cập nhật hạn mới vào lô.`,
+                title: `${subject} ${batch.code} (${partner}) quá hạn ${daysOver} ngày`,
+                detail: `Hạn ${format(due, 'dd/MM/yyyy')} đã qua mà lô chưa đóng. ${overdueAction}`,
                 refs: [batch.code],
             });
         } else if (due && due < addDays(now, 7)) {
@@ -138,8 +147,8 @@ const checkBorrowingDues = async (): Promise<AuditFinding[]> => {
                 code: 'borrowing_due_soon',
                 source: 'rule',
                 severity: 'info',
-                title: `Lô mượn/thuê ${batch.code} (${partner}) đến hạn trả trong ${Math.max(differenceInCalendarDays(due, now), 0)} ngày`,
-                detail: `Hạn trả ${format(due, 'dd/MM/yyyy')} — chuẩn bị trả máy hoặc đàm phán gia hạn trước hạn.`,
+                title: `${subject} ${batch.code} (${partner}) đến hạn trong ${Math.max(differenceInCalendarDays(due, now), 0)} ngày`,
+                detail: `Hạn ${format(due, 'dd/MM/yyyy')} — ${dueAction}`,
                 refs: [batch.code],
             });
         }
@@ -149,7 +158,7 @@ const checkBorrowingDues = async (): Promise<AuditFinding[]> => {
                 code: 'borrowing_missing_info',
                 source: 'rule',
                 severity: 'info',
-                title: `Lô mượn/thuê ${batch.code} còn thiếu thông tin`,
+                title: `${subject} ${batch.code} còn thiếu thông tin`,
                 detail: `${partner === 'Chưa xác định' ? 'Chưa rõ đối tác. ' : ''}${!due ? 'Chưa có hạn trả dự kiến. ' : ''}Vào lô → "Sửa thông tin lô" để bổ sung.`,
                 refs: [batch.code],
             });
@@ -226,7 +235,9 @@ const checkDisposalMismatch = async (): Promise<AuditFinding[]> => {
             detail: `Các máy ${orphans
                 .slice(0, 8)
                 .map(assetLabel)
-                .join(', ')}${orphans.length > 8 ? '…' : ''} đang ở trạng thái chuẩn bị thanh lý nhưng không nằm trong đợt thanh lý mở nào — có thể do đợt cũ bị hủy mà máy chưa được trả về trạng thái thường.`,
+                .join(
+                    ', '
+                )}${orphans.length > 8 ? '…' : ''} đang ở trạng thái chuẩn bị thanh lý nhưng không nằm trong đợt thanh lý mở nào — có thể do đợt cũ bị hủy mà máy chưa được trả về trạng thái thường.`,
             refs: orphans.slice(0, 8).map(assetLabel),
         },
     ];
@@ -295,7 +306,13 @@ const buildAiDataset = async () => {
         ]),
         InventoryStock.aggregate([
             { $match: { isDeleted: { $ne: true } } },
-            { $group: { _id: null, total: { $sum: 1 }, zeroOrLess: { $sum: { $cond: [{ $lte: ['$currentStock', 0] }, 1, 0] } } } },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: 1 },
+                    zeroOrLess: { $sum: { $cond: [{ $lte: ['$currentStock', 0] }, 1, 0] } },
+                },
+            },
         ]),
     ]);
     return { assetByPlant, transfers30d, stockSummary: stockMoves7d[0] ?? {} };

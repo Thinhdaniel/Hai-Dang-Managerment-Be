@@ -1,10 +1,12 @@
 import { ASSET_STATUS } from '@/constant/assetStatus';
+import { BORROWING_DIRECTION } from '@/constant/borrowing';
 import { zObjectId, zOptionalString, zRequiredNumber, zRequiredString } from '@/lib/validation';
 import { z } from 'zod';
 
 const transactionTypeSchema = z.enum(['internal', 'external', 'rental']);
 const externalTransactionTypeSchema = z.enum(['external', 'rental']);
 const qrReturnActionSchema = z.enum(['removed', 'lost', 'damaged', 'left_on_partner']);
+const borrowingDirectionSchema = z.nativeEnum(BORROWING_DIRECTION);
 
 const optionalString = z
     .string()
@@ -84,28 +86,142 @@ export const returnBorrowingSchema = z.object({
     note: zOptionalString(),
 });
 
-export const createBorrowingBatchSchema = z.object({
-    type: externalTransactionTypeSchema,
-    // Optional de ho tro ra soat thuc te: chua biet may cua ai van ghi nhan duoc, bo sung sau
-    partnerName: zOptionalString(),
-    contractNo: zOptionalString(),
-    plantId: zObjectId('Co so'),
-    area: zOptionalString(),
-    borrowTime: zRequiredString('Thoi gian nhan'),
-    expectedReturnTime: zOptionalString(),
-    plannedQuantity: zRequiredNumber('So luong may', 1, 3000).int(),
-    note: zOptionalString(),
-    createQrBatch: z.boolean().optional(),
-});
+export const createBorrowingBatchSchema = z
+    .object({
+        type: externalTransactionTypeSchema,
+        direction: borrowingDirectionSchema.optional(),
+        // Optional voi lo inbound de ho tro ra soat thuc te; outbound bat buoc phai biet ben nhan.
+        partnerName: zOptionalString(),
+        contractNo: zOptionalString(),
+        contactName: zOptionalString(),
+        contactPhone: zOptionalString(),
+        partnerAddress: zOptionalString(),
+        purpose: zOptionalString(),
+        plantId: zObjectId('Co so'),
+        area: zOptionalString(),
+        borrowTime: zRequiredString('Thoi gian giao / nhan'),
+        expectedReturnTime: zOptionalString(),
+        plannedQuantity: zRequiredNumber('So luong may', 1, 3000).int(),
+        note: zOptionalString(),
+        createQrBatch: z.boolean().optional(),
+    })
+    .superRefine((data, ctx) => {
+        if (data.direction !== BORROWING_DIRECTION.OUTBOUND) return;
+
+        if (data.type !== 'external') {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['type'],
+                message: 'Lo cho muon chi su dung loai giao dich external',
+            });
+        }
+        if (!data.partnerName?.trim()) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['partnerName'],
+                message: 'Doi tac nhan may la bat buoc',
+            });
+        }
+        if (!data.purpose?.trim()) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['purpose'],
+                message: 'Muc dich cho muon la bat buoc',
+            });
+        }
+        if (!data.expectedReturnTime?.trim()) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['expectedReturnTime'],
+                message: 'Han tra du kien la bat buoc voi lo cho muon',
+            });
+        }
+        if (data.createQrBatch) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['createQrBatch'],
+                message: 'May Hai Dang su dung QR chinh thuc, khong tao QR tam',
+            });
+        }
+
+        const borrowTime = Date.parse(data.borrowTime);
+        const expectedReturnTime = Date.parse(data.expectedReturnTime || '');
+        if (!Number.isFinite(borrowTime)) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['borrowTime'],
+                message: 'Thoi gian ban giao khong hop le',
+            });
+        }
+        if (!Number.isFinite(expectedReturnTime)) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['expectedReturnTime'],
+                message: 'Han tra du kien khong hop le',
+            });
+        } else if (Number.isFinite(borrowTime) && expectedReturnTime <= borrowTime) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['expectedReturnTime'],
+                message: 'Han tra phai sau thoi gian ban giao',
+            });
+        }
+    });
 
 // Bo sung thong tin lo sau khi ra soat (doi tac, hop dong, han tra...)
 export const updateBorrowingBatchSchema = z.object({
     partnerName: zOptionalString(),
     contractNo: zOptionalString(),
+    contactName: zOptionalString(),
+    contactPhone: zOptionalString(),
+    partnerAddress: zOptionalString(),
+    purpose: zOptionalString(),
     area: zOptionalString(),
     expectedReturnTime: zOptionalString(),
+    plannedQuantity: z.coerce.number().int().min(1).max(3000).optional(),
     note: zOptionalString(),
 });
+
+const imageUrlsSchema = z.array(z.string().url()).max(5).optional();
+
+export const addOutboundBorrowingAssetsSchema = z.object({
+    items: z
+        .array(
+            z.object({
+                assetId: zObjectId('Thiet bi'),
+                issueCondition: zOptionalString(),
+                issueNote: zOptionalString(),
+                accessories: z.array(z.string().trim().min(1)).max(30).optional(),
+                issueImages: imageUrlsSchema,
+            })
+        )
+        .min(1, { message: 'Can chon it nhat mot may' })
+        .max(300, { message: 'Toi da 300 may moi lan them' }),
+});
+
+export const rejectOutboundBorrowingBatchSchema = z.object({
+    reason: zRequiredString('Ly do tu choi'),
+});
+
+export const cancelOutboundBorrowingBatchSchema = z.object({
+    reason: zRequiredString('Ly do huy'),
+});
+
+export const confirmOutboundHandoverSchema = z
+    .object({
+        handoverTime: zRequiredString('Thoi gian ban giao'),
+        note: zOptionalString(),
+        handoverImages: imageUrlsSchema,
+    })
+    .superRefine((data, ctx) => {
+        if (!Number.isFinite(Date.parse(data.handoverTime))) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['handoverTime'],
+                message: 'Thoi gian ban giao khong hop le',
+            });
+        }
+    });
 
 export const createBorrowingBatchQrSchema = z.object({
     quantity: zRequiredNumber('So luong tem', 1, 3000).int().optional(),
@@ -139,19 +255,30 @@ export const receiveBorrowingBatchBulkSchema = z.object({
     receiveNote: zOptionalString(),
 });
 
-export const bulkReturnBorrowingBatchSchema = z.object({
-    returnTime: zRequiredString('Thoi gian tra'),
-    note: zOptionalString(),
-    items: z
-        .array(
-            z.object({
-                borrowingId: zObjectId('Giao dich'),
-                // Optional vi may nhan khong tem thi khong co QR de xu ly; service van bat buoc khi may co tem
-                qrReturnAction: qrReturnActionSchema.optional(),
-                returnCondition: zOptionalString(),
-                returnNote: zOptionalString(),
-                qrReturnNote: zOptionalString(),
-            })
-        )
-        .min(1, { message: 'Can chon it nhat mot may de tra' }),
-});
+export const bulkReturnBorrowingBatchSchema = z
+    .object({
+        returnTime: zRequiredString('Thoi gian tra'),
+        note: zOptionalString(),
+        items: z
+            .array(
+                z.object({
+                    borrowingId: zObjectId('Giao dich'),
+                    // Optional vi may nhan khong tem thi khong co QR de xu ly; service van bat buoc khi may co tem
+                    qrReturnAction: qrReturnActionSchema.optional(),
+                    returnCondition: zOptionalString(),
+                    returnNote: zOptionalString(),
+                    returnImages: imageUrlsSchema,
+                    qrReturnNote: zOptionalString(),
+                })
+            )
+            .min(1, { message: 'Can chon it nhat mot may de tra' }),
+    })
+    .superRefine((data, ctx) => {
+        if (!Number.isFinite(Date.parse(data.returnTime))) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['returnTime'],
+                message: 'Thoi gian tra / nhan lai khong hop le',
+            });
+        }
+    });

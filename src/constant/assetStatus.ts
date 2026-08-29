@@ -3,6 +3,7 @@ export enum ASSET_STATUS {
     MAINTENANCE = 'maintenance',
     BROKEN = 'broken',
     BORROWING = 'borrowing',
+    LOANED_OUT = 'loaned_out',
     STORAGE = 'storage',
     PENDING_DISPOSAL = 'pending_disposal',
     DISPOSED = 'disposed',

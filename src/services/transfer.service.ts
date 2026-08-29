@@ -189,13 +189,16 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
     }
 
     const blockedLifecycleAssets = assets.filter((asset) =>
-        [ASSET_STATUS.RETURNED_TO_PARTNER, ASSET_STATUS.PENDING_DISPOSAL, ASSET_STATUS.DISPOSED].includes(
-            asset.status as ASSET_STATUS
-        )
+        [
+            ASSET_STATUS.LOANED_OUT,
+            ASSET_STATUS.RETURNED_TO_PARTNER,
+            ASSET_STATUS.PENDING_DISPOSAL,
+            ASSET_STATUS.DISPOSED,
+        ].includes(asset.status as ASSET_STATUS)
     );
     if (blockedLifecycleAssets.length) {
         throw new BadRequestError(
-            `Khong the dieu chuyen may da dong hoac dang vao quy trinh thanh ly: ${blockedLifecycleAssets.map((asset) => asset.name).join(', ')}`
+            `Khong the dieu chuyen may dang cho doi tac muon, da dong hoac dang vao quy trinh thanh ly: ${blockedLifecycleAssets.map((asset) => asset.name).join(', ')}`
         );
     }
 
@@ -218,9 +221,7 @@ export const createTransfer = async (req: Request, res: Response, next: NextFunc
     }
 
     const [firstAsset] = assets;
-    const hasDifferentSource = assets.some(
-        (asset) => !sameId(asset.plantId, firstAsset.plantId)
-    );
+    const hasDifferentSource = assets.some((asset) => !sameId(asset.plantId, firstAsset.plantId));
 
     if (hasDifferentSource) {
         throw new BadRequestError('Chi co the tao mot lenh cho cac thiet bi cung co so hien tai');

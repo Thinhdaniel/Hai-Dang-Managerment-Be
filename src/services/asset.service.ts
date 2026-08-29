@@ -106,6 +106,13 @@ const assertValidAssetOwnershipStatus = (status?: string, ownershipType?: string
     }
 };
 
+const assertLoanedOutStatusManagedByWorkflow = (currentStatus?: string, nextStatus?: string) => {
+    if (currentStatus === nextStatus) return;
+    if (currentStatus === ASSET_STATUS.LOANED_OUT || nextStatus === ASSET_STATUS.LOANED_OUT) {
+        throw new BadRequestError('Trang thai dang cho doi tac muon chi duoc cap nhat trong module muon/tra may');
+    }
+};
+
 /**
  * Unique mềm cho serial & mã máy: được phép để trống (nhiều máy mất serial), nhưng nếu đã nhập thì phải duy nhất
  * trong các máy chưa xoá (so sánh không phân biệt hoa/thường). Bỏ qua trường không có trong body (update từng phần).
@@ -132,6 +139,7 @@ const assertUniqueSerialAndCode = async (body: Record<string, unknown>, excludeI
 
 export const createAsset = async (req: Request, res: Response, next: NextFunction) => {
     assertValidAssetOwnershipStatus(req.body.status, req.body.ownershipType);
+    assertLoanedOutStatusManagedByWorkflow(undefined, req.body.status);
     await assertUniqueSerialAndCode(req.body);
 
     const { typeCode, ...assetBody } = req.body as Record<string, any>;
@@ -383,6 +391,20 @@ export const updateAsset = async (req: Request, res: Response, next: NextFunctio
         req.body.status ?? currentAsset.status,
         req.body.ownershipType ?? currentAsset.ownershipType
     );
+    assertLoanedOutStatusManagedByWorkflow(currentAsset.status, req.body.status ?? currentAsset.status);
+    if (currentAsset.status === ASSET_STATUS.LOANED_OUT) {
+        const protectedLocationChanged =
+            (req.body.plantId !== undefined &&
+                String(req.body.plantId) !== String(currentAsset.plantId?._id ?? currentAsset.plantId)) ||
+            (req.body.area !== undefined &&
+                String(req.body.area ?? '').trim() !== String(currentAsset.area ?? '').trim()) ||
+            (req.body.ownershipType !== undefined && req.body.ownershipType !== currentAsset.ownershipType);
+        if (protectedLocationChanged) {
+            throw new BadRequestError(
+                'May dang cho doi tac muon; co so, khu vuc va nguon goc chi duoc cap nhat trong lo muon/tra'
+            );
+        }
+    }
     await assertUniqueSerialAndCode(req.body, String(req.params.id));
 
     const asset = await assetRepository.updateById(String(req.params.id), { ...req.body, updatedBy: req.userId });
@@ -405,6 +427,7 @@ export const updateAssetStatus = async (req: Request, res: Response, next: NextF
     if (!currentAsset) throw new NotFoundError('Khong tim thay thiet bi');
 
     assertValidAssetOwnershipStatus(req.body.status, currentAsset.ownershipType);
+    assertLoanedOutStatusManagedByWorkflow(currentAsset.status, req.body.status);
 
     const asset = await assetRepository.updateById(String(req.params.id), {
         status: req.body.status,
@@ -426,6 +449,12 @@ export const updateAssetStatus = async (req: Request, res: Response, next: NextF
 };
 
 export const deleteAsset = async (req: Request, res: Response, next: NextFunction) => {
+    const currentAsset = await assetRepository.findById(String(req.params.id));
+    if (!currentAsset) throw new NotFoundError('Khong tim thay thiet bi');
+    if (currentAsset.status === ASSET_STATUS.LOANED_OUT) {
+        throw new BadRequestError('Khong the xoa may dang cho doi tac muon');
+    }
+
     const asset = await assetRepository.softDeleteById(String(req.params.id), {
         isDeleted: true,
         deletedAt: new Date(),

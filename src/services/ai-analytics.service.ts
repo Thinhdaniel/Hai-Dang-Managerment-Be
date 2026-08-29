@@ -87,6 +87,7 @@ const ASSET_STATUS_LABEL: Record<string, string> = {
     maintenance: 'Bảo trì',
     broken: 'Lỗi/hỏng',
     borrowing: 'Đang mượn',
+    loaned_out: 'Đang cho đối tác mượn',
     storage: 'Tồn kho',
     pending_disposal: 'Chờ thanh lý',
     disposed: 'Đã thanh lý',

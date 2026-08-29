@@ -1,6 +1,12 @@
 import { customAlphabet } from 'nanoid';
 import mongoose from 'mongoose';
 import { ASSET_OWNERSHIP_TYPE, ASSET_STATUS } from '@/constant/assetStatus';
+import {
+    BORROWING_BATCH_STATUS,
+    BORROWING_DIRECTION,
+    BORROWING_ITEM_STATUS,
+    resolveBorrowingDirection,
+} from '@/constant/borrowing';
 import { QR_LABEL_BATCH_STATUS, QR_LABEL_STATUS, QR_LABEL_TYPE } from '@/constant/qrLabel';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import Asset from '@/models/Asset';
@@ -25,6 +31,17 @@ import {
 import { notifyAdmins, getActorName } from './notification.helper';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import { returnOutboundBorrowingBatch } from './outbound-borrowing.service';
+
+export {
+    addOutboundBorrowingAssets,
+    approveOutboundBorrowingBatch,
+    cancelOutboundBorrowingBatch,
+    confirmOutboundHandover,
+    rejectOutboundBorrowingBatch,
+    removeOutboundBorrowingAsset,
+    submitOutboundBorrowingBatch,
+} from './outbound-borrowing.service';
 
 const QR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const generateQrToken = customAlphabet(QR_ALPHABET, 8);
@@ -55,8 +72,8 @@ const getUserId = (req: Request) =>
 
 const createDatedCode = (prefix: string) => `${prefix}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
 
-const createUniqueBorrowingBatchCode = async () => {
-    const prefix = createDatedCode('BR');
+const createUniqueBorrowingBatchCode = async (direction = BORROWING_DIRECTION.INBOUND) => {
+    const prefix = createDatedCode(direction === BORROWING_DIRECTION.OUTBOUND ? 'LO' : 'BR');
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
         const code = `${prefix}-${generateQrToken().slice(0, 4)}`;
@@ -151,6 +168,30 @@ const buildFilter = async (query: Request['query']) => {
     if (query.borrowerId) filter.borrowerId = query.borrowerId;
     if (query.type) filter.type = query.type;
     if (query.status) filter.status = query.status;
+    if (query.direction) {
+        const direction = String(query.direction);
+        if (direction === BORROWING_DIRECTION.INBOUND) {
+            filter.$and = [
+                {
+                    $or: [
+                        { direction: BORROWING_DIRECTION.INBOUND },
+                        { direction: { $exists: false }, type: { $in: ['external', 'rental'] } },
+                    ],
+                },
+            ];
+        } else if (direction === BORROWING_DIRECTION.INTERNAL) {
+            filter.$and = [
+                {
+                    $or: [
+                        { direction: BORROWING_DIRECTION.INTERNAL },
+                        { direction: { $exists: false }, type: 'internal' },
+                    ],
+                },
+            ];
+        } else if (direction === BORROWING_DIRECTION.OUTBOUND) {
+            filter.direction = BORROWING_DIRECTION.OUTBOUND;
+        }
+    }
 
     if (query.startDate || query.endDate) {
         filter.borrowTime = {};
@@ -165,14 +206,17 @@ const buildFilter = async (query: Request['query']) => {
             $or: [{ name: regex }, { machineCode: regex }, { serial: regex }],
         }).distinct('_id');
 
-        filter.$or = [
-            { borrowerName: regex },
-            { partnerName: regex },
-            { purpose: regex },
-            { location: regex },
-            { note: regex },
-            { assetId: { $in: assetIds } },
-        ];
+        const searchCondition = {
+            $or: [
+                { borrowerName: regex },
+                { partnerName: regex },
+                { purpose: regex },
+                { location: regex },
+                { note: regex },
+                { assetId: { $in: assetIds } },
+            ],
+        };
+        filter.$and = [...(filter.$and ?? []), searchCondition];
     }
 
     return filter;
@@ -184,8 +228,11 @@ const getBorrowingBatchCounts = async (batchIds: string[]) => {
     const rows = await Borrowing.aggregate<{
         _id: mongoose.Types.ObjectId;
         receivedCount: number;
+        selectedCount: number;
+        draftCount: number;
         activeCount: number;
         returnedCount: number;
+        issuedCount: number;
     }>([
         {
             $match: {
@@ -196,9 +243,45 @@ const getBorrowingBatchCounts = async (batchIds: string[]) => {
         {
             $group: {
                 _id: '$batchId',
-                receivedCount: { $sum: 1 },
+                receivedCount: {
+                    $sum: {
+                        $cond: [
+                            { $in: ['$status', [BORROWING_ITEM_STATUS.ACTIVE, BORROWING_ITEM_STATUS.RETURNED]] },
+                            1,
+                            0,
+                        ],
+                    },
+                },
+                selectedCount: {
+                    $sum: {
+                        $cond: [
+                            {
+                                $in: [
+                                    '$status',
+                                    [
+                                        BORROWING_ITEM_STATUS.DRAFT,
+                                        BORROWING_ITEM_STATUS.ACTIVE,
+                                        BORROWING_ITEM_STATUS.RETURNED,
+                                    ],
+                                ],
+                            },
+                            1,
+                            0,
+                        ],
+                    },
+                },
+                draftCount: { $sum: { $cond: [{ $eq: ['$status', BORROWING_ITEM_STATUS.DRAFT] }, 1, 0] } },
                 activeCount: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
                 returnedCount: { $sum: { $cond: [{ $eq: ['$status', 'returned'] }, 1, 0] } },
+                issuedCount: {
+                    $sum: {
+                        $cond: [
+                            { $in: ['$status', [BORROWING_ITEM_STATUS.ACTIVE, BORROWING_ITEM_STATUS.RETURNED]] },
+                            1,
+                            0,
+                        ],
+                    },
+                },
             },
         },
     ]);
@@ -242,8 +325,11 @@ const enrichBorrowingBatches = async (batches: any[]) => {
         return {
             ...batch,
             receivedCount: counts?.receivedCount ?? 0,
+            selectedCount: counts?.selectedCount ?? 0,
+            draftCount: counts?.draftCount ?? 0,
             activeCount: counts?.activeCount ?? 0,
             returnedCount: counts?.returnedCount ?? 0,
+            issuedCount: counts?.issuedCount ?? 0,
             unusedQrCount: qrBatchId ? (unusedQrCounts.get(qrBatchId) ?? 0) : undefined,
         };
     });
@@ -253,29 +339,48 @@ const refreshBorrowingBatchStatus = async (batchId: string, session?: mongoose.C
     const batch = await BorrowingBatch.findById(batchId).session(session ?? null);
     if (!batch) return;
 
+    const direction = resolveBorrowingDirection(batch.direction, batch.type);
+
     const [receivedCount, activeCount, returnedCount] = await Promise.all([
         Borrowing.countDocuments({ batchId, isDeleted: { $ne: true } }).session(session ?? null),
         Borrowing.countDocuments({ batchId, status: 'active', isDeleted: { $ne: true } }).session(session ?? null),
         Borrowing.countDocuments({ batchId, status: 'returned', isDeleted: { $ne: true } }).session(session ?? null),
     ]);
 
+    if (direction === BORROWING_DIRECTION.OUTBOUND) {
+        if (activeCount === 0 && returnedCount > 0) {
+            batch.status = BORROWING_BATCH_STATUS.RETURNED;
+            batch.closedAt = batch.closedAt ?? new Date();
+        } else if (returnedCount > 0) {
+            batch.status = BORROWING_BATCH_STATUS.PARTIALLY_RETURNED;
+            batch.closedAt = undefined;
+            batch.closedBy = undefined;
+        } else if (activeCount > 0) {
+            batch.status = BORROWING_BATCH_STATUS.ACTIVE;
+            batch.closedAt = undefined;
+            batch.closedBy = undefined;
+        }
+        await batch.save({ session });
+        return;
+    }
+
     if (receivedCount === 0) {
-        batch.status = batch.qrBatchId ? 'receiving' : 'draft';
+        batch.status = batch.qrBatchId ? BORROWING_BATCH_STATUS.RECEIVING : BORROWING_BATCH_STATUS.DRAFT;
         batch.closedAt = undefined;
         batch.closedBy = undefined;
     } else if (activeCount === 0 && returnedCount > 0) {
-        batch.status = 'returned';
+        batch.status = BORROWING_BATCH_STATUS.RETURNED;
         batch.closedAt = batch.closedAt ?? new Date();
     } else if (returnedCount > 0) {
-        batch.status = 'partially_returned';
+        batch.status = BORROWING_BATCH_STATUS.PARTIALLY_RETURNED;
         batch.closedAt = undefined;
         batch.closedBy = undefined;
     } else if (receivedCount >= Number(batch.plannedQuantity ?? 0)) {
-        batch.status = 'active';
+        batch.status = BORROWING_BATCH_STATUS.ACTIVE;
         batch.closedAt = undefined;
         batch.closedBy = undefined;
     } else {
-        batch.status = 'receiving';
+        batch.status = BORROWING_BATCH_STATUS.RECEIVING;
         batch.closedAt = undefined;
         batch.closedBy = undefined;
     }
@@ -321,11 +426,22 @@ export const getBorrowingById = async (req: Request, res: Response, next: NextFu
 
 export const getAllBorrowingBatches = async (req: Request, res: Response, next: NextFunction) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
+    const andConditions: Record<string, any>[] = [];
     const { page, limit, skip } = getPagination(req.query as Record<string, any>);
 
     if (req.query.type) filter.type = req.query.type;
     if (req.query.status) filter.status = req.query.status;
     if (req.query.plantId) filter.plantId = req.query.plantId;
+    if (req.query.direction === BORROWING_DIRECTION.OUTBOUND) {
+        filter.direction = BORROWING_DIRECTION.OUTBOUND;
+    } else if (req.query.direction === BORROWING_DIRECTION.INBOUND) {
+        andConditions.push({
+            $or: [
+                { direction: BORROWING_DIRECTION.INBOUND },
+                { direction: { $exists: false }, type: { $in: ['external', 'rental'] } },
+            ],
+        });
+    }
 
     if (req.query.search) {
         const regex = new RegExp(
@@ -334,8 +450,19 @@ export const getAllBorrowingBatches = async (req: Request, res: Response, next: 
                 .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
             'i'
         );
-        filter.$or = [{ code: regex }, { partnerName: regex }, { contractNo: regex }, { area: regex }, { note: regex }];
+        andConditions.push({
+            $or: [
+                { code: regex },
+                { partnerName: regex },
+                { contractNo: regex },
+                { contactName: regex },
+                { purpose: regex },
+                { area: regex },
+                { note: regex },
+            ],
+        });
     }
+    if (andConditions.length) filter.$and = andConditions;
 
     const [items, total] = await Promise.all([
         applyPopulate(BorrowingBatch.find(filter), WORKFLOW_POPULATE.borrowingBatch)
@@ -364,6 +491,9 @@ const createTemporaryQrBatchForBorrowingBatch = async (
     userId?: string,
     session?: mongoose.ClientSession
 ) => {
+    if (resolveBorrowingDirection(batch.direction, batch.type) === BORROWING_DIRECTION.OUTBOUND) {
+        throw new BadRequestError('May Hai Dang cho muon phai dung QR chinh thuc, khong tao QR tam');
+    }
     if (batch.qrBatchId) {
         throw new DuplicateError('Lo muon / thue nay da co lo tem QR');
     }
@@ -412,7 +542,11 @@ const createTemporaryQrBatchForBorrowingBatch = async (
 
 export const createBorrowingBatch = async (req: Request, res: Response, next: NextFunction) => {
     const userId = getUserId(req);
-    const code = await createUniqueBorrowingBatchCode();
+    const direction =
+        req.body.direction === BORROWING_DIRECTION.OUTBOUND
+            ? BORROWING_DIRECTION.OUTBOUND
+            : BORROWING_DIRECTION.INBOUND;
+    const code = await createUniqueBorrowingBatchCode(direction);
     const session = await mongoose.startSession();
     let createdBatchId = '';
 
@@ -423,14 +557,23 @@ export const createBorrowingBatch = async (req: Request, res: Response, next: Ne
                     {
                         code,
                         type: req.body.type,
+                        direction,
                         // Ra soat thuc te co the chua biet may cua ai — ghi nhan truoc, bo sung sau
-                        partnerName: trimText(req.body.partnerName) || 'Chưa xác định',
+                        partnerName:
+                            trimText(req.body.partnerName) ||
+                            (direction === BORROWING_DIRECTION.INBOUND ? 'Chưa xác định' : undefined),
                         contractNo: trimText(req.body.contractNo),
+                        contactName: trimText(req.body.contactName),
+                        contactPhone: trimText(req.body.contactPhone),
+                        partnerAddress: trimText(req.body.partnerAddress),
+                        purpose: trimText(req.body.purpose),
                         plantId: req.body.plantId,
                         area: trimText(req.body.area),
                         borrowTime: req.body.borrowTime,
                         expectedReturnTime: req.body.expectedReturnTime,
                         plannedQuantity: req.body.plannedQuantity,
+                        labelPolicy: direction === BORROWING_DIRECTION.OUTBOUND ? 'permanent' : 'temporary',
+                        removeQrOnReturn: direction !== BORROWING_DIRECTION.OUTBOUND,
                         note: trimText(req.body.note),
                         createdBy: userId,
                         updatedBy: userId,
@@ -441,7 +584,7 @@ export const createBorrowingBatch = async (req: Request, res: Response, next: Ne
 
             createdBatchId = String(batch._id);
 
-            if (req.body.createQrBatch) {
+            if (req.body.createQrBatch && direction === BORROWING_DIRECTION.INBOUND) {
                 await createTemporaryQrBatchForBorrowingBatch(batch, Number(req.body.plannedQuantity), userId, session);
             }
         });
@@ -484,22 +627,85 @@ export const getBorrowingBatchById = async (req: Request, res: Response, next: N
     );
 };
 
-const OPEN_BATCH_STATUSES = ['draft', 'receiving', 'active', 'partially_returned'];
+const OPEN_BATCH_STATUSES = [
+    BORROWING_BATCH_STATUS.DRAFT,
+    BORROWING_BATCH_STATUS.RECEIVING,
+    BORROWING_BATCH_STATUS.PENDING_APPROVAL,
+    BORROWING_BATCH_STATUS.APPROVED,
+    BORROWING_BATCH_STATUS.ACTIVE,
+    BORROWING_BATCH_STATUS.PARTIALLY_RETURNED,
+    BORROWING_BATCH_STATUS.REJECTED,
+];
 
 // Tong quan may muon/thue: dem may dang giu theo doi tac + tinh trang lo (qua han, thieu thong tin)
 export const getBorrowingBatchStats = async (req: Request, res: Response, next: NextFunction) => {
     const now = new Date();
-    const [openBatches, byPartner] = await Promise.all([
-        BorrowingBatch.find({ isDeleted: { $ne: true }, status: { $in: OPEN_BATCH_STATUSES } })
+    const [openBatches, byPartner, outboundOpenBatches, outboundByPartner] = await Promise.all([
+        BorrowingBatch.find({
+            isDeleted: { $ne: true },
+            status: { $in: OPEN_BATCH_STATUSES },
+            $or: [
+                { direction: BORROWING_DIRECTION.INBOUND },
+                { direction: { $exists: false }, type: { $in: ['external', 'rental'] } },
+            ],
+        })
             .select('code partnerName expectedReturnTime status')
             .lean(),
         // Gom ca giao dich le lan giao dich trong lo — mien la may ngoai dang active
         Borrowing.aggregate([
-            { $match: { isDeleted: { $ne: true }, status: 'active', type: { $in: ['external', 'rental'] } } },
+            {
+                $match: {
+                    isDeleted: { $ne: true },
+                    status: BORROWING_ITEM_STATUS.ACTIVE,
+                    type: { $in: ['external', 'rental'] },
+                    $or: [{ direction: BORROWING_DIRECTION.INBOUND }, { direction: { $exists: false } }],
+                },
+            },
             {
                 $group: {
                     _id: { $ifNull: ['$partnerName', 'Chưa xác định'] },
                     machines: { $sum: 1 },
+                    nearestDue: { $min: '$expectedReturnTime' },
+                    overdue: {
+                        $sum: {
+                            $cond: [
+                                {
+                                    $and: [
+                                        { $ne: ['$expectedReturnTime', null] },
+                                        { $lt: ['$expectedReturnTime', now] },
+                                    ],
+                                },
+                                1,
+                                0,
+                            ],
+                        },
+                    },
+                },
+            },
+            { $sort: { machines: -1 } },
+        ]),
+        BorrowingBatch.find({
+            isDeleted: { $ne: true },
+            direction: BORROWING_DIRECTION.OUTBOUND,
+            status: { $in: OPEN_BATCH_STATUSES },
+        })
+            .select('code partnerName expectedReturnTime status')
+            .lean(),
+        Borrowing.aggregate([
+            {
+                $match: {
+                    isDeleted: { $ne: true },
+                    direction: BORROWING_DIRECTION.OUTBOUND,
+                    status: BORROWING_ITEM_STATUS.ACTIVE,
+                },
+            },
+            { $lookup: { from: 'assets', localField: 'assetId', foreignField: '_id', as: 'asset' } },
+            { $unwind: { path: '$asset', preserveNullAndEmptyArrays: true } },
+            {
+                $group: {
+                    _id: { $ifNull: ['$partnerName', 'Chưa xác định'] },
+                    machines: { $sum: 1 },
+                    assetValue: { $sum: { $ifNull: ['$asset.purchasePrice', 0] } },
                     nearestDue: { $min: '$expectedReturnTime' },
                     overdue: {
                         $sum: {
@@ -527,6 +733,14 @@ export const getBorrowingBatchStats = async (req: Request, res: Response, next: 
     const needsInfoBatches = openBatches.filter(
         (batch) => batch.partnerName === 'Chưa xác định' || !batch.expectedReturnTime
     );
+    const outboundOverdueBatches = outboundOpenBatches.filter(
+        (batch) =>
+            [BORROWING_BATCH_STATUS.ACTIVE, BORROWING_BATCH_STATUS.PARTIALLY_RETURNED].includes(
+                batch.status as BORROWING_BATCH_STATUS
+            ) &&
+            batch.expectedReturnTime &&
+            new Date(batch.expectedReturnTime) < now
+    );
 
     return sendSuccess(
         res,
@@ -542,6 +756,23 @@ export const getBorrowingBatchStats = async (req: Request, res: Response, next: 
                 nearestDue: row.nearestDue ?? null,
                 overdue: row.overdue,
             })),
+            outbound: {
+                activeMachines: outboundByPartner.reduce((sum, row) => sum + row.machines, 0),
+                assetValue: outboundByPartner.reduce((sum, row) => sum + Number(row.assetValue || 0), 0),
+                partnerCount: outboundByPartner.length,
+                openBatches: outboundOpenBatches.length,
+                pendingApprovalBatches: outboundOpenBatches.filter(
+                    (batch) => batch.status === BORROWING_BATCH_STATUS.PENDING_APPROVAL
+                ).length,
+                overdueBatches: outboundOverdueBatches.length,
+                byPartner: outboundByPartner.map((row) => ({
+                    partnerName: row._id,
+                    machines: row.machines,
+                    assetValue: Number(row.assetValue || 0),
+                    nearestDue: row.nearestDue ?? null,
+                    overdue: row.overdue,
+                })),
+            },
         },
         'Lay tong quan may muon / thue thanh cong'
     );
@@ -577,20 +808,81 @@ export const updateBorrowingBatch = async (req: Request, res: Response, next: Ne
 
     const batch = await BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } });
     if (!batch) throw new NotFoundError('Khong tim thay lo muon / thue');
-    if (batch.status === 'returned' || batch.status === 'cancelled') {
+    if (batch.status === BORROWING_BATCH_STATUS.RETURNED || batch.status === BORROWING_BATCH_STATUS.CANCELLED) {
         throw new BadRequestError('Lo da dong, khong the sua thong tin');
+    }
+    const direction = resolveBorrowingDirection(batch.direction, batch.type);
+    if (
+        direction === BORROWING_DIRECTION.OUTBOUND &&
+        ![
+            BORROWING_BATCH_STATUS.DRAFT,
+            BORROWING_BATCH_STATUS.REJECTED,
+            BORROWING_BATCH_STATUS.ACTIVE,
+            BORROWING_BATCH_STATUS.PARTIALLY_RETURNED,
+        ].includes(batch.status as BORROWING_BATCH_STATUS)
+    ) {
+        throw new BadRequestError('Khong the sua thong tin lo trong luc cho duyet hoac da duoc duyet');
     }
 
     const nextPartnerName = trimText(req.body.partnerName);
     if (nextPartnerName) batch.partnerName = nextPartnerName;
     if (req.body.contractNo !== undefined) batch.contractNo = trimText(req.body.contractNo);
+    if (req.body.contactName !== undefined) batch.contactName = trimText(req.body.contactName);
+    if (req.body.contactPhone !== undefined) batch.contactPhone = trimText(req.body.contactPhone);
+    if (req.body.partnerAddress !== undefined) batch.partnerAddress = trimText(req.body.partnerAddress);
+    if (req.body.purpose !== undefined) batch.purpose = trimText(req.body.purpose);
     if (req.body.area !== undefined) batch.area = trimText(req.body.area);
     if (req.body.expectedReturnTime !== undefined) {
-        batch.expectedReturnTime = req.body.expectedReturnTime ? new Date(req.body.expectedReturnTime) : undefined;
+        const expectedReturnTime = req.body.expectedReturnTime ? new Date(req.body.expectedReturnTime) : undefined;
+        const referenceTime = new Date(batch.handedOverAt || batch.borrowTime);
+        if (
+            direction === BORROWING_DIRECTION.OUTBOUND &&
+            expectedReturnTime &&
+            (!Number.isFinite(expectedReturnTime.getTime()) || expectedReturnTime <= referenceTime)
+        ) {
+            throw new BadRequestError('Han nhan lai phai sau thoi gian ban giao');
+        }
+        batch.expectedReturnTime = expectedReturnTime;
+    }
+    if (req.body.plannedQuantity !== undefined) {
+        if (
+            direction === BORROWING_DIRECTION.OUTBOUND &&
+            ![BORROWING_BATCH_STATUS.DRAFT, BORROWING_BATCH_STATUS.REJECTED].includes(
+                batch.status as BORROWING_BATCH_STATUS
+            ) &&
+            Number(req.body.plannedQuantity) !== Number(batch.plannedQuantity)
+        ) {
+            throw new BadRequestError('Khong the doi so luong lo sau khi da gui duyet');
+        }
+        const counts = await getBorrowingBatchCounts([batchId]);
+        const selectedCount = counts.get(batchId)?.selectedCount ?? 0;
+        if (Number(req.body.plannedQuantity) < selectedCount) {
+            throw new BadRequestError(`So luong du kien khong duoc nho hon ${selectedCount} may da chon`);
+        }
+        batch.plannedQuantity = Number(req.body.plannedQuantity);
     }
     if (req.body.note !== undefined) batch.note = trimText(req.body.note);
     batch.set('updatedBy', userId);
     await batch.save();
+
+    if (direction === BORROWING_DIRECTION.OUTBOUND) {
+        await Borrowing.updateMany(
+            {
+                batchId,
+                direction: BORROWING_DIRECTION.OUTBOUND,
+                isDeleted: { $ne: true },
+            },
+            {
+                $set: {
+                    partnerName: batch.partnerName,
+                    expectedReturnTime: batch.expectedReturnTime,
+                    purpose: batch.purpose,
+                    location: batch.partnerAddress,
+                    note: batch.note,
+                },
+            }
+        );
+    }
 
     const [enriched] = await enrichBorrowingBatches([
         await applyPopulate(BorrowingBatch.findById(batchId), WORKFLOW_POPULATE.borrowingBatch),
@@ -640,6 +932,9 @@ export const receiveBorrowingBatchByQr = async (req: Request, res: Response, nex
         await session.withTransaction(async () => {
             const batch = await BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } }).session(session);
             if (!batch) throw new NotFoundError('Khong tim thay lo muon / thue');
+            if (resolveBorrowingDirection(batch.direction, batch.type) === BORROWING_DIRECTION.OUTBOUND) {
+                throw new BadRequestError('Lo cho muon khong su dung chuc nang nhan may bang QR tam');
+            }
             if (publicId && !batch.qrBatchId) throw new BadRequestError('Lo nay chua co lo tem QR tam');
             if (batch.status === 'returned' || batch.status === 'cancelled') {
                 throw new BadRequestError('Lo muon / thue nay da dong, khong the nhan them may');
@@ -713,6 +1008,7 @@ export const receiveBorrowingBatchByQr = async (req: Request, res: Response, nex
                         batchId: batch._id,
                         qrLabelId: label?._id,
                         type: batch.type,
+                        direction: BORROWING_DIRECTION.INBOUND,
                         partnerName: batch.partnerName,
                         partnerMachineCode: trimText(req.body.partnerMachineCode),
                         borrowTime: batch.borrowTime,
@@ -778,6 +1074,9 @@ export const receiveBorrowingBatchBulk = async (req: Request, res: Response, nex
         await session.withTransaction(async () => {
             const batch = await BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } }).session(session);
             if (!batch) throw new NotFoundError('Khong tim thay lo muon / thue');
+            if (resolveBorrowingDirection(batch.direction, batch.type) === BORROWING_DIRECTION.OUTBOUND) {
+                throw new BadRequestError('Lo cho muon chi them may Hai Dang da co trong danh muc');
+            }
             if (batch.status === 'returned' || batch.status === 'cancelled') {
                 throw new BadRequestError('Lo muon / thue nay da dong, khong the nhan them may');
             }
@@ -818,6 +1117,7 @@ export const receiveBorrowingBatchBulk = async (req: Request, res: Response, nex
                             assetId: asset._id,
                             batchId: batch._id,
                             type: batch.type,
+                            direction: BORROWING_DIRECTION.INBOUND,
                             partnerName: batch.partnerName,
                             partnerMachineCode: row.partnerMachineCode,
                             borrowTime: batch.borrowTime,
@@ -861,6 +1161,11 @@ export const receiveBorrowingBatchBulk = async (req: Request, res: Response, nex
 
 export const bulkReturnBorrowingBatch = async (req: Request, res: Response, next: NextFunction) => {
     const batchId = getParamValue(req.params.id);
+    const currentBatch = await BorrowingBatch.findOne({ _id: batchId, isDeleted: { $ne: true } });
+    if (!currentBatch) throw new NotFoundError('Khong tim thay lo muon / thue');
+    if (resolveBorrowingDirection(currentBatch.direction, currentBatch.type) === BORROWING_DIRECTION.OUTBOUND) {
+        return returnOutboundBorrowingBatch(req, res, currentBatch, req.body.items);
+    }
     const userId = getUserId(req);
     const returnTime = req.body.returnTime;
     const items = req.body.items as Array<{
@@ -1011,6 +1316,7 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
     const item = await borrowingRepository.create({
         assetId: req.body.assetId,
         type: req.body.type,
+        direction: req.body.type === 'internal' ? BORROWING_DIRECTION.INTERNAL : BORROWING_DIRECTION.INBOUND,
         borrowerId: undefined,
         borrowerName: req.body.type === 'internal' ? trimText(req.body.borrowerName) : undefined,
         partnerName: req.body.type === 'internal' ? undefined : trimText(req.body.partnerName),
@@ -1043,7 +1349,13 @@ export const createBorrowing = async (req: Request, res: Response, next: NextFun
             actionType: 'borrowing',
             actionId: String(createdItem._id),
             title: 'Giao dịch mới',
-            message: `${actorName} đã tạo giao dịch ${createdItem.type === 'internal' ? 'nội bộ' : 'cho thuê'} cho ${assetName}`,
+            message: `${actorName} đã tạo giao dịch ${
+                createdItem.type === 'internal'
+                    ? 'mượn nội bộ'
+                    : createdItem.type === 'rental'
+                      ? 'thuê máy từ đối tác'
+                      : 'mượn máy từ đối tác'
+            } cho ${assetName}`,
         },
         { excludeUserIds: [req.userId] }
     );
@@ -1064,6 +1376,10 @@ export const returnBorrowing = async (req: Request, res: Response, next: NextFun
     if (!currentItem) throw new NotFoundError('Khong tim thay giao dich thiet bi');
     if (currentItem.status !== 'active') {
         throw new BadRequestError('Chi co the tra thiet bi cho giao dich dang hoat dong');
+    }
+
+    if (resolveBorrowingDirection(currentItem.direction, currentItem.type) === BORROWING_DIRECTION.OUTBOUND) {
+        throw new BadRequestError('May cho doi tac muon phai duoc nhan lai trong chi tiet lo ban giao');
     }
 
     const item = await borrowingRepository.updateById(borrowingId, {

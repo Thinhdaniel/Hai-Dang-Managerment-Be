@@ -180,7 +180,9 @@ const applyStatusToMaintenanceAssets = async (
             mode === 'maintenance'
                 ? { status: ASSET_STATUS.MAINTENANCE }
                 : { status: getNextAssetStatus(current), lastMaintenanceDate };
-        const next = await Asset.findByIdAndUpdate(id, patch, { returnDocument: 'after' }).populate('brandId').populate('plantId');
+        const next = await Asset.findByIdAndUpdate(id, patch, { returnDocument: 'after' })
+            .populate('brandId')
+            .populate('plantId');
         if (next) updated.push(next);
     }
     return updated;
@@ -333,13 +335,16 @@ export const createMaintenance = async (req: Request, res: Response, next: NextF
 
     if (
         assets.some((a) =>
-            [ASSET_STATUS.RETURNED_TO_PARTNER, ASSET_STATUS.PENDING_DISPOSAL, ASSET_STATUS.DISPOSED].includes(
-                a.status as ASSET_STATUS
-            )
+            [
+                ASSET_STATUS.LOANED_OUT,
+                ASSET_STATUS.RETURNED_TO_PARTNER,
+                ASSET_STATUS.PENDING_DISPOSAL,
+                ASSET_STATUS.DISPOSED,
+            ].includes(a.status as ASSET_STATUS)
         )
     ) {
         throw new BadRequestError(
-            'Co thiet bi da dong hoac dang vao quy trinh thanh ly, khong the tao phieu bao tri moi'
+            'Co thiet bi dang cho doi tac muon, da dong hoac dang vao quy trinh thanh ly, khong the tao phieu bao tri moi'
         );
     }
 

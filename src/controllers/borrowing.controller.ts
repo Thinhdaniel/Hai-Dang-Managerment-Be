@@ -58,6 +58,34 @@ export const bulkReturnBorrowingBatch = asyncHandler(async (req: Request, res: R
     return await borrowingService.bulkReturnBorrowingBatch(req, res, next);
 });
 
+export const addOutboundBorrowingAssets = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.addOutboundBorrowingAssets(req, res, next);
+});
+
+export const removeOutboundBorrowingAsset = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.removeOutboundBorrowingAsset(req, res, next);
+});
+
+export const submitOutboundBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.submitOutboundBorrowingBatch(req, res, next);
+});
+
+export const approveOutboundBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.approveOutboundBorrowingBatch(req, res, next);
+});
+
+export const rejectOutboundBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.rejectOutboundBorrowingBatch(req, res, next);
+});
+
+export const confirmOutboundHandover = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.confirmOutboundHandover(req, res, next);
+});
+
+export const cancelOutboundBorrowingBatch = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    return await borrowingService.cancelOutboundBorrowingBatch(req, res, next);
+});
+
 export const returnBorrowing = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     return await borrowingService.returnBorrowing(req, res, next);
 });

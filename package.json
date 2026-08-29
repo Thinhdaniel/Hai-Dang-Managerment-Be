@@ -19,6 +19,8 @@
     "ai:quality-gate": "npm run ai:policy-check && npm run ai:regression -- --max-bad 0 --max-p95-ms 45000",
     "test:briefing": "tsx --test src/services/__tests__/executive-briefing.helpers.test.ts src/services/__tests__/ai-provider-json-retry.test.ts",
     "test:asset-search": "tsx --test src/utils/__tests__/assetSearch.test.ts",
+    "test:borrowing": "tsx --test src/validations/__tests__/borrowing-outbound.test.ts src/utils/__tests__/borrowingHandoverXlsx.test.ts",
+    "migrate:borrowing-direction": "node scripts/backfill-borrowing-directions.mjs",
     "test:production": "tsx --test src/services/__tests__/production.helpers.test.ts src/services/__tests__/production-price.helpers.test.ts src/services/__tests__/production-monitor.helpers.test.ts src/services/__tests__/production-board.helpers.test.ts src/services/__tests__/production-forecast.helpers.test.ts src/services/__tests__/production-export.service.test.ts src/services/__tests__/production-opening-balance.helpers.test.ts src/services/__tests__/production-qc-opening-balance.helpers.test.ts src/services/__tests__/production-report.helpers.test.ts src/services/__tests__/production-report-export.service.test.ts src/services/__tests__/production-reminder.helpers.test.ts src/services/__tests__/production-qc-report.helpers.test.ts src/services/__tests__/production-access.service.test.ts",
     "cleanup:dry": "node scripts/data-cleanup-dry-run.mjs",
     "cleanup:apply": "node scripts/data-cleanup-apply.mjs"

@@ -25,6 +25,7 @@ const FINAL_ITEM_STATUSES = [
     ASSET_DISPOSAL_ITEM_STATUS.CANCELLED,
 ];
 const ASSET_DISPOSAL_BLOCKED_STATUSES = [
+    ASSET_STATUS.LOANED_OUT,
     ASSET_STATUS.PENDING_DISPOSAL,
     ASSET_STATUS.DISPOSED,
     ASSET_STATUS.RETURNED_TO_PARTNER,
@@ -278,8 +279,14 @@ const addAssetToBatch = async (asset: any, batch: any, req: Request, overrides: 
         throw new BadRequestError('May muon/thue khong duoc dua vao quy trinh thanh ly tai san cong ty');
     }
     assertAssetBelongsToBatchPlant(asset, batch);
-    if (asset.status === ASSET_STATUS.DISPOSED || asset.status === ASSET_STATUS.RETURNED_TO_PARTNER) {
-        throw new BadRequestError('May da dong vong doi, khong the dua vao dot thanh ly moi');
+    if (
+        [ASSET_STATUS.LOANED_OUT, ASSET_STATUS.DISPOSED, ASSET_STATUS.RETURNED_TO_PARTNER].includes(
+            asset.status as ASSET_STATUS
+        )
+    ) {
+        throw new BadRequestError(
+            'May dang cho doi tac muon hoac da dong vong doi, khong the dua vao dot thanh ly moi'
+        );
     }
 
     const existingInBatch = await AssetDisposalItem.findOne({

@@ -72,6 +72,7 @@ const styleRangeBorder = (ws: ExcelJS.Worksheet, fromRow: number, toRow: number,
 export const generateBorrowingHandoverXlsx = async (detail: any): Promise<Buffer> => {
     const batch = detail.batch ?? {};
     const items: any[] = Array.isArray(detail.items) ? detail.items : [];
+    const outbound = batch.direction === 'outbound';
     const activeItems = items.filter((item) => item.status === 'active');
     const returnedItems = items.filter((item) => item.status === 'returned');
 
@@ -106,7 +107,7 @@ export const generateBorrowingHandoverXlsx = async (detail: any): Promise<Buffer
     ws.views = [{ showGridLines: false }];
 
     mergeValue(ws, 'A1:E1', 'CÔNG TY TNHH MAY XUẤT KHẨU HẢI ĐĂNG', { font: { name: FONT, size: 11, bold: true } });
-    mergeValue(ws, 'A2:E2', 'Địa chỉ CS1: Khu 23, Xã Thanh Ba, Tỉnh Phú Thọ', {
+    mergeValue(ws, 'A2:E2', `Cơ sở lập biên bản: ${batch.plant?.name || 'Chưa xác định'}`, {
         font: { name: FONT, size: 9.5, italic: true },
     });
     mergeValue(ws, 'F1:I1', `Mã lô: ${text(batch.code)}`, {
@@ -118,17 +119,31 @@ export const generateBorrowingHandoverXlsx = async (detail: any): Promise<Buffer
         alignment: { horizontal: 'right', vertical: 'middle' },
     });
 
-    mergeValue(ws, 'A4:I4', 'BIÊN BẢN BÀN GIAO MÁY MƯỢN / THUÊ', {
+    mergeValue(ws, 'A4:I4', outbound ? 'BIÊN BẢN GIAO NHẬN MÁY CHO MƯỢN' : 'BIÊN BẢN BÀN GIAO MÁY MƯỢN / THUÊ', {
         font: { name: FONT, size: 15, bold: true },
         alignment: { horizontal: 'center', vertical: 'middle' },
     });
     ws.getRow(4).height = 25;
 
     setInfo(ws, 6, 'A6:B6', 'C6:E6', 'Đối tác:', text(batch.partnerName));
-    setInfo(ws, 6, 'F6:G6', 'H6:I6', 'Loại:', TYPE_LABEL[batch.type] || text(batch.type));
+    setInfo(
+        ws,
+        6,
+        'F6:G6',
+        'H6:I6',
+        'Loại:',
+        outbound ? 'Hải Đăng cho đối tác mượn' : TYPE_LABEL[batch.type] || text(batch.type)
+    );
     setInfo(ws, 7, 'A7:B7', 'C7:E7', 'Số hợp đồng / biên bản:', text(batch.contractNo));
-    setInfo(ws, 7, 'F7:G7', 'H7:I7', 'Cơ sở / khu vực:', `${batch.plant?.name || '-'}${batch.area ? ` — ${batch.area}` : ''}`);
-    setInfo(ws, 8, 'A8:B8', 'C8:E8', 'Ngày nhận máy:', formatDateTime(batch.borrowTime));
+    setInfo(
+        ws,
+        7,
+        'F7:G7',
+        'H7:I7',
+        'Cơ sở / khu vực:',
+        `${batch.plant?.name || '-'}${batch.area ? ` — ${batch.area}` : ''}`
+    );
+    setInfo(ws, 8, 'A8:B8', 'C8:E8', outbound ? 'Ngày giao máy:' : 'Ngày nhận máy:', formatDateTime(batch.borrowTime));
     setInfo(ws, 8, 'F8:G8', 'H8:I8', 'Hạn trả dự kiến:', formatDateTime(batch.expectedReturnTime));
     setInfo(
         ws,
@@ -136,24 +151,48 @@ export const generateBorrowingHandoverXlsx = async (detail: any): Promise<Buffer
         'A9:B9',
         'C9:E9',
         'Số máy:',
-        `${items.length} máy (đang giữ ${activeItems.length}, đã trả ${returnedItems.length})`
+        outbound
+            ? `${items.length} máy (đang ở đối tác ${activeItems.length}, đã nhận lại ${returnedItems.length})`
+            : `${items.length} máy (đang giữ ${activeItems.length}, đã trả ${returnedItems.length})`
     );
     setInfo(ws, 9, 'F9:G9', 'H9:I9', 'Ghi chú:', text(batch.note));
-    styleRangeBorder(ws, 6, 9, 1, 9);
+    setInfo(ws, 10, 'A10:B10', 'C10:E10', 'Địa chỉ đối tác:', text(batch.partnerAddress));
+    setInfo(
+        ws,
+        10,
+        'F10:G10',
+        'H10:I10',
+        'Người liên hệ:',
+        [batch.contactName, batch.contactPhone].filter(Boolean).join(' — ') || '-'
+    );
+    setInfo(ws, 11, 'A11:B11', 'C11:I11', 'Mục đích:', text(batch.purpose));
+    styleRangeBorder(ws, 6, 11, 1, 9);
 
-    const tableHeaderRow = 11;
+    const tableHeaderRow = 13;
     ws.pageSetup.printTitlesRow = `${tableHeaderRow}:${tableHeaderRow}`;
-    const headers = [
-        'STT',
-        'Mã máy HD',
-        'Tên máy / Nhãn hiệu',
-        'Model / Serial',
-        'Mã máy đối tác',
-        'Ngày nhận',
-        'Tình trạng lúc nhận',
-        'Ngày trả',
-        'Tình trạng khi trả',
-    ];
+    const headers = outbound
+        ? [
+              'STT',
+              'Mã máy Hải Đăng',
+              'Tên máy / Nhãn hiệu',
+              'Model / Serial',
+              'Cơ sở chủ quản',
+              'Ngày giao',
+              'Tình trạng / Phụ kiện khi giao',
+              'Ngày nhận lại',
+              'Tình trạng khi nhận lại',
+          ]
+        : [
+              'STT',
+              'Mã máy HD',
+              'Tên máy / Nhãn hiệu',
+              'Model / Serial',
+              'Mã máy đối tác',
+              'Ngày nhận',
+              'Tình trạng lúc nhận',
+              'Ngày trả',
+              'Tình trạng khi trả',
+          ];
     headers.forEach((header, index) => {
         const current = ws.getRow(tableHeaderRow).getCell(index + 1);
         current.value = header;
@@ -171,17 +210,32 @@ export const generateBorrowingHandoverXlsx = async (detail: any): Promise<Buffer
         const modelSerial = [asset.model, asset.serial].filter(Boolean).join(' / ') || '-';
         const row = ws.getRow(rowIndex);
         row.height = 32;
-        const values: Array<string | number> = [
-            index + 1,
-            text(asset.machineCode),
-            brand ? `${text(asset.name)}\n(Nhãn: ${brand})` : text(asset.name),
-            modelSerial,
-            text(item.partnerMachineCode),
-            formatDate(item.borrowTime),
-            text(item.receiveCondition || item.receiveNote),
-            item.returnTime ? formatDate(item.returnTime) : 'Đang giữ',
-            text(item.returnCondition || item.returnNote),
-        ];
+        const issueInfo = [item.issueCondition, ...(item.accessories || []).map((value: string) => `PK: ${value}`)]
+            .filter(Boolean)
+            .join('\n');
+        const values: Array<string | number> = outbound
+            ? [
+                  index + 1,
+                  text(asset.machineCode),
+                  brand ? `${text(asset.name)}\n(Nhãn: ${brand})` : text(asset.name),
+                  modelSerial,
+                  `${asset.plant?.name || batch.plant?.name || '-'}${asset.area ? ` — ${asset.area}` : ''}`,
+                  formatDate(item.borrowTime),
+                  text(issueInfo || item.issueNote),
+                  item.returnTime ? formatDate(item.returnTime) : 'Đang ở đối tác',
+                  text(item.returnCondition || item.returnNote),
+              ]
+            : [
+                  index + 1,
+                  text(asset.machineCode),
+                  brand ? `${text(asset.name)}\n(Nhãn: ${brand})` : text(asset.name),
+                  modelSerial,
+                  text(item.partnerMachineCode),
+                  formatDate(item.borrowTime),
+                  text(item.receiveCondition || item.receiveNote),
+                  item.returnTime ? formatDate(item.returnTime) : 'Đang giữ',
+                  text(item.returnCondition || item.returnNote),
+              ];
         values.forEach((value, valueIndex) => {
             const current = row.getCell(valueIndex + 1);
             current.value = value as ExcelJS.CellValue;
@@ -209,7 +263,9 @@ export const generateBorrowingHandoverXlsx = async (detail: any): Promise<Buffer
     mergeValue(
         ws,
         `A${totalRow}:I${totalRow}`,
-        `TỔNG CỘNG: ${items.length} máy — đang giữ ${activeItems.length}, đã trả ${returnedItems.length}`,
+        outbound
+            ? `TỔNG CỘNG: ${items.length} máy — đang ở đối tác ${activeItems.length}, đã nhận lại ${returnedItems.length}`
+            : `TỔNG CỘNG: ${items.length} máy — đang giữ ${activeItems.length}, đã trả ${returnedItems.length}`,
         {
             font: { name: FONT, size: 10, bold: true },
             alignment: { horizontal: 'right', vertical: 'middle' },
@@ -222,7 +278,9 @@ export const generateBorrowingHandoverXlsx = async (detail: any): Promise<Buffer
     mergeValue(
         ws,
         `A${rowIndex}:I${rowIndex + 1}`,
-        'Hai bên xác nhận số lượng và tình trạng máy như danh sách trên. Biên bản lập thành 02 bản, mỗi bên giữ 01 bản có giá trị như nhau. Máy không dán tem QR được nhận diện bằng serial và mã máy đối tác.',
+        outbound
+            ? 'Hai bên xác nhận số lượng, tình trạng và phụ kiện máy như danh sách trên. Biên bản lập thành 02 bản, mỗi bên giữ 01 bản có giá trị như nhau. Tem QR Hải Đăng trên máy là mã quản lý tài sản chính thức, đối tác không tự ý tháo, đổi hoặc chuyển sang máy khác.'
+            : 'Hai bên xác nhận số lượng và tình trạng máy như danh sách trên. Biên bản lập thành 02 bản, mỗi bên giữ 01 bản có giá trị như nhau. Máy không dán tem QR được nhận diện bằng serial và mã máy đối tác.',
         { font: { name: FONT, size: 9, italic: true }, alignment: { vertical: 'middle', wrapText: true } }
     );
 

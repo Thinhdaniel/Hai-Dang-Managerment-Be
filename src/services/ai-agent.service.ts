@@ -277,7 +277,7 @@ const maintenanceTickets = async (args: {
     };
 };
 
-// ===== Tool: MÁY MƯỢN/THUÊ ĐỐI TÁC (đang giữ máy của ai, quá hạn trả chưa) =====
+// ===== Tool: MÁY MƯỢN/THUÊ/CHO MƯỢN ĐỐI TÁC =====
 const borrowedMachines = async () => {
     const now = new Date();
     const [byPartner, openBatches] = await Promise.all([
@@ -285,7 +285,10 @@ const borrowedMachines = async () => {
             { $match: { isDeleted: { $ne: true }, status: 'active', type: { $in: ['external', 'rental'] } } },
             {
                 $group: {
-                    _id: { $ifNull: ['$partnerName', 'Chưa xác định'] },
+                    _id: {
+                        direction: { $cond: [{ $eq: ['$direction', 'outbound'] }, 'outbound', 'inbound'] },
+                        partner: { $ifNull: ['$partnerName', 'Chưa xác định'] },
+                    },
                     machines: { $sum: 1 },
                     nearestDue: { $min: '$expectedReturnTime' },
                     overdue: {
@@ -308,22 +311,35 @@ const borrowedMachines = async () => {
         ]),
         BorrowingBatch.find({
             isDeleted: { $ne: true },
-            status: { $in: ['draft', 'receiving', 'active', 'partially_returned'] },
+            status: { $in: ['draft', 'receiving', 'pending_approval', 'approved', 'active', 'partially_returned'] },
         })
-            .select('code partnerName expectedReturnTime')
+            .select('code type direction partnerName expectedReturnTime')
             .lean(),
     ]);
+    const partnerRows = byPartner.map((r: any) => ({
+        direction: r._id.direction,
+        partner: r._id.partner,
+        machines: r.machines,
+        nearestDue: r.nearestDue ?? null,
+        overdueMachines: r.overdue,
+    }));
+    const mapBatch = (b: any) => ({
+        code: b.code,
+        partner: b.partnerName,
+        direction: b.direction === 'outbound' ? 'outbound' : 'inbound',
+    });
     return {
-        totalMachines: byPartner.reduce((s: number, r: any) => s + r.machines, 0),
-        partners: byPartner.map((r: any) => ({
-            partner: r._id,
-            machines: r.machines,
-            nearestDue: r.nearestDue ?? null,
-            overdueMachines: r.overdue,
-        })),
+        totalMachines: partnerRows.reduce((sum: number, row: any) => sum + row.machines, 0),
+        inboundMachines: partnerRows
+            .filter((row: any) => row.direction === 'inbound')
+            .reduce((sum: number, row: any) => sum + row.machines, 0),
+        outboundMachines: partnerRows
+            .filter((row: any) => row.direction === 'outbound')
+            .reduce((sum: number, row: any) => sum + row.machines, 0),
+        partners: partnerRows,
         overdueBatches: openBatches
             .filter((b: any) => b.expectedReturnTime && new Date(b.expectedReturnTime) < now)
-            .map((b: any) => ({ code: b.code, partner: b.partnerName })),
+            .map(mapBatch),
         needsInfoBatches: openBatches
             .filter((b: any) => b.partnerName === 'Chưa xác định' || !b.expectedReturnTime)
             .map((b: any) => b.code),
@@ -641,7 +657,9 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
             const b = await borrowedMachines();
             return {
                 ai: {
-                    tongMayNgoai: b.totalMachines,
+                    tongMayLienQuanDoiTac: b.totalMachines,
+                    mayDangMuonThueCuaDoiTac: b.inboundMachines,
+                    mayHaiDangDangChoDoiTacMuon: b.outboundMachines,
                     theoDoiTac: b.partners,
                     loQuaHan: b.overdueBatches,
                     loThieuThongTin: b.needsInfoBatches,
@@ -2033,8 +2051,8 @@ const BASE_SYSTEM_PROMPT = [
     '- CAC TOOL draft_* chi tao DE XUAT HANH DONG co cau truc de mo form. KHONG tool nao duoc ghi DB. Luon noi ro nguoi dung phai mo form, kiem tra va bam xac nhan.',
     '',
     'TOOL MAY MOC:',
-    '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|storage|pending_disposal|disposed|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke NHIEU may theo bo loc. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
-    '  ⚠ MAP TRANG THAI CHINH XAC: "dang hoat dong / dang chay / su dung binh thuong" = status:["active"] DUY NHAT — TUYET DOI khong gop broken/borrowing/maintenance vao. "hong" = ["broken"], "dang bao tri/dang sua" = ["maintenance"], "dang cho muon" = ["borrowing"], "ton kho/ranh" = ["storage"], "chuan bi thanh ly" = ["pending_disposal"], "da thanh ly" = ["disposed"]. Cau hoi tong quat "bao nhieu may hoat dong" -> dung aggregate:"breakdown_by_status" de nguoi doc thay ro tung nhom, roi neu con so active.',
+    '- search_assets(args:{search?, status?:[active|maintenance|broken|borrowing|loaned_out|storage|pending_disposal|disposed|returned_to_partner], ownershipType?:[owned|partner_borrowed|rental], plantName?, brandName?, area?, flags?:[overdue_maintenance|mislocated|no_qr|not_scanned], aggregate?:count|sum_value|breakdown_by_status|breakdown_by_plant, limit?}): tim/dem/liet ke NHIEU may theo bo loc. May "ranh/khong dung" = status:["storage"]. Ten LOAI may o "search" (vd "1 kim"); ten HANG dung brandName (KHONG nhet vao search).',
+    '  ⚠ MAP TRANG THAI CHINH XAC: "dang hoat dong / dang chay / su dung binh thuong" = status:["active"] DUY NHAT — TUYET DOI khong gop broken/borrowing/loaned_out/maintenance vao. "hong" = ["broken"], "dang bao tri/dang sua" = ["maintenance"], "Hai Dang dang muon cua doi tac" = ["borrowing"], "Hai Dang dang cho doi tac muon" = ["loaned_out"], "ton kho/ranh" = ["storage"], "chuan bi thanh ly" = ["pending_disposal"], "da thanh ly" = ["disposed"]. Cau hoi tong quat "bao nhieu may hoat dong" -> dung aggregate:"breakdown_by_status" de nguoi doc thay ro tung nhom, roi neu con so active.',
     '  ⚠ PHAM VI SO HUU: neu KHONG chi dinh ownershipType, ket qua gom CA may Hai Dang lan may muon/thue doi tac dang active (Dashboard mac dinh CHI tinh may Hai Dang nen so co the LECH). Cau hoi dem TONG SO MAY chung chung ("toan he thong", "tat ca may") BAT BUOC noi ro trong cau tra loi co gom may muon/thue khong, vd "996 may toan he thong (gom ca may muon/thue doi tac)". Neu nguoi hoi ro y chi may cua cong ty -> them ownershipType:["owned"].',
     '  ⚠ KHONG duoc so sanh hoac tron so dem tu search_assets voi summary_metrics neu chua neu ro pham vi. Luon doc phamViDem/countScope trong ket qua tool va ghi pham vi ngay sau con so.',
     '- locate_asset(args:{query}): tra cuu 1 MAY CU THE theo MA may / SERIAL / TEN -> vi tri (co so quan ly + khu vuc + noi quet QR cuoi + co lech vi tri khong) + tinh trang + LENH DIEU CHUYEN lien quan. Dung khi hoi "may X dang o dau", "may serial ... co lenh dieu chuyen nao khong".',
@@ -2046,8 +2064,8 @@ const BASE_SYSTEM_PROMPT = [
     'TOOL BAO TRI (cap PHIEU — khac search_assets von dem MAY):',
     '- maintenance_tickets(args:{status?:pending|in_progress|completed|overdue|cancelled|open, overdue?:boolean, overdueDays?, repairMode?:internal|external, approvalPending?:boolean, plantName?, machineRef?, period?:week|month|all, limit?}): tra cuu PHIEU bao tri/sua chua. "phieu qua han/ton dong" -> overdue:true (dinh nghia: phieu con mo qua 7 ngay, doi bang overdueDays). "phieu cho duyet sua ngoai" -> approvalPending:true. "lich su sua may X" -> machineRef:"ma may". "phieu dang mo" -> status:"open". Tra kem breakdown theo trang thai + danh sach phieu (may, co so, so ngay mo, chi phi).',
     '',
-    'TOOL MAY MUON/THUE DOI TAC:',
-    '- borrowed_machines(): dang giu BAO NHIEU may cua doi tac nao, may/lo nao QUA HAN TRA, lo nao thieu thong tin. Dung khi hoi "dang muon may cua ai", "may thue den han tra chua", "may doi tac".',
+    'TOOL MAY MUON/THUE/CHO MUON DOI TAC:',
+    '- borrowed_machines(): tong hop ca may Hai Dang dang muon/thue cua doi tac va may Hai Dang dang cho doi tac muon. Dung khi hoi "dang muon may cua ai", "may thue den han tra chua", "dang cho doi tac nao muon may".',
     '',
     'TOOL VAT TU & KHO:',
     '- low_stock_materials(args:{limit?}): vat tu duoi dinh muc ton.',
@@ -2148,7 +2166,7 @@ const TOOL_LABEL: Record<ToolName, string> = {
     compare_cost: 'Mua vs Cấp phát',
     cost_by_plant: 'Chi phí theo cơ sở',
     maintenance_tickets: 'Phiếu bảo trì',
-    borrowed_machines: 'Máy mượn đối tác',
+    borrowed_machines: 'Máy mượn/cho mượn đối tác',
     summary_metrics: 'Tổng quan hệ thống',
 };
 

@@ -22,6 +22,7 @@ const STATUS_LABEL: Record<string, string> = {
     [ASSET_STATUS.MAINTENANCE]: 'Bảo trì',
     [ASSET_STATUS.BROKEN]: 'Lỗi / hỏng',
     [ASSET_STATUS.BORROWING]: 'Đang mượn',
+    [ASSET_STATUS.LOANED_OUT]: 'Đang cho đối tác mượn',
     [ASSET_STATUS.STORAGE]: 'Tồn kho',
     [ASSET_STATUS.PENDING_DISPOSAL]: 'Chuẩn bị thanh lý',
     [ASSET_STATUS.DISPOSED]: 'Đã thanh lý',
@@ -498,7 +499,7 @@ export const assetQueryTool = async (args: {
 };
 
 // Soạn nháp lệnh điều chuyển: phân giải máy theo mã/serial/QR + cơ sở đích (KHÔNG tạo lệnh).
-const TRANSFER_WARN_STATUSES = new Set(['maintenance', 'broken', 'borrowing']);
+const TRANSFER_WARN_STATUSES = new Set(['maintenance', 'broken', 'borrowing', 'loaned_out']);
 const resolveTransferDraft = async (
     refs: string[],
     toPlantName: string | undefined,

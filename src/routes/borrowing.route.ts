@@ -5,12 +5,16 @@ import { validateObjectId } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
 import { borrowingController } from '@/controllers';
 import {
+    addOutboundBorrowingAssetsSchema,
     bulkReturnBorrowingBatchSchema,
+    cancelOutboundBorrowingBatchSchema,
+    confirmOutboundHandoverSchema,
     createBorrowingBatchQrSchema,
     createBorrowingBatchSchema,
     createBorrowingSchema,
     receiveBorrowingBatchByQrSchema,
     receiveBorrowingBatchBulkSchema,
+    rejectOutboundBorrowingBatchSchema,
     returnBorrowingSchema,
     updateBorrowingBatchSchema,
 } from '@/validations/borrowing.validation';
@@ -75,6 +79,52 @@ router.post(
     validateObjectId,
     validator(bulkReturnBorrowingBatchSchema),
     borrowingController.bulkReturnBorrowingBatch
+);
+router.post(
+    '/batches/:id/outbound-assets',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    validator(addOutboundBorrowingAssetsSchema),
+    borrowingController.addOutboundBorrowingAssets
+);
+router.delete(
+    '/batches/:id/outbound-assets/:itemId',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    borrowingController.removeOutboundBorrowingAsset
+);
+router.post(
+    '/batches/:id/submit',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    borrowingController.submitOutboundBorrowingBatch
+);
+router.post(
+    '/batches/:id/approve',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    validateObjectId,
+    borrowingController.approveOutboundBorrowingBatch
+);
+router.post(
+    '/batches/:id/reject',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    validateObjectId,
+    validator(rejectOutboundBorrowingBatchSchema),
+    borrowingController.rejectOutboundBorrowingBatch
+);
+router.post(
+    '/batches/:id/confirm-handover',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectId,
+    validator(confirmOutboundHandoverSchema),
+    borrowingController.confirmOutboundHandover
+);
+router.post(
+    '/batches/:id/cancel',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    validateObjectId,
+    validator(cancelOutboundBorrowingBatchSchema),
+    borrowingController.cancelOutboundBorrowingBatch
 );
 
 router.post(
