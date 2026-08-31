@@ -86,6 +86,22 @@ assert.deepEqual(validateAssistantToolArgs('search_assets', { status: 'broken', 
 assert.equal(validateAssistantToolArgs('search_assets', { limit: 100 }).limit, 30);
 assert.equal(validateAssistantToolArgs('search_materials', { search: 'chỉ may', limit: 50 }).limit, 30);
 assert.equal(validateAssistantToolArgs('maintenance_tickets', { status: 'open', limit: 40 }).limit, 30);
+assert.deepEqual(
+    validateAssistantToolArgs('borrowed_machines', {
+        direction: 'outbound',
+        status: 'partially_returned',
+        dueState: 'overdue',
+        batchCode: 'LO-20260828-001',
+        limit: 100,
+    }),
+    {
+        direction: 'outbound',
+        status: 'partially_returned',
+        dueState: 'overdue',
+        batchCode: 'LO-20260828-001',
+        limit: 30,
+    }
+);
 assert.deepEqual(validateAssistantToolArgs('search_assets', { status: null, plantName: null }), {});
 assert.throws(() => validateAssistantToolArgs('cost_variance', { metric: 'made_up_cost' }));
 assert.throws(() => validateAssistantToolArgs('draft_transfer', { machineRefs: [] }));
@@ -137,6 +153,16 @@ assert.equal(redacted.includes('Bearer abc.def.ghi'), false);
 assert.equal(routeAssistantQuestion('Hôm nay có phiếu đề xuất cấp vật tư nào không?')?.tool, 'supply_requests');
 assert.equal(routeAssistantQuestion('So sánh chi phí mua và cấp phát tháng này.')?.tool, 'compare_cost');
 assert.equal(routeAssistantQuestion('Tạo lệnh điều chuyển máy URE-KASU-HD-001 sang Cơ Sở 2.')?.tool, 'draft_transfer');
+const borrowingRoute = routeAssistantQuestion('Hiện có bao nhiêu máy đang cho đối tác mượn?');
+assert.equal(borrowingRoute?.tool, 'borrowed_machines');
+assert.equal(borrowingRoute?.args?.direction, 'outbound');
+assert.equal(borrowingRoute?.args?.status, 'active');
+assert.equal(
+    routeAssistantQuestion('Lô cho mượn LO-20260828-001 đã trả được bao nhiêu máy?')?.args?.batchCode,
+    'LO-20260828-001'
+);
+assert.equal(routeAssistantQuestion('Máy cho mượn nào đang quá hạn trả?')?.args?.dueState, 'overdue');
+assert.equal(routeAssistantQuestion('Máy đang mượn của đối tác có những máy nào?')?.args?.direction, 'inbound');
 assert.equal(routeAssistantQuestion('Tạo phiếu bảo trì máy URE-KASU-HD-001 sửa ngoài.')?.tool, 'draft_maintenance');
 assert.equal(
     routeAssistantQuestion('Tạo phiếu bảo trì máy URE-KASU-HD-001, bị bỏ mũi và kẹt chỉ, sửa nội bộ.')?.args

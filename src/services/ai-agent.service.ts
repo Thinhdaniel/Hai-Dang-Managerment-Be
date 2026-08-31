@@ -5,8 +5,6 @@ import Material from '@/models/Material';
 import InventoryStock from '@/models/InventoryStock';
 import DistributionRecord from '@/models/DistributionRecord';
 import Maintenance from '@/models/Maintenance';
-import Borrowing from '@/models/Borrowing';
-import BorrowingBatch from '@/models/BorrowingBatch';
 import Asset from '@/models/Asset';
 import Plant from '@/models/Plant';
 import { dashboardRepository } from '@/repositories/dashboard.repository';
@@ -54,6 +52,7 @@ import {
     supplierComparison,
 } from '@/services/ai-material-insight.service';
 import { locateAsset, transferOrders } from '@/services/ai-asset-tools.service';
+import { borrowingInsight } from '@/services/ai-borrowing-insight.service';
 import {
     analyzeMaterialRequests,
     listMaterialRequests,
@@ -274,75 +273,6 @@ const maintenanceTickets = async (args: {
             cost: t.cost || t.externalRepair?.actualCost || t.externalRepair?.estimateCost || undefined,
             description: String(t.description || '').slice(0, 80),
         })),
-    };
-};
-
-// ===== Tool: MÁY MƯỢN/THUÊ/CHO MƯỢN ĐỐI TÁC =====
-const borrowedMachines = async () => {
-    const now = new Date();
-    const [byPartner, openBatches] = await Promise.all([
-        Borrowing.aggregate([
-            { $match: { isDeleted: { $ne: true }, status: 'active', type: { $in: ['external', 'rental'] } } },
-            {
-                $group: {
-                    _id: {
-                        direction: { $cond: [{ $eq: ['$direction', 'outbound'] }, 'outbound', 'inbound'] },
-                        partner: { $ifNull: ['$partnerName', 'Chưa xác định'] },
-                    },
-                    machines: { $sum: 1 },
-                    nearestDue: { $min: '$expectedReturnTime' },
-                    overdue: {
-                        $sum: {
-                            $cond: [
-                                {
-                                    $and: [
-                                        { $ne: ['$expectedReturnTime', null] },
-                                        { $lt: ['$expectedReturnTime', now] },
-                                    ],
-                                },
-                                1,
-                                0,
-                            ],
-                        },
-                    },
-                },
-            },
-            { $sort: { machines: -1 } },
-        ]),
-        BorrowingBatch.find({
-            isDeleted: { $ne: true },
-            status: { $in: ['draft', 'receiving', 'pending_approval', 'approved', 'active', 'partially_returned'] },
-        })
-            .select('code type direction partnerName expectedReturnTime')
-            .lean(),
-    ]);
-    const partnerRows = byPartner.map((r: any) => ({
-        direction: r._id.direction,
-        partner: r._id.partner,
-        machines: r.machines,
-        nearestDue: r.nearestDue ?? null,
-        overdueMachines: r.overdue,
-    }));
-    const mapBatch = (b: any) => ({
-        code: b.code,
-        partner: b.partnerName,
-        direction: b.direction === 'outbound' ? 'outbound' : 'inbound',
-    });
-    return {
-        totalMachines: partnerRows.reduce((sum: number, row: any) => sum + row.machines, 0),
-        inboundMachines: partnerRows
-            .filter((row: any) => row.direction === 'inbound')
-            .reduce((sum: number, row: any) => sum + row.machines, 0),
-        outboundMachines: partnerRows
-            .filter((row: any) => row.direction === 'outbound')
-            .reduce((sum: number, row: any) => sum + row.machines, 0),
-        partners: partnerRows,
-        overdueBatches: openBatches
-            .filter((b: any) => b.expectedReturnTime && new Date(b.expectedReturnTime) < now)
-            .map(mapBatch),
-        needsInfoBatches: openBatches
-            .filter((b: any) => b.partnerName === 'Chưa xác định' || !b.expectedReturnTime)
-            .map((b: any) => b.code),
     };
 };
 
@@ -654,17 +584,29 @@ const executeTool = async (name: ToolName, rawArgs: unknown, context: AssistantC
             };
         }
         case 'borrowed_machines': {
-            const b = await borrowedMachines();
+            const b = await borrowingInsight(args || {});
             return {
                 ai: {
-                    tongMayLienQuanDoiTac: b.totalMachines,
-                    mayDangMuonThueCuaDoiTac: b.inboundMachines,
-                    mayHaiDangDangChoDoiTacMuon: b.outboundMachines,
+                    phamVi: b.scope,
+                    tongHop: b.summary,
+                    theoTrangThaiLo: b.byBatchStatus,
                     theoDoiTac: b.partners,
-                    loQuaHan: b.overdueBatches,
-                    loThieuThongTin: b.needsInfoBatches,
+                    lo: b.batches,
+                    may: b.machines,
+                    daRutGon: b.truncated,
                 },
-                render: { domain: 'asset', count: b.totalMachines, items: [], aggregates: { borrowedMachines: b } },
+                render: {
+                    domain: 'asset',
+                    count: b.summary.machineRecordCount,
+                    items: b.machines,
+                    aggregates: { borrowedMachines: b },
+                    appliedFilters: b.scope,
+                    followups: [
+                        'Xem các lô cho mượn đang chờ duyệt',
+                        'Máy cho mượn nào đã quá hạn trả?',
+                        'Lô gần nhất đã trả được bao nhiêu máy?',
+                    ],
+                },
             };
         }
         case 'cost_by_plant': {
@@ -1518,6 +1460,135 @@ const requestRoute = (q: string): { tool: ToolName; args: any } | null => {
     return null;
 };
 
+const extractBorrowingPartner = (question: string) => {
+    const patterns = [
+        /(?:cho|giao)\s+(?:công\s+ty|đối\s+tác|bên)\s+(.+?)\s+mượn/iu,
+        /(?:công\s+ty|đối\s+tác|bên)\s+(.+?)(?=\s+(?:đang|đã|còn|có|mượn|thuê|trả|giữ|quá\s+hạn|sắp)|[?.!,;]|$)/iu,
+        /(?:mượn|thuê)\s+(?:của|từ)\s+(?:(?:công\s+ty|đối\s+tác|bên)\s+)?(.+?)(?=\s+(?:từ|đến|trong|tháng|tuần|hôm)|[?.!,;]|$)/iu,
+        /(?:của|từ)\s+(?:công\s+ty|đối\s+tác|bên)\s+(.+?)(?=\s+(?:đang|đã|còn|có|mượn|thuê|trả|giữ)|[?.!,;]|$)/iu,
+    ];
+    for (const pattern of patterns) {
+        const candidate = question.match(pattern)?.[1]?.trim();
+        if (!candidate) continue;
+        if (!['nao', 'ai', 'gi', 'bao nhieu'].includes(normalize(candidate))) return candidate;
+    }
+    return undefined;
+};
+
+const borrowingRoute = (q: string): { tool: ToolName; args: any } | null => {
+    const n = normalize(q);
+    const batchCode = q.match(/\bLO-\d{6,8}-\d+\b/i)?.[0]?.toUpperCase();
+    const machineRef = extractMachineRefs(q).find((ref) => ref.toUpperCase() !== batchCode && !/^LO-/i.test(ref));
+    const outboundSignal =
+        n.includes('cho muon') ||
+        /\bcho\s+.{1,80}\s+muon\b/.test(n) ||
+        n.includes('cho doi tac muon') ||
+        n.includes('doi tac muon') ||
+        n.includes('doi tac dang giu') ||
+        n.includes('may o ben doi tac') ||
+        (n.includes('ben doi tac') && n.includes('may')) ||
+        ((n.includes('doi tac') || n.includes('cong ty') || n.includes('ben ')) && n.includes('giu may')) ||
+        (n.includes('doi tac') &&
+            (n.includes('tra') || n.includes('hoan tra') || n.includes('thu hoi')) &&
+            (n.includes('may') || n.includes('lo'))) ||
+        (n.includes('ban giao') && n.includes('doi tac'));
+    const inboundSignal =
+        (!n.includes('cho muon') && n.includes('muon cua')) ||
+        n.includes('muon tu') ||
+        n.includes('thue cua') ||
+        n.includes('thue tu') ||
+        n.includes('may muon') ||
+        n.includes('may thue') ||
+        n.includes('lo muon') ||
+        n.includes('lo thue');
+    const hasSignal =
+        Boolean(batchCode) ||
+        ((n.includes('muon') || n.includes('thue')) &&
+            (n.includes('may') || n.includes('thiet bi') || n.includes('lo'))) ||
+        (n.includes('ban giao') && n.includes('doi tac') && n.includes('may')) ||
+        n.includes('doi tac dang giu may') ||
+        n.includes('may o ben doi tac') ||
+        (n.includes('ben doi tac') && n.includes('may')) ||
+        ((n.includes('doi tac') || n.includes('cong ty') || n.includes('ben ')) && n.includes('giu may')) ||
+        (n.includes('doi tac') &&
+            (n.includes('tra') || n.includes('hoan tra') || n.includes('thu hoi')) &&
+            (n.includes('may') || n.includes('lo'))) ||
+        n.includes('han tra may');
+    if (!hasSignal) return null;
+
+    const dateSelection = detectAssistantDateSelection(q);
+    const direction =
+        outboundSignal && inboundSignal ? 'all' : outboundSignal ? 'outbound' : inboundSignal ? 'inbound' : 'all';
+    const status =
+        n.includes('cho duyet') || n.includes('cho phe duyet') || n.includes('doi duyet')
+            ? 'pending_approval'
+            : n.includes('da duyet') ||
+                n.includes('da phe duyet') ||
+                n.includes('cho giao') ||
+                n.includes('chua giao') ||
+                n.includes('cho ban giao') ||
+                n.includes('doi giao')
+              ? 'approved'
+              : n.includes('dang tiep nhan') || n.includes('nhan chua du')
+                ? 'receiving'
+                : n.includes('tra mot phan') || n.includes('hoan tra mot phan') || n.includes('thu hoi mot phan')
+                  ? 'partially_returned'
+                  : n.includes('da tra') ||
+                      n.includes('tra du') ||
+                      n.includes('hoan tra') ||
+                      n.includes('da nhan lai') ||
+                      n.includes('nhan lai') ||
+                      n.includes('da thu hoi') ||
+                      n.includes('dong lo')
+                    ? 'returned'
+                    : n.includes('tu choi') || n.includes('bi bac')
+                      ? 'rejected'
+                      : n.includes('da huy') || n.includes('huy lo')
+                        ? 'cancelled'
+                        : n.includes('ban nhap') || n.includes('dang soan')
+                          ? 'draft'
+                          : n.includes('dang cho muon') ||
+                              n.includes('dang cho doi tac muon') ||
+                              n.includes('dang muon') ||
+                              n.includes('chua tra') ||
+                              n.includes('da ban giao') ||
+                              n.includes('da giao') ||
+                              n.includes('da xuat cho muon') ||
+                              n.includes('dang giu') ||
+                              n.includes('o ben doi tac')
+                            ? 'active'
+                            : undefined;
+    const dueState =
+        n.includes('qua han') || n.includes('tre han') || n.includes('qua ngay tra') || n.includes('het han')
+            ? 'overdue'
+            : n.includes('sap den han') ||
+                n.includes('sap toi han') ||
+                n.includes('gan den ngay tra') ||
+                n.includes('7 ngay toi') ||
+                n.includes('den han trong tuan') ||
+                n.includes('tuan toi den han')
+              ? 'due_soon'
+              : n.includes('thieu han tra') || n.includes('chua co han tra') || n.includes('khong co han tra')
+                ? 'missing_due'
+                : undefined;
+    const hasPlant = /co so|\bc\.?\s*s\.?\s*\d/.test(n);
+
+    return {
+        tool: 'borrowed_machines',
+        args: {
+            direction,
+            status,
+            dueState,
+            batchCode,
+            machineRef,
+            partnerName: extractBorrowingPartner(q),
+            plantName: hasPlant ? q : undefined,
+            limit: 20,
+            ...dateSelection,
+        },
+    };
+};
+
 // Đoán tool đúng từ từ khóa (chỉ cho các mảng dữ liệu rõ ràng — KHÔNG đoán bừa câu hội thoại).
 const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     const n = normalize(q);
@@ -1526,6 +1597,8 @@ const classifyIntent = (q: string): { tool: ToolName; args: any } | null => {
     if (maintenanceDraft) return maintenanceDraft;
     const routedRequest = requestRoute(q);
     if (routedRequest) return routedRequest;
+    const routedBorrowing = borrowingRoute(q);
+    if (routedBorrowing) return routedBorrowing;
     // Soạn nháp lệnh điều chuyển (có mã máy + đích) — ưu tiên trước nhánh XEM danh sách lệnh.
     const draftRoute = transferDraftRoute(q);
     if (draftRoute) return draftRoute;
@@ -1669,6 +1742,8 @@ const forceRoute = (q: string): { tool: ToolName; args: any } | null => {
     if (maintenanceDraft) return maintenanceDraft;
     const routedRequest = requestRoute(q);
     if (routedRequest) return routedRequest;
+    const routedBorrowing = borrowingRoute(q);
+    if (routedBorrowing) return routedBorrowing;
     // Soạn nháp lệnh điều chuyển: chạy sẵn để trả thẻ "Mở form điều chuyển" ngay, không để model hỏi lại.
     const draftRoute = transferDraftRoute(q);
     if (draftRoute) return draftRoute;
@@ -1927,19 +2002,43 @@ const buildDeterministicAnswer = (render: ToolOutcome['render']): string | null 
     }
     if (a.borrowedMachines) {
         const b = a.borrowedMachines;
-        if (!b.totalMachines) return 'Hiện không giữ máy mượn/thuê nào của đối tác.';
-        const parts = b.partners
-            .slice(0, 4)
-            .map(
-                (p: any) =>
-                    `${p.partner} ${p.machines} máy${p.overdueMachines ? ` (⚠ ${p.overdueMachines} quá hạn)` : ''}`
-            )
-            .join('; ');
-        let s = `Đang giữ ${b.totalMachines} máy mượn/thuê của ${b.partners.length} đối tác: ${parts}.`;
-        if (b.overdueBatches?.length)
-            s += ` Lô quá hạn trả: ${b.overdueBatches.map((x: any) => `${x.code} (${x.partner})`).join(', ')}.`;
-        if (b.needsInfoBatches?.length) s += ` ${b.needsInfoBatches.length} lô còn thiếu thông tin đối tác/hạn trả.`;
-        return s;
+        const summary = b.summary || {};
+        const scope = b.scope?.label || 'máy mượn/thuê và máy cho đối tác mượn';
+        if (!summary.batchCount && !summary.machineRecordCount) {
+            return `Không tìm thấy lô hoặc máy phù hợp trong phạm vi: ${scope}.`;
+        }
+
+        let answer = `Phạm vi ${scope}: ${summary.batchCount || 0} lô; `;
+        if (b.scope?.direction === 'outbound') {
+            answer += `${summary.outboundActiveMachines || 0} máy Hải Đăng đang cho đối tác mượn`;
+        } else if (b.scope?.direction === 'inbound') {
+            answer += `${summary.inboundActiveMachines || 0} máy Hải Đăng đang mượn/thuê của đối tác`;
+        } else {
+            answer += `${summary.activeMachines || 0} máy đang giao dịch (${summary.inboundActiveMachines || 0} mượn/thuê vào, ${summary.outboundActiveMachines || 0} cho mượn ra)`;
+        }
+        if (summary.waitingHandoverMachines) answer += `; ${summary.waitingHandoverMachines} máy chờ giao`;
+        if (summary.returnedMachines) answer += `; ${summary.returnedMachines} máy đã trả`;
+        if (summary.overdueMachines) answer += `; ${summary.overdueMachines} máy quá hạn`;
+        if (summary.dueSoonMachines) answer += `; ${summary.dueSoonMachines} máy sắp đến hạn trong 7 ngày`;
+        answer += '.';
+
+        if (b.batches?.length) {
+            answer += ` Lô: ${b.batches
+                .slice(0, 4)
+                .map(
+                    (batch: any) =>
+                        `${batch.code} - ${batch.partner} (${batch.statusLabel}, ${batch.activeCount} đang giao${batch.returnedCount ? `, ${batch.returnedCount} đã trả` : ''}${batch.overdue ? ', quá hạn' : ''})`
+                )
+                .join('; ')}.`;
+        }
+        if ((b.scope?.batchCode || b.scope?.machineRef) && b.machines?.length) {
+            answer += ` Máy: ${b.machines
+                .slice(0, 8)
+                .map((machine: any) => `${machine.machineCode} (${machine.statusLabel})`)
+                .join(', ')}.`;
+        }
+        if (b.truncated) answer += ' Kết quả hiển thị đã được rút gọn; có thể hỏi theo mã lô, đối tác hoặc cơ sở.';
+        return answer;
     }
     if (a.costByPlant) {
         const c = a.costByPlant;
@@ -2065,7 +2164,12 @@ const BASE_SYSTEM_PROMPT = [
     '- maintenance_tickets(args:{status?:pending|in_progress|completed|overdue|cancelled|open, overdue?:boolean, overdueDays?, repairMode?:internal|external, approvalPending?:boolean, plantName?, machineRef?, period?:week|month|all, limit?}): tra cuu PHIEU bao tri/sua chua. "phieu qua han/ton dong" -> overdue:true (dinh nghia: phieu con mo qua 7 ngay, doi bang overdueDays). "phieu cho duyet sua ngoai" -> approvalPending:true. "lich su sua may X" -> machineRef:"ma may". "phieu dang mo" -> status:"open". Tra kem breakdown theo trang thai + danh sach phieu (may, co so, so ngay mo, chi phi).',
     '',
     'TOOL MAY MUON/THUE/CHO MUON DOI TAC:',
-    '- borrowed_machines(): tong hop ca may Hai Dang dang muon/thue cua doi tac va may Hai Dang dang cho doi tac muon. Dung khi hoi "dang muon may cua ai", "may thue den han tra chua", "dang cho doi tac nao muon may".',
+    '- borrowed_machines(args:{direction?:all|inbound|outbound, status?:open|draft|receiving|pending_approval|approved|active|partially_returned|returned|rejected|cancelled, dueState?:overdue|due_soon|missing_due, partnerName?, batchCode?, machineRef?, plantName?, period?:today|yesterday|week|month|all, startDate?, endDate?, limit?}): tra cuu CA LO va TUNG MAY trong luong muon/thue/cho muon doi tac.',
+    '  MAP CHIEU BAT BUOC: "Hai Dang muon/thue cua doi tac" = direction:"inbound"; "Hai Dang cho doi tac muon" = direction:"outbound". Khong duoc dao nguoc hai khai niem nay.',
+    '  MAP TRANG THAI LO: "cho duyet"=pending_approval; "da duyet/cho giao"=approved; "dang muon/dang cho muon"=active; "tra mot phan"=partially_returned; "da tra du"=returned. "Dang mo/chua ket thuc"=open.',
+    '  HAN TRA: "qua han"=dueState:"overdue"; "sap den han"=dueState:"due_soon" (7 ngay); "thieu han tra"=dueState:"missing_due".',
+    '  Khi co ma lo LO-... phai truyen batchCode. Khi hoi mot ma/serial may cu the phai truyen machineRef. Khi hoi doi tac/co so/khoang ngay phai giu dung bo loc partnerName/plantName/period.',
+    '  Ket qua summary la tong hop; batches cho biet so cho giao/dang giao/da tra cua tung lo; machines la danh sach may thuc te. Luon neu ro chieu giao dich va khong goi may outbound la "may Hai Dang dang giu".',
     '',
     'TOOL VAT TU & KHO:',
     '- low_stock_materials(args:{limit?}): vat tu duoi dinh muc ton.',

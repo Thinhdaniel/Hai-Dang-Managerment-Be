@@ -70,6 +70,7 @@ const PLANT_AWARE_TOOLS = new Set([
     'transfer_orders',
     'top_broken_assets',
     'maintenance_tickets',
+    'borrowed_machines',
     'draft_supply_request',
     'draft_purchase_request',
     'material_usage_by_plant',

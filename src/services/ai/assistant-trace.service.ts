@@ -4,8 +4,8 @@ import type { AssistantContext } from '@/services/ai/assistant-policy.service';
 import type { AssistantGroundingStatus } from '@/services/ai/assistant-grounding.service';
 import type { AssistantToolName } from '@/services/ai/assistant-tool-registry.service';
 
-export const ASSISTANT_PROMPT_VERSION = 'assistant-v4.0';
-export const ASSISTANT_TOOL_REGISTRY_VERSION = '2026-07-13-guided-actions';
+export const ASSISTANT_PROMPT_VERSION = 'assistant-v4.1-borrowing';
+export const ASSISTANT_TOOL_REGISTRY_VERSION = '2026-08-31-borrowing-insight';
 
 export type AssistantToolTraceInput = {
     tool: AssistantToolName;
