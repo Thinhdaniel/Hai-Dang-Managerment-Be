@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { MATERIAL_COST_TYPE_VALUES } from '@/constant/materialCostType';
+import { MATERIAL_REUSE_TRACKING_MODE, MATERIAL_REUSE_TRACKING_MODE_VALUES } from '@/constant/materialCustody';
 
 const MaterialSchema = new mongoose.Schema(
     {
@@ -20,6 +21,21 @@ const MaterialSchema = new mongoose.Schema(
         costType: {
             type: String,
             enum: MATERIAL_COST_TYPE_VALUES,
+        },
+        reuseTrackingMode: {
+            type: String,
+            enum: MATERIAL_REUSE_TRACKING_MODE_VALUES,
+            default: MATERIAL_REUSE_TRACKING_MODE.NONE,
+        },
+        defaultReturnDays: {
+            type: Number,
+            min: 0,
+            max: 3650,
+            default: 0,
+        },
+        conditionCheckRequired: {
+            type: Boolean,
+            default: false,
         },
         unit: {
             type: String,

@@ -42,6 +42,9 @@ export const serializeMaterial = (input: any) => {
         code: material?.code,
         category: material?.category,
         costType: material?.costType,
+        reuseTrackingMode: material?.reuseTrackingMode ?? 'none',
+        defaultReturnDays: material?.defaultReturnDays ?? 0,
+        conditionCheckRequired: material?.conditionCheckRequired === true,
         unit: material?.unit,
         description: material?.description,
         minStockLevel: material?.minStockLevel ?? 0,
@@ -411,6 +414,8 @@ const serializeDistributionRecordItem = (input: any) => {
         inventorySkipReason: item?.inventorySkipReason,
         adjustReason: item?.adjustReason,
         note: item?.note,
+        reuseTrackingMode: item?.reuseTrackingMode ?? material?.reuseTrackingMode ?? 'none',
+        custodyAssignmentId: toId(item?.custodyAssignmentId),
     };
 };
 
@@ -470,6 +475,12 @@ export const serializeDistributionRecord = (input: any) => {
         confirmedBy: confirmedBy ?? toId(distribution?.confirmedBy),
         confirmedAt: toIso(distribution?.confirmedAt),
         requesterName: distribution?.requesterName,
+        holderType: distribution?.holderType,
+        recipientId: toId(distribution?.recipientId),
+        holderCode: distribution?.holderCode,
+        holderName: distribution?.holderName,
+        usageCampaignId: toId(distribution?.usageCampaignId),
+        expectedReturnAt: toIso(distribution?.expectedReturnAt),
         targetDepartment: distribution?.targetDepartment,
         targetLine: distribution?.targetLine,
         note: distribution?.note,

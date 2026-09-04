@@ -22,6 +22,7 @@
     "test:asset-search": "tsx --test src/utils/__tests__/assetSearch.test.ts",
     "test:borrowing": "tsx --test src/validations/__tests__/borrowing-outbound.test.ts src/utils/__tests__/borrowingHandoverXlsx.test.ts src/utils/__tests__/borrowingTimeline.test.ts",
     "test:transfer": "tsx --test src/utils/__tests__/transferEligibility.test.ts",
+    "test:material-custody": "tsx --test src/services/__tests__/material-custody-reminder.helpers.test.ts src/utils/__tests__/generateMaterialCustodyXlsx.test.ts",
     "migrate:borrowing-direction": "node scripts/backfill-borrowing-directions.mjs",
     "test:production": "tsx --test src/services/__tests__/production.helpers.test.ts src/services/__tests__/production-price.helpers.test.ts src/services/__tests__/production-monitor.helpers.test.ts src/services/__tests__/production-board.helpers.test.ts src/services/__tests__/production-forecast.helpers.test.ts src/services/__tests__/production-export.service.test.ts src/services/__tests__/production-opening-balance.helpers.test.ts src/services/__tests__/production-qc-opening-balance.helpers.test.ts src/services/__tests__/production-report.helpers.test.ts src/services/__tests__/production-report-export.service.test.ts src/services/__tests__/production-reminder.helpers.test.ts src/services/__tests__/production-qc-report.helpers.test.ts src/services/__tests__/production-access.service.test.ts",
     "cleanup:dry": "node scripts/data-cleanup-dry-run.mjs",

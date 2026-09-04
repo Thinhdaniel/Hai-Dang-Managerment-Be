@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { MATERIAL_CUSTODY_HOLDER_TYPE, MATERIAL_REUSE_TRACKING_MODE } from '@/constant/materialCustody';
 
 const DistributionRecordItemSchema = new mongoose.Schema(
     {
@@ -36,6 +37,12 @@ const DistributionRecordItemSchema = new mongoose.Schema(
         distributedDate: { type: Date },
         adjustReason: { type: String, trim: true },
         note: { type: String, trim: true },
+        reuseTrackingMode: {
+            type: String,
+            enum: Object.values(MATERIAL_REUSE_TRACKING_MODE),
+            default: MATERIAL_REUSE_TRACKING_MODE.NONE,
+        },
+        custodyAssignmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'MaterialCustodyAssignment' },
     },
     { _id: false }
 );
@@ -101,6 +108,12 @@ const DistributionRecordSchema = new mongoose.Schema(
             type: Date,
         },
         requesterName: { type: String, trim: true },
+        holderType: { type: String, enum: Object.values(MATERIAL_CUSTODY_HOLDER_TYPE) },
+        recipientId: { type: mongoose.Schema.Types.ObjectId, ref: 'MaterialRecipient' },
+        holderCode: { type: String, trim: true },
+        holderName: { type: String, trim: true },
+        usageCampaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MaterialUsageCampaign' },
+        expectedReturnAt: { type: Date },
         targetDepartment: { type: String, trim: true },
         targetLine: { type: String, trim: true },
         note: { type: String, trim: true },

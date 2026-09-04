@@ -6,18 +6,14 @@ import StockTransaction from '@/models/StockTransaction';
 import PurchaseRequest from '@/models/PurchaseRequest';
 import SupplyShortage from '@/models/SupplyShortage';
 import { distributionRepository } from '@/repositories/distribution.repository';
-import {
-    generateDocumentCode,
-    getUserPlantId,
-    isManagerRole,
-    toId,
-} from '@/services/material-workflow.helpers';
+import { generateDocumentCode, getUserPlantId, isManagerRole, toId } from '@/services/material-workflow.helpers';
 import { notifyAdmins, notifyUser, getActorName } from '@/services/notification.helper';
 import { appendWorkflowSystemMessage } from '@/services/chat.service';
 import { getMaterialsMap } from '@/services/material-domain.helpers';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
+import { registerInitialCustodyAssignments } from '@/services/material-custody.service';
 import { serializeDistributionRecord } from '@/utils/materialSerializers';
 import mongoose from 'mongoose';
 import { NextFunction, Request, Response } from 'express';
@@ -99,7 +95,9 @@ const ensureDistributionAccess = (req: Request, distribution: any) => {
 const getRequestedQuantity = (item: any) => Number(item?.quantityApproved ?? item?.quantityRequested ?? 0);
 
 const buildDistributionRecordItems = async (items: any[], session?: mongoose.ClientSession) => {
-    const materialIds = Array.from(new Set((items ?? []).map((item: any) => toId(item.materialId)).filter(Boolean))) as string[];
+    const materialIds = Array.from(
+        new Set((items ?? []).map((item: any) => toId(item.materialId)).filter(Boolean))
+    ) as string[];
     const materialsMap = await getMaterialsMap(materialIds, session);
 
     return (items ?? []).map((item: any, idx: number) => {
@@ -108,7 +106,8 @@ const buildDistributionRecordItems = async (items: any[], session?: mongoose.Cli
         const catalogStatus = item.catalogStatus || (material ? 'matched' : 'unmatched');
 
         const qty = Number(item.quantity ?? 0);
-        const fulfillmentStatus = item.fulfillmentStatus === 'not_supplied' || qty === 0 ? 'not_supplied' : item.fulfillmentStatus;
+        const fulfillmentStatus =
+            item.fulfillmentStatus === 'not_supplied' || qty === 0 ? 'not_supplied' : item.fulfillmentStatus;
 
         if (!material && catalogStatus !== 'ignored' && fulfillmentStatus !== 'not_supplied') {
             throw new BadRequestError(`Dong ${idx + 1}: vui long gan vat tu kho hoac chon bo qua ton kho`);
@@ -131,9 +130,14 @@ const buildDistributionRecordItems = async (items: any[], session?: mongoose.Cli
         if (vatRate < 0) throw new BadRequestError(`Item ${idx + 1}: VAT khong hop le`);
 
         const totalPrice = Number((qty * unitPrice).toFixed(2));
-        const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
+        const vatAmount = Number(((totalPrice * vatRate) / 100).toFixed(2));
         const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
-        const normalizedCatalogStatus = catalogStatus === 'ignored' || fulfillmentStatus === 'not_supplied' ? 'ignored' : material ? 'matched' : 'ignored';
+        const normalizedCatalogStatus =
+            catalogStatus === 'ignored' || fulfillmentStatus === 'not_supplied'
+                ? 'ignored'
+                : material
+                  ? 'matched'
+                  : 'ignored';
         const skipInventory = normalizedCatalogStatus === 'ignored' || qty === 0;
         const quantityRequested = Number(item.quantityRequested ?? qty);
         const quantityShortage = Number(item.quantityShortage ?? Math.max(0, quantityRequested - qty));
@@ -161,12 +165,15 @@ const buildDistributionRecordItems = async (items: any[], session?: mongoose.Cli
                 item.inventorySkipReason?.trim() || (skipInventory || !material ? 'Khong theo doi ton kho' : undefined),
             adjustReason: item.adjustReason?.trim() || undefined,
             note: item.note?.trim() || undefined,
+            reuseTrackingMode: material?.reuseTrackingMode ?? 'none',
         };
     });
 };
 
 const applySupplyRequestFulfillment = (items: any[], requestItems: any[]) => {
-    const hasExplicitIndexes = items.some((item) => item.sourceRequestItemIndex !== undefined && item.sourceRequestItemIndex !== null);
+    const hasExplicitIndexes = items.some(
+        (item) => item.sourceRequestItemIndex !== undefined && item.sourceRequestItemIndex !== null
+    );
     const grouped = new Map<number, any[]>();
 
     items.forEach((item, idx) => {
@@ -177,7 +184,8 @@ const applySupplyRequestFulfillment = (items: any[], requestItems: any[]) => {
 
     for (const [sourceIndex, rows] of grouped.entries()) {
         const requestItem = requestItems[sourceIndex];
-        const requestedQty = getRequestedQuantity(requestItem) || Math.max(...rows.map((row) => Number(row.quantityRequested ?? 0)));
+        const requestedQty =
+            getRequestedQuantity(requestItem) || Math.max(...rows.map((row) => Number(row.quantityRequested ?? 0)));
         const distributedQty = rows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
 
         if (requestedQty > 0 && distributedQty > requestedQty) {
@@ -238,7 +246,9 @@ const createSupplyShortagesForDistribution = async ({
         if (quantityShortage <= 0) continue;
 
         const firstRow = rows.find((row) => row.materialName || row.materialId) ?? rows[0];
-        const reason = rows.find((row) => row.adjustReason || row.note)?.adjustReason || rows.find((row) => row.adjustReason || row.note)?.note;
+        const reason =
+            rows.find((row) => row.adjustReason || row.note)?.adjustReason ||
+            rows.find((row) => row.adjustReason || row.note)?.note;
 
         await SupplyShortage.updateOne(
             {
@@ -396,7 +406,10 @@ const exportDistributionItemStock = async ({
             unit: plain.unit || material.unit,
             inventoryStatus: 'skipped',
             inventorySkipReason:
-                plain.inventorySkipReason || ((material as any).trackInventory === false ? 'Vat tu khong theo doi ton kho' : 'Khong theo doi ton kho'),
+                plain.inventorySkipReason ||
+                ((material as any).trackInventory === false
+                    ? 'Vat tu khong theo doi ton kho'
+                    : 'Khong theo doi ton kho'),
             quantityInventoried: 0,
         };
     }
@@ -695,6 +708,10 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
         const builtItems = await buildDistributionRecordItems(req.body.items ?? [], session);
 
         const distributedAt = req.body.distributedAt ? new Date(req.body.distributedAt) : new Date();
+        const expectedReturnAt = req.body.expectedReturnAt ? new Date(req.body.expectedReturnAt) : undefined;
+        if (expectedReturnAt && expectedReturnAt.getTime() < distributedAt.getTime()) {
+            throw new BadRequestError('Han du kien tra khong duoc som hon thoi gian cap');
+        }
         const totals = summarizeDistributionItems(builtItems);
 
         const recordData: any = {
@@ -704,6 +721,12 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
             toPlantId: fromPlantId,
             status: isDraft ? 'draft' : 'confirmed',
             requesterName: req.body.requesterName?.trim(),
+            holderType: req.body.holderType,
+            recipientId: req.body.recipientId,
+            holderCode: req.body.holderCode?.trim() || undefined,
+            holderName: req.body.holderName?.trim() || undefined,
+            usageCampaignId: req.body.usageCampaignId,
+            expectedReturnAt,
             targetDepartment: req.body.targetDepartment?.trim() || undefined,
             targetLine: req.body.targetLine?.trim() || undefined,
             items: builtItems,
@@ -736,7 +759,17 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
                     })
                 );
             }
-            await (DistributionRecord as any).updateOne({ _id: (record as any)._id }, { $set: { items: inventoriedItems } }, { session });
+            const custodyItems = await registerInitialCustodyAssignments({
+                record,
+                items: inventoriedItems,
+                performedBy: String(req.userId),
+                session,
+            });
+            await (DistributionRecord as any).updateOne(
+                { _id: (record as any)._id },
+                { $set: { items: custodyItems } },
+                { session }
+            );
         }
 
         await session.commitTransaction();
@@ -746,7 +779,9 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
         return res.status(StatusCodes.CREATED).json(
             customResponse({
                 data: serializeDistributionRecord(created),
-                message: isDraft ? 'Tao phieu cap phat noi bo (nhap) thanh cong' : 'Tao phieu cap phat noi bo thanh cong',
+                message: isDraft
+                    ? 'Tao phieu cap phat noi bo (nhap) thanh cong'
+                    : 'Tao phieu cap phat noi bo thanh cong',
                 status: StatusCodes.CREATED,
                 success: true,
             })
@@ -763,7 +798,8 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
 export const appendInternalItems = async (req: Request, res: Response, next: NextFunction) => {
     const record = await distributionRepository.findById(String(req.params.id));
     if (!record) throw new NotFoundError('Khong tim thay phieu cap phat');
-    if ((record as any).distributionType !== 'internal_issue') throw new BadRequestError('Chi ap dung cho phieu cap phat noi bo');
+    if ((record as any).distributionType !== 'internal_issue')
+        throw new BadRequestError('Chi ap dung cho phieu cap phat noi bo');
     if ((record as any).status !== 'draft') throw new BadRequestError('Chi co the them vat tu vao phieu dang nhap');
 
     const fromPlantId = getUserPlantId(req);
@@ -773,17 +809,39 @@ export const appendInternalItems = async (req: Request, res: Response, next: Nex
 
     const newItems = await buildDistributionRecordItems(req.body.items ?? []);
 
-    const allItems = [...((record as any).items ?? []).map((i: any) => i.toObject ? i.toObject() : i), ...newItems];
+    const allItems = [...((record as any).items ?? []).map((i: any) => (i.toObject ? i.toObject() : i)), ...newItems];
     const totals = summarizeDistributionItems(allItems);
+
+    const metadataPatch: Record<string, any> = {};
+    for (const field of [
+        'requesterName',
+        'targetDepartment',
+        'targetLine',
+        'holderType',
+        'recipientId',
+        'holderName',
+        'holderCode',
+        'usageCampaignId',
+    ]) {
+        if (req.body[field] !== undefined) metadataPatch[field] = req.body[field] || undefined;
+    }
+    if (req.body.expectedReturnAt !== undefined) {
+        metadataPatch.expectedReturnAt = req.body.expectedReturnAt ? new Date(req.body.expectedReturnAt) : undefined;
+    }
 
     await (DistributionRecord as any).updateOne(
         { _id: (record as any)._id },
-        { $set: { items: allItems, ...totals } }
+        { $set: { items: allItems, ...totals, ...metadataPatch } }
     );
 
     const updated = await distributionRepository.findById(String(req.params.id));
     return res.status(StatusCodes.OK).json(
-        customResponse({ data: serializeDistributionRecord(updated), message: 'Da them vat tu vao phieu nhap', status: StatusCodes.OK, success: true })
+        customResponse({
+            data: serializeDistributionRecord(updated),
+            message: 'Da them vat tu vao phieu nhap',
+            status: StatusCodes.OK,
+            success: true,
+        })
     );
 };
 
@@ -793,12 +851,11 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
     session.startTransaction();
 
     try {
-        const record = await (DistributionRecord as any)
-            .findOneAndUpdate(
-                { _id: req.params.id, status: 'draft', distributionType: 'internal_issue', isDeleted: { $ne: true } },
-                { $set: { status: 'processing' } },
-                { returnDocument: 'before', session }
-            );
+        const record = await (DistributionRecord as any).findOneAndUpdate(
+            { _id: req.params.id, status: 'draft', distributionType: 'internal_issue', isDeleted: { $ne: true } },
+            { $set: { status: 'processing' } },
+            { returnDocument: 'before', session }
+        );
 
         if (!record) {
             const exists = await (DistributionRecord as any).findById(req.params.id).session(session);
@@ -812,6 +869,9 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
 
         const fromPlantId = toId(record.fromPlantId);
         const now = new Date();
+        if (record.expectedReturnAt && new Date(record.expectedReturnAt).getTime() < now.getTime()) {
+            throw new BadRequestError('Han du kien tra khong duoc nam trong qua khu khi chot phieu');
+        }
 
         const inventoriedItems = [];
         for (const item of record.items ?? []) {
@@ -829,9 +889,24 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
 
         await applySupplyShortageResolutions({ record, performedBy: req.userId, session });
 
+        const custodyItems = await registerInitialCustodyAssignments({
+            record,
+            items: inventoriedItems,
+            performedBy: String(req.userId),
+            session,
+        });
+
         await (DistributionRecord as any).updateOne(
             { _id: record._id },
-            { $set: { status: 'confirmed', confirmedBy: req.userId, confirmedAt: now, distributedAt: now, items: inventoriedItems } },
+            {
+                $set: {
+                    status: 'confirmed',
+                    confirmedBy: req.userId,
+                    confirmedAt: now,
+                    distributedAt: now,
+                    items: custodyItems,
+                },
+            },
             { session }
         );
 
@@ -839,7 +914,12 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
 
         const updated = await distributionRepository.findById(String(req.params.id));
         return res.status(StatusCodes.OK).json(
-            customResponse({ data: serializeDistributionRecord(updated), message: 'Chot phieu cap phat noi bo thanh cong', status: StatusCodes.OK, success: true })
+            customResponse({
+                data: serializeDistributionRecord(updated),
+                message: 'Chot phieu cap phat noi bo thanh cong',
+                status: StatusCodes.OK,
+                success: true,
+            })
         );
     } catch (err) {
         await session.abortTransaction();
@@ -885,7 +965,14 @@ export const distributeRecord = async (req: Request, res: Response, next: NextFu
 
         await (DistributionRecord as any).updateOne(
             { _id: record._id },
-            { $set: { status: 'distributed', distributedBy: req.userId, distributedAt: new Date(), items: inventoriedItems } },
+            {
+                $set: {
+                    status: 'distributed',
+                    distributedBy: req.userId,
+                    distributedAt: new Date(),
+                    items: inventoriedItems,
+                },
+            },
             { session }
         );
 
@@ -901,9 +988,12 @@ export const distributeRecord = async (req: Request, res: Response, next: NextFu
 
     const actorName = await getActorName(req.userId);
     // Notify người tạo SR (CS nhận) biết hàng đã được xuất kho
-    const srDoc = updated && (updated as any).supplyRequestId
-        ? await PurchaseRequest.findById((updated as any).supplyRequestId).select('requestedBy requestCode').lean()
-        : null;
+    const srDoc =
+        updated && (updated as any).supplyRequestId
+            ? await PurchaseRequest.findById((updated as any).supplyRequestId)
+                  .select('requestedBy requestCode')
+                  .lean()
+            : null;
     if (srDoc) {
         await notifyUser(toId(srDoc.requestedBy)!, 'notify:new', {
             type: 'success',
@@ -1038,11 +1128,11 @@ export const updateDistributionRecord = async (req: Request, res: Response, next
             const unitPrice = patch.unitPrice !== undefined ? Number(patch.unitPrice) : Number(item.unitPrice ?? 0);
             const vatRate = patch.vatRate !== undefined ? Number(patch.vatRate) : Number(item.vatRate ?? 0);
             const totalPrice = Number((qty * unitPrice).toFixed(2));
-            const vatAmount = Number((totalPrice * vatRate / 100).toFixed(2));
+            const vatAmount = Number(((totalPrice * vatRate) / 100).toFixed(2));
             const totalWithVat = Number((totalPrice + vatAmount).toFixed(2));
 
             return {
-                ...item.toObject ? item.toObject() : item,
+                ...(item.toObject ? item.toObject() : item),
                 unitPrice,
                 vatRate,
                 totalPrice,
@@ -1053,9 +1143,15 @@ export const updateDistributionRecord = async (req: Request, res: Response, next
         });
 
         updateData.items = updatedItems;
-        updateData.totalAmount = Number(updatedItems.reduce((s: number, i: any) => s + (i.totalPrice ?? 0), 0).toFixed(2));
-        updateData.totalVatAmount = Number(updatedItems.reduce((s: number, i: any) => s + (i.vatAmount ?? 0), 0).toFixed(2));
-        updateData.totalWithVat = Number(updatedItems.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0).toFixed(2));
+        updateData.totalAmount = Number(
+            updatedItems.reduce((s: number, i: any) => s + (i.totalPrice ?? 0), 0).toFixed(2)
+        );
+        updateData.totalVatAmount = Number(
+            updatedItems.reduce((s: number, i: any) => s + (i.vatAmount ?? 0), 0).toFixed(2)
+        );
+        updateData.totalWithVat = Number(
+            updatedItems.reduce((s: number, i: any) => s + (i.totalWithVat ?? 0), 0).toFixed(2)
+        );
     }
 
     await (DistributionRecord as any).updateOne({ _id: (record as any)._id }, { $set: updateData });
@@ -1097,9 +1193,7 @@ export const exportRangeDistributionXlsx = async (req: Request, res: Response, n
 
     const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
     const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
-    const label = startDate && endDate
-        ? `${startDate} den ${endDate}`
-        : startDate || endDate || 'Tat ca';
+    const label = startDate && endDate ? `${startDate} den ${endDate}` : startDate || endDate || 'Tat ca';
 
     const { generateRangeDistributionXlsx } = await import('@/utils/generateRangeDistributionXlsx');
     const buffer = await generateRangeDistributionXlsx(plains, label);
@@ -1139,6 +1233,6 @@ export const exportDistributionXlsx = async (req: Request, res: Response, next: 
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${record.distributionCode || 'distribution'}.xlsx"`);
-    
+
     return res.status(StatusCodes.OK).send(buffer);
 };

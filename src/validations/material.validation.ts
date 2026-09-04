@@ -9,6 +9,9 @@ export const createMaterialSchema = z.object({
     description: zOptionalString(),
     minStockLevel: z.number().min(0).optional(),
     trackInventory: z.boolean().optional(),
+    reuseTrackingMode: z.enum(['none', 'quantity', 'serialized']).optional(),
+    defaultReturnDays: z.number().int().min(0).max(3650).optional(),
+    conditionCheckRequired: z.boolean().optional(),
     isActive: z.boolean().optional(),
 });
 
@@ -20,5 +23,8 @@ export const updateMaterialSchema = z.object({
     description: zOptionalString(),
     minStockLevel: z.number().min(0).optional(),
     trackInventory: z.boolean().optional(),
+    reuseTrackingMode: z.enum(['none', 'quantity', 'serialized']).optional(),
+    defaultReturnDays: z.number().int().min(0).max(3650).optional(),
+    conditionCheckRequired: z.boolean().optional(),
     isActive: z.boolean().optional(),
 });

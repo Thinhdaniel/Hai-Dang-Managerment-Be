@@ -48,6 +48,15 @@ export const createInternalDistributionRecordSchema = z.object({
     note: zOptionalString(),
 });
 
+const internalCustodyFields = {
+    holderType: z.enum(['employee', 'team']).optional(),
+    recipientId: zObjectId('Nguoi nhan').optional(),
+    holderName: zOptionalString(),
+    holderCode: zOptionalString(),
+    usageCampaignId: zObjectId('Dot su dung vat tu').optional(),
+    expectedReturnAt: zOptionalString(),
+};
+
 export const confirmDistributionSchema = z.object({
     note: zOptionalString(),
 });
@@ -59,10 +68,15 @@ export const createInternalDraftSchema = z.object({
     note: zOptionalString(),
     distributedAt: zOptionalString(),
     status: z.enum(['draft', 'confirmed']).optional(),
+    ...internalCustodyFields,
     items: z.array(distributionItemSchema).min(1, { message: 'Phai co it nhat 1 vat tu' }),
 });
 
 export const appendInternalItemsSchema = z.object({
+    targetDepartment: zOptionalString(),
+    targetLine: zOptionalString(),
+    requesterName: zOptionalString(),
+    ...internalCustodyFields,
     items: z.array(distributionItemSchema).min(1, { message: 'Phai co it nhat 1 vat tu' }),
 });
 

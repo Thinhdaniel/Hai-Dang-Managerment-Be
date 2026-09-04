@@ -12,6 +12,7 @@ export type NotificationActionType =
     | 'technical_purchase'
     | 'purchase_order'
     | 'distribution'
+    | 'material_custody'
     | 'chat'
     | 'digest'
     | 'briefing'
@@ -63,6 +64,7 @@ const NotificationSchema = new mongoose.Schema<INotification>(
                 'technical_purchase',
                 'purchase_order',
                 'distribution',
+                'material_custody',
                 'chat',
                 'digest',
                 'briefing',

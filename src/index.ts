@@ -9,6 +9,7 @@ import { startRealityOperationsSchedule } from './services/reality-operations.se
 import { startExecutiveBriefingSchedule } from './services/executive-briefing.service';
 import { startProductionReminderSchedule } from './services/production-reminder.service';
 import { ensureProductionAccessDefaults } from './services/production-access.service';
+import { startMaterialCustodyReminderSchedule } from './services/material-custody-reminder.service';
 
 const PORT = config.port || 8080;
 const HOSTNAME = config.hostname;
@@ -48,6 +49,9 @@ connectDB().then(async () => {
 
     // Nhắc nhập sản theo khung giờ; internal route giúp UptimeRobot đánh thức Render free.
     startProductionReminderSchedule();
+
+    // Nhắc thu hồi CCDC sắp đến hạn/quá hạn; khử trùng theo ngày và có Telegram fallback.
+    startMaterialCustodyReminderSchedule();
 });
 
 const exitHandler = () => {

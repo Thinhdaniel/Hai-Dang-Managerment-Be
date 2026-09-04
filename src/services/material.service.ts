@@ -1,11 +1,14 @@
 import { USER_ROLE } from '@/constant/allowedRoles';
 import { CAPEX_COST_TYPES } from '@/constant/materialCostType';
+import { MATERIAL_CUSTODY_ASSIGNMENT_STATUS } from '@/constant/materialCustody';
 import { BadRequestError, DuplicateError, NotFoundError } from '@/errors/customError';
 import InventoryStock from '@/models/InventoryStock';
 import Material from '@/models/Material';
+import MaterialCustodyAssignment from '@/models/MaterialCustodyAssignment';
 import Plant from '@/models/Plant';
 import PurchaseOrder from '@/models/PurchaseOrder';
 import PurchaseRequest from '@/models/PurchaseRequest';
+import ReusableMaterialStock from '@/models/ReusableMaterialStock';
 import { materialRepository } from '@/repositories/material.repository';
 import { buildPlantScopeFilter, getUserPlantId, isManagerRole, toId } from '@/services/material-workflow.helpers';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
@@ -38,6 +41,26 @@ const ensureMaterialCodeAvailable = async (code?: string, excludeId?: string) =>
 
     if (existingMaterial) {
         throw new DuplicateError('Ma vat tu da ton tai');
+    }
+};
+
+const ensureMaterialCustodyCanBeDisabled = async (materialId: string) => {
+    const [openAssignment, reusableStock] = await Promise.all([
+        MaterialCustodyAssignment.exists({
+            materialId,
+            status: { $ne: MATERIAL_CUSTODY_ASSIGNMENT_STATUS.RESOLVED },
+            isDeleted: { $ne: true },
+        }),
+        ReusableMaterialStock.exists({
+            materialId,
+            $or: [{ availableQuantity: { $gt: 0 } }, { repairQuantity: { $gt: 0 } }, { damagedQuantity: { $gt: 0 } }],
+        }),
+    ]);
+
+    if (openAssignment || reusableStock) {
+        throw new BadRequestError(
+            'Vat tu van con dang duoc giu hoac nam trong kho tai su dung. Vui long xu ly het truoc khi tat theo doi hoac xoa vat tu'
+        );
     }
 };
 
@@ -585,6 +608,10 @@ export const createMaterial = async (req: Request, res: Response, next: NextFunc
 export const updateMaterial = async (req: Request, res: Response, next: NextFunction) => {
     await ensureMaterialCodeAvailable(req.body.code, String(req.params.id));
 
+    if (req.body.reuseTrackingMode === 'none' || req.body.isActive === false) {
+        await ensureMaterialCustodyCanBeDisabled(String(req.params.id));
+    }
+
     const material = await materialRepository.updateById(String(req.params.id), {
         ...req.body,
         code: req.body.code?.trim() || undefined,
@@ -606,6 +633,8 @@ export const updateMaterial = async (req: Request, res: Response, next: NextFunc
 };
 
 export const deleteMaterial = async (req: Request, res: Response, next: NextFunction) => {
+    await ensureMaterialCustodyCanBeDisabled(String(req.params.id));
+
     const material = await materialRepository.softDeleteById(String(req.params.id), {
         isActive: false,
         isDeleted: true,
