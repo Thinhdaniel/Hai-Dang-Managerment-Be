@@ -52,12 +52,7 @@ router.post(
 );
 
 router.get('/', assetController.getAllAssets);
-router.patch(
-    '/:id/status',
-    authorize(...ROLE_GROUPS.FIELD),
-    validateObjectId,
-    assetController.updateAssetStatus
-);
+router.patch('/:id/status', authorize(...ROLE_GROUPS.FIELD), validateObjectId, assetController.updateAssetStatus);
 router.post(
     '/:id/public-id',
     authorize(...ROLE_GROUPS.MANAGEMENT),
