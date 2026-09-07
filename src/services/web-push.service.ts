@@ -62,6 +62,13 @@ export const buildActionUrl = (notification: Pick<INotification, 'actionType' | 
     if (actionType === 'supply_request') return '/materials/supply-requests';
     if (actionType === 'purchase_order') return '/materials/purchase-orders';
     if (actionType === 'distribution') return '/materials/distributions';
+    if (actionType === 'material_custody') {
+        const params = new URLSearchParams();
+        if (notification.actionData?.plantId) params.set('plantId', String(notification.actionData.plantId));
+        if (notification.actionData?.campaignId || actionId)
+            params.set('campaignId', String(notification.actionData?.campaignId || actionId));
+        return `/materials/custody?${params.toString()}`;
+    }
     if (actionType === 'chat') return `/chat${actionId ? `?conversation=${encodeURIComponent(actionId)}` : ''}`;
     if (actionType === 'briefing') return `/dashboard${actionId ? `?briefing=${encodeURIComponent(actionId)}` : ''}`;
     if (actionType === 'floor_map') {

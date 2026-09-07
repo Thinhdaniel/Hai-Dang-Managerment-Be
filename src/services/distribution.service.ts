@@ -14,6 +14,7 @@ import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
 import { registerInitialCustodyAssignments } from '@/services/material-custody.service';
+import { assertInternalPlantAccess } from '@/services/material-custody.rules';
 import { serializeDistributionRecord } from '@/utils/materialSerializers';
 import mongoose from 'mongoose';
 import { NextFunction, Request, Response } from 'express';
@@ -796,43 +797,58 @@ export const createInternalDistributionRecord = async (req: Request, res: Respon
 
 /** Thêm vật tư vào phiếu nội bộ đang draft */
 export const appendInternalItems = async (req: Request, res: Response, next: NextFunction) => {
-    const record = await distributionRepository.findById(String(req.params.id));
-    if (!record) throw new NotFoundError('Khong tim thay phieu cap phat');
-    if ((record as any).distributionType !== 'internal_issue')
-        throw new BadRequestError('Chi ap dung cho phieu cap phat noi bo');
-    if ((record as any).status !== 'draft') throw new BadRequestError('Chi co the them vat tu vao phieu dang nhap');
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+        const record = await DistributionRecord.findOneAndUpdate(
+            { _id: req.params.id, status: 'draft', distributionType: 'internal_issue', isDeleted: { $ne: true } },
+            { $set: { status: 'processing' } },
+            { returnDocument: 'before', session }
+        );
+        if (!record) throw new NotFoundError('Khong tim thay phieu cap phat');
+        if ((record as any).distributionType !== 'internal_issue')
+            throw new BadRequestError('Chi ap dung cho phieu cap phat noi bo');
+        if ((record as any).status !== 'draft') throw new BadRequestError('Chi co the them vat tu vao phieu dang nhap');
 
-    const fromPlantId = getUserPlantId(req);
-    if (!isManagerRole(req.role) && toId((record as any).distributedBy) !== req.userId) {
-        throw new UnAuthorizedError('Ban khong co quyen chinh sua phieu nay');
+        assertInternalPlantAccess(req.role, getUserPlantId(req), toId(record.fromPlantId)!);
+
+        const newItems = await buildDistributionRecordItems(req.body.items ?? [], session);
+
+        const allItems = [
+            ...((record as any).items ?? []).map((i: any) => (i.toObject ? i.toObject() : i)),
+            ...newItems,
+        ];
+        const totals = summarizeDistributionItems(allItems);
+
+        const metadataPatch: Record<string, any> = {};
+        for (const field of [
+            'requesterName',
+            'targetDepartment',
+            'targetLine',
+            'holderType',
+            'recipientId',
+            'holderName',
+            'holderCode',
+            'usageCampaignId',
+        ]) {
+            if (req.body[field] !== undefined) metadataPatch[field] = req.body[field] || null;
+        }
+        if (req.body.expectedReturnAt !== undefined) {
+            metadataPatch.expectedReturnAt = req.body.expectedReturnAt ? new Date(req.body.expectedReturnAt) : null;
+        }
+
+        await (DistributionRecord as any).updateOne(
+            { _id: (record as any)._id, status: 'processing' },
+            { $set: { items: allItems, ...totals, ...metadataPatch, status: 'draft' } },
+            { session }
+        );
+        await session.commitTransaction();
+    } catch (error) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        await session.endSession();
     }
-
-    const newItems = await buildDistributionRecordItems(req.body.items ?? []);
-
-    const allItems = [...((record as any).items ?? []).map((i: any) => (i.toObject ? i.toObject() : i)), ...newItems];
-    const totals = summarizeDistributionItems(allItems);
-
-    const metadataPatch: Record<string, any> = {};
-    for (const field of [
-        'requesterName',
-        'targetDepartment',
-        'targetLine',
-        'holderType',
-        'recipientId',
-        'holderName',
-        'holderCode',
-        'usageCampaignId',
-    ]) {
-        if (req.body[field] !== undefined) metadataPatch[field] = req.body[field] || undefined;
-    }
-    if (req.body.expectedReturnAt !== undefined) {
-        metadataPatch.expectedReturnAt = req.body.expectedReturnAt ? new Date(req.body.expectedReturnAt) : undefined;
-    }
-
-    await (DistributionRecord as any).updateOne(
-        { _id: (record as any)._id },
-        { $set: { items: allItems, ...totals, ...metadataPatch } }
-    );
 
     const updated = await distributionRepository.findById(String(req.params.id));
     return res.status(StatusCodes.OK).json(
@@ -863,12 +879,29 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
             throw new BadRequestError('Phieu khong o trang thai nhap hoac da duoc xu ly');
         }
 
-        if (!isManagerRole(req.role) && toId(record.distributedBy) !== req.userId) {
-            throw new UnAuthorizedError('Ban khong co quyen chot phieu nay');
+        assertInternalPlantAccess(req.role, getUserPlantId(req), toId(record.fromPlantId)!);
+        const metadata: Record<string, any> = {};
+        for (const field of [
+            'requesterName',
+            'targetDepartment',
+            'targetLine',
+            'holderType',
+            'recipientId',
+            'holderName',
+            'holderCode',
+            'usageCampaignId',
+            'expectedReturnAt',
+            'note',
+        ]) {
+            if (req.body[field] !== undefined) metadata[field] = req.body[field] || null;
         }
+        Object.assign(record, metadata);
+        if (record.holderType === 'team') record.recipientId = null;
+        if (record.holderType === 'employee') record.holderName = null;
 
         const fromPlantId = toId(record.fromPlantId);
         const now = new Date();
+        record.distributedAt = now;
         if (record.expectedReturnAt && new Date(record.expectedReturnAt).getTime() < now.getTime()) {
             throw new BadRequestError('Han du kien tra khong duoc nam trong qua khu khi chot phieu');
         }
@@ -905,6 +938,9 @@ export const finalizeInternalDraft = async (req: Request, res: Response, next: N
                     confirmedAt: now,
                     distributedAt: now,
                     items: custodyItems,
+                    ...metadata,
+                    recipientId: record.recipientId,
+                    holderName: record.holderName,
                 },
             },
             { session }

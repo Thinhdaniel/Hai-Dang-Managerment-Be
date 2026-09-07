@@ -58,6 +58,7 @@ const custodyTargetSchema = {
 export const reissueReusableMaterialSchema = z.object({
     plantId: zObjectId('Co so').optional(),
     materialId: zObjectId('Vat tu'),
+    referenceUnitPrice: z.number().nonnegative().optional(),
     quantity: z.number().positive({ message: 'So luong cap phai lon hon 0' }),
     ...custodyTargetSchema,
 });
@@ -74,4 +75,12 @@ export const createMaterialCustodyOpeningBalanceSchema = z.object({
 export const transferMaterialCustodySchema = z.object({
     quantity: z.number().positive({ message: 'So luong chuyen phai lon hon 0' }),
     ...custodyTargetSchema,
+});
+
+export const processReusableStockSchema = z.object({
+    action: z.enum(['repair_complete', 'mark_damaged', 'dispose']),
+    fromBucket: z.enum(['available', 'repair', 'damaged']),
+    quantity: z.number().positive(),
+    referenceUnitPrice: z.number().nonnegative().optional(),
+    note: zRequiredString('Ly do xu ly').max(1000),
 });

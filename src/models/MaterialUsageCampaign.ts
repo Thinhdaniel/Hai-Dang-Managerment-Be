@@ -4,6 +4,7 @@ import { MATERIAL_CUSTODY_CAMPAIGN_STATUS } from '@/constant/materialCustody';
 const MaterialUsageCampaignSchema = new mongoose.Schema(
     {
         campaignCode: { type: String, required: true, trim: true, uppercase: true },
+        custodyRevision: { type: Number, default: 0 },
         plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant', required: true },
         productionItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionItem' },
         itemCode: { type: String, required: true, trim: true, uppercase: true, maxlength: 80 },

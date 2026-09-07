@@ -17,8 +17,16 @@ import MaterialUsageCampaign from '@/models/MaterialUsageCampaign';
 import Plant from '@/models/Plant';
 import ProductionItem from '@/models/ProductionItem';
 import ReusableMaterialStock from '@/models/ReusableMaterialStock';
+import ReusableMaterialMovement from '@/models/ReusableMaterialMovement';
+import {
+    addReferenceValue,
+    assertCustodyQuantity,
+    assertCustodyOccurredAt,
+    custodyDueDate,
+    takeReferenceValue,
+} from './material-custody.rules';
 import { generateDocumentCode, getUserPlantId, toId } from '@/services/material-workflow.helpers';
-import { notifyAdmins } from '@/services/notification.helper';
+import { notifyMaterialRecallOpened } from './material-custody-reminder.service';
 import { buildPaginatedResponse, getPagination } from '@/utils/pagination';
 import customResponse from '@/utils/response';
 import { buildSearchRegex } from '@/utils/search';
@@ -27,8 +35,15 @@ import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import mongoose, { ClientSession } from 'mongoose';
 
-const EPSILON = 0.000001;
+const EPSILON = 0.000000001;
 const GLOBAL_ROLES = new Set<string>([USER_ROLE.ADMIN, USER_ROLE.DIRECTOR]);
+const getCustodyPagination = (query: Record<string, any>, maximum = 200) =>
+    getPagination({
+        page: Number.isFinite(Number(query.page)) ? Math.max(1, Math.floor(Number(query.page))) : 1,
+        limit: Number.isFinite(Number(query.limit))
+            ? Math.min(maximum, Math.max(1, Math.floor(Number(query.limit))))
+            : 20,
+    });
 
 const parseDate = (value?: string | Date | null) => {
     if (!value) return undefined;
@@ -112,6 +127,7 @@ const serializeCampaign = (input: any, stats?: any) => ({
     note: input.note,
     assignmentCount: Number(stats?.assignmentCount || 0),
     issuedQuantity: Number(stats?.issuedQuantity || 0),
+    transferredInQuantity: Number(stats?.transferredInQuantity || 0),
     outstandingQuantity: Number(stats?.outstandingQuantity || 0),
     holderCount: Number(stats?.holderCount || 0),
     createdAt: toIso(input.createdAt),
@@ -223,27 +239,28 @@ const resolveHolder = async ({
 };
 
 const resolveCampaign = async (campaignId: string, plantId: string, session?: ClientSession) => {
-    const query = MaterialUsageCampaign.findOne({
+    const filter = {
         _id: campaignId,
         plantId,
         status: MATERIAL_CUSTODY_CAMPAIGN_STATUS.ACTIVE,
         isDeleted: { $ne: true },
-    });
-    if (session) query.session(session);
-    const campaign = await query;
+    };
+    // Contend with recall/close so a concurrent issue cannot escape the campaign transition.
+    const campaign = session
+        ? await MaterialUsageCampaign.findOneAndUpdate(
+              filter,
+              { $inc: { custodyRevision: 1 } },
+              { session, returnDocument: 'after' }
+          )
+        : await MaterialUsageCampaign.findOne(filter);
     if (!campaign) throw new BadRequestError('Dot su dung vat tu khong ton tai, da thu hoi hoac da dong');
     return campaign;
 };
 
-const calculateDueAt = (explicitDueAt: any, issuedAt: Date, defaultReturnDays: number) => {
-    if (explicitDueAt) return new Date(explicitDueAt);
-    if (!defaultReturnDays) return undefined;
-    const dueAt = new Date(issuedAt);
-    dueAt.setDate(dueAt.getDate() + defaultReturnDays);
-    return dueAt;
-};
+const calculateDueAt = custodyDueDate;
 
 const createAssignmentWithMovement = async ({ assignmentData, performedBy, session }: any) => {
+    assertCustodyQuantity(assignmentData.quantityIssued, assignmentData.trackingMode);
     const assignment = new MaterialCustodyAssignment({
         ...assignmentData,
         createdBy: performedBy,
@@ -356,7 +373,7 @@ export const registerInitialCustodyAssignments = async ({
 
 export const listRecipients = async (req: Request, res: Response, _next: NextFunction) => {
     const plantId = resolvePlantId(req, req.query.plantId);
-    const { page, limit, skip } = getPagination(req.query as Record<string, any>);
+    const { page, limit, skip } = getCustodyPagination(req.query);
     const filter: Record<string, any> = { plantId, isDeleted: { $ne: true } };
     if (req.query.isActive !== undefined) filter.isActive = String(req.query.isActive) === 'true';
     const regex = buildSearchRegex(req.query.search, { flexibleWhitespace: true });
@@ -757,7 +774,7 @@ export const createCampaign = async (req: Request, res: Response, _next: NextFun
 
 export const listCampaigns = async (req: Request, res: Response, _next: NextFunction) => {
     const plantId = resolvePlantId(req, req.query.plantId);
-    const { page, limit, skip } = getPagination(req.query as Record<string, any>);
+    const { page, limit, skip } = getCustodyPagination(req.query, 100);
     const effectiveLimit = Math.min(limit, 100);
     const filter: Record<string, any> = { plantId, isDeleted: { $ne: true } };
     if (req.query.status) filter.status = String(req.query.status);
@@ -775,7 +792,12 @@ export const listCampaigns = async (req: Request, res: Response, _next: NextFunc
                   $group: {
                       _id: '$campaignId',
                       assignmentCount: { $sum: 1 },
-                      issuedQuantity: { $sum: '$quantityIssued' },
+                      issuedQuantity: {
+                          $sum: { $cond: [{ $eq: ['$sourceType', 'custody_transfer'] }, 0, '$quantityIssued'] },
+                      },
+                      transferredInQuantity: {
+                          $sum: { $cond: [{ $eq: ['$sourceType', 'custody_transfer'] }, '$quantityIssued', 0] },
+                      },
                       outstandingQuantity: { $sum: outstandingExpression },
                       holders: { $addToSet: { $ifNull: ['$recipientId', '$holderName'] } },
                   },
@@ -784,6 +806,7 @@ export const listCampaigns = async (req: Request, res: Response, _next: NextFunc
                   $project: {
                       assignmentCount: 1,
                       issuedQuantity: 1,
+                      transferredInQuantity: 1,
                       outstandingQuantity: 1,
                       holderCount: { $size: '$holders' },
                   },
@@ -845,16 +868,8 @@ export const openRecall = async (req: Request, res: Response, _next: NextFunctio
     } finally {
         await session.endSession();
     }
-    void notifyAdmins(
-        'notify:new',
-        {
-            type: 'warning',
-            actionType: 'material_custody',
-            actionId: String(campaign._id),
-            title: `Thu hồi CCDC mã hàng ${campaign.itemCode}`,
-            message: `Đợt ${campaign.campaignCode} đã kết thúc sử dụng. Hạn thu hồi ${new Date(campaign.dueAt).toLocaleDateString('vi-VN')}.`,
-        },
-        { excludeUserIds: [req.userId] }
+    void notifyMaterialRecallOpened(campaign, req.userId).catch((error) =>
+        console.error('[MaterialCustody] Recall notification failed:', error)
     );
     return res.status(StatusCodes.OK).json(
         customResponse({
@@ -895,7 +910,7 @@ export const closeCampaign = async (req: Request, res: Response, _next: NextFunc
 
 export const listAssignments = async (req: Request, res: Response, _next: NextFunction) => {
     const plantId = resolvePlantId(req, req.query.plantId);
-    const { page, limit, skip } = getPagination(req.query as Record<string, any>);
+    const { page, limit, skip } = getCustodyPagination(req.query);
     const effectiveLimit = Math.min(limit, 200);
     const filter: Record<string, any> = { plantId, isDeleted: { $ne: true } };
     if (req.query.status) filter.status = String(req.query.status);
@@ -984,28 +999,50 @@ export const resolveAssignment = async (req: Request, res: Response, _next: Next
         assertPlantAccess(req, assignment.plantId);
         const quantity = Number(req.body.quantity);
         const outstanding = getOutstanding(assignment);
-        if (quantity > outstanding + EPSILON) {
-            throw new BadRequestError(`So luong xu ly vuot so dang giu (${outstanding} ${assignment.unit})`);
-        }
+        assertCustodyQuantity(quantity, assignment.trackingMode, outstanding);
+        const occurredAt = parseDate(req.body.occurredAt) || new Date();
+        assertCustodyOccurredAt(occurredAt, assignment.issuedAt);
         updateAssignmentResolution(assignment, req.body.resolution, quantity);
         const campaign = await MaterialUsageCampaign.findById(assignment.campaignId).session(session);
         refreshAssignmentStatus(assignment, campaign?.status);
         assignment.updatedBy = req.userId as any;
         await assignment.save({ session });
 
-        const poolIncrement: Record<string, number> = {};
-        if (req.body.resolution === MATERIAL_CUSTODY_RESOLUTION.USABLE) poolIncrement.availableQuantity = quantity;
-        if (req.body.resolution === MATERIAL_CUSTODY_RESOLUTION.REPAIR) poolIncrement.repairQuantity = quantity;
-        if (req.body.resolution === MATERIAL_CUSTODY_RESOLUTION.DAMAGED) poolIncrement.damagedQuantity = quantity;
-        if (Object.keys(poolIncrement).length) {
-            await ReusableMaterialStock.updateOne(
-                { plantId: assignment.plantId, materialId: assignment.materialId },
-                {
-                    $setOnInsert: { plantId: assignment.plantId, materialId: assignment.materialId },
-                    $inc: poolIncrement,
-                    $set: { lastMovementAt: parseDate(req.body.occurredAt) || new Date() },
-                },
-                { upsert: true, session }
+        const bucket = ({ usable: 'available', repair: 'repair', damaged: 'damaged' } as Record<string, string>)[
+            req.body.resolution
+        ];
+        if (bucket) {
+            const pool: any =
+                (await ReusableMaterialStock.findOne({
+                    plantId: assignment.plantId,
+                    materialId: assignment.materialId,
+                }).session(session)) ||
+                new ReusableMaterialStock({ plantId: assignment.plantId, materialId: assignment.materialId });
+            const referenceValue = quantity * assignment.unitPrice;
+            pool[`${bucket}ReferenceValue`] = addReferenceValue(
+                pool[`${bucket}Quantity`],
+                pool[`${bucket}ReferenceValue`],
+                referenceValue
+            );
+            pool[`${bucket}Quantity`] = Number((pool[`${bucket}Quantity`] + quantity).toFixed(6));
+            pool.lastMovementAt = new Date();
+            await pool.save({ session });
+            await ReusableMaterialMovement.create(
+                [
+                    {
+                        plantId: assignment.plantId,
+                        materialId: assignment.materialId,
+                        assignmentId: assignment._id,
+                        type: 'return',
+                        toBucket: bucket,
+                        quantity,
+                        referenceValue,
+                        note: req.body.note,
+                        performedBy: req.userId,
+                        occurredAt,
+                    },
+                ],
+                { session }
             );
         }
         await MaterialCustodyMovement.create(
@@ -1025,7 +1062,7 @@ export const resolveAssignment = async (req: Request, res: Response, _next: Next
                     note: req.body.note?.trim() || undefined,
                     evidenceUrls: req.body.evidenceUrls || [],
                     performedBy: req.userId,
-                    occurredAt: parseDate(req.body.occurredAt) || new Date(),
+                    occurredAt,
                 },
             ],
             { session }
@@ -1048,10 +1085,8 @@ export const resolveAssignment = async (req: Request, res: Response, _next: Next
 };
 
 const resolveTargetContext = async (body: any, plantId: string, session: ClientSession) => {
-    const [campaign, holder] = await Promise.all([
-        resolveCampaign(body.campaignId, plantId, session),
-        resolveHolder({ ...body, plantId, session }),
-    ]);
+    const campaign = await resolveCampaign(body.campaignId, plantId, session);
+    const holder = await resolveHolder({ ...body, plantId, session });
     return { campaign, holder };
 };
 
@@ -1134,12 +1169,18 @@ export const reissueReusable = async (req: Request, res: Response, _next: NextFu
         if (material.reuseTrackingMode === MATERIAL_REUSE_TRACKING_MODE.SERIALIZED && !Number.isInteger(quantity)) {
             throw new BadRequestError('Vat tu theo doi tung chiec nen so luong phai la so nguyen');
         }
-        const pool = await ReusableMaterialStock.findOneAndUpdate(
-            { plantId, materialId: material._id, availableQuantity: { $gte: quantity } },
-            { $inc: { availableQuantity: -quantity }, $set: { lastMovementAt: new Date() } },
-            { returnDocument: 'after', session }
-        );
+        const pool = await ReusableMaterialStock.findOne({ plantId, materialId: material._id }).session(session);
         if (!pool) throw new BadRequestError('Kho tai su dung khong du so luong de cap');
+        const valuation = takeReferenceValue(
+            pool.availableQuantity,
+            pool.availableReferenceValue ?? undefined,
+            quantity,
+            req.body.referenceUnitPrice
+        );
+        pool.availableQuantity = Number((pool.availableQuantity - quantity).toFixed(6));
+        pool.availableReferenceValue = valuation.remainingValue;
+        pool.lastMovementAt = new Date();
+        await pool.save({ session });
         const { campaign, holder } = await resolveTargetContext(req.body, plantId, session);
         const issuedAt = new Date();
         const dueAt = calculateDueAt(req.body.dueAt, issuedAt, Number(material.defaultReturnDays || 0));
@@ -1162,7 +1203,7 @@ export const reissueReusable = async (req: Request, res: Response, _next: NextFu
                 orderCode: campaign.orderCode,
                 sourceType: MATERIAL_CUSTODY_SOURCE_TYPE.REUSABLE_POOL,
                 quantityIssued: quantity,
-                unitPrice: 0,
+                unitPrice: valuation.unitPrice,
                 issuedAt,
                 dueAt,
                 note: req.body.note?.trim() || undefined,
@@ -1170,6 +1211,24 @@ export const reissueReusable = async (req: Request, res: Response, _next: NextFu
             performedBy: req.userId,
             session,
         });
+        await ReusableMaterialMovement.create(
+            [
+                {
+                    plantId,
+                    materialId: material._id,
+                    assignmentId: assignment._id,
+                    type: 'reissue',
+                    fromBucket: 'available',
+                    quantity,
+                    referenceValue: valuation.movedValue,
+                    confirmedReferenceUnitPrice: req.body.referenceUnitPrice,
+                    performedBy: req.userId,
+                    note: req.body.note,
+                    occurredAt: issuedAt,
+                },
+            ],
+            { session }
+        );
         await session.commitTransaction();
     } catch (error) {
         await session.abortTransaction();
@@ -1200,8 +1259,7 @@ export const transferAssignment = async (req: Request, res: Response, _next: Nex
         assertPlantAccess(req, source.plantId);
         const quantity = Number(req.body.quantity);
         const outstanding = getOutstanding(source);
-        if (quantity > outstanding + EPSILON)
-            throw new BadRequestError(`So luong chuyen vuot so dang giu (${outstanding} ${source.unit})`);
+        assertCustodyQuantity(quantity, source.trackingMode, outstanding);
         const { campaign, holder } = await resolveTargetContext(req.body, String(source.plantId), session);
         source.quantityTransferred += quantity;
         const sourceCampaign = await MaterialUsageCampaign.findById(source.campaignId).session(session);
@@ -1291,9 +1349,110 @@ export const listReusableStock = async (req: Request, res: Response, _next: Next
                 availableQuantity: Number(row.availableQuantity || 0),
                 repairQuantity: Number(row.repairQuantity || 0),
                 damagedQuantity: Number(row.damagedQuantity || 0),
+                availableReferenceValue: row.availableReferenceValue,
+                repairReferenceValue: row.repairReferenceValue,
+                damagedReferenceValue: row.damagedReferenceValue,
                 lastMovementAt: toIso(row.lastMovementAt),
             })),
             message: 'Lay kho vat tu tai su dung thanh cong',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const processReusableStock = async (req: Request, res: Response) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+        const pool: any = await ReusableMaterialStock.findById(req.params.id).session(session);
+        if (!pool) throw new NotFoundError('Khong tim thay ton tai su dung');
+        assertPlantAccess(req, pool.plantId);
+        const material = await Material.findById(pool.materialId).session(session);
+        if (!material) throw new NotFoundError('Khong tim thay vat tu');
+        const { action, fromBucket, quantity, referenceUnitPrice, note } = req.body;
+        if (
+            (action === 'repair_complete' && fromBucket !== 'repair') ||
+            (action === 'mark_damaged' && fromBucket === 'damaged')
+        ) {
+            throw new BadRequestError('Trang thai nguon khong phu hop thao tac');
+        }
+        assertCustodyQuantity(quantity, material.reuseTrackingMode, pool[`${fromBucket}Quantity`]);
+        const value = takeReferenceValue(
+            pool[`${fromBucket}Quantity`],
+            pool[`${fromBucket}ReferenceValue`],
+            quantity,
+            referenceUnitPrice
+        );
+        pool[`${fromBucket}Quantity`] = Number((pool[`${fromBucket}Quantity`] - quantity).toFixed(6));
+        pool[`${fromBucket}ReferenceValue`] = value.remainingValue;
+        const toBucket = action === 'repair_complete' ? 'available' : action === 'mark_damaged' ? 'damaged' : undefined;
+        if (toBucket) {
+            pool[`${toBucket}ReferenceValue`] = addReferenceValue(
+                pool[`${toBucket}Quantity`],
+                pool[`${toBucket}ReferenceValue`],
+                value.movedValue
+            );
+            pool[`${toBucket}Quantity`] = Number((pool[`${toBucket}Quantity`] + quantity).toFixed(6));
+        }
+        pool.lastMovementAt = new Date();
+        await pool.save({ session });
+        await ReusableMaterialMovement.create(
+            [
+                {
+                    plantId: pool.plantId,
+                    materialId: pool.materialId,
+                    type: action,
+                    fromBucket,
+                    toBucket,
+                    quantity,
+                    referenceValue: value.movedValue,
+                    confirmedReferenceUnitPrice: referenceUnitPrice,
+                    note,
+                    performedBy: req.userId,
+                },
+            ],
+            { session }
+        );
+        await session.commitTransaction();
+    } catch (error) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        await session.endSession();
+    }
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: null,
+            message: 'Da cap nhat ton va luu lich su xu ly',
+            status: StatusCodes.OK,
+            success: true,
+        })
+    );
+};
+
+export const getReusableStockMovements = async (req: Request, res: Response) => {
+    const pool = await ReusableMaterialStock.findById(req.params.id).lean();
+    if (!pool) throw new NotFoundError('Khong tim thay ton tai su dung');
+    assertPlantAccess(req, pool.plantId);
+    const { page, limit, skip } = getCustodyPagination(req.query);
+    const filter = { plantId: pool.plantId, materialId: pool.materialId };
+    const rows = await ReusableMaterialMovement.find(filter)
+        .sort({ occurredAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('performedBy', 'fullName name email')
+        .lean();
+    const total = await ReusableMaterialMovement.countDocuments(filter);
+    return res.status(StatusCodes.OK).json(
+        customResponse({
+            data: buildPaginatedResponse(
+                rows.map((row) => ({ ...row, id: String(row._id) })),
+                total,
+                page,
+                limit
+            ),
+            message: 'Lich su kho tai su dung',
             status: StatusCodes.OK,
             success: true,
         })
@@ -1472,7 +1631,12 @@ export const exportMaterialCustodyReport = async (req: Request, res: Response, _
                   $group: {
                       _id: '$campaignId',
                       assignmentCount: { $sum: 1 },
-                      issuedQuantity: { $sum: '$quantityIssued' },
+                      issuedQuantity: {
+                          $sum: { $cond: [{ $eq: ['$sourceType', 'custody_transfer'] }, 0, '$quantityIssued'] },
+                      },
+                      transferredInQuantity: {
+                          $sum: { $cond: [{ $eq: ['$sourceType', 'custody_transfer'] }, '$quantityIssued', 0] },
+                      },
                       outstandingQuantity: { $sum: outstandingExpression },
                       holders: { $addToSet: { $ifNull: ['$recipientId', '$holderName'] } },
                   },
@@ -1481,6 +1645,7 @@ export const exportMaterialCustodyReport = async (req: Request, res: Response, _
                   $project: {
                       assignmentCount: 1,
                       issuedQuantity: 1,
+                      transferredInQuantity: 1,
                       outstandingQuantity: 1,
                       holderCount: { $size: '$holders' },
                   },

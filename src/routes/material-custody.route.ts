@@ -11,6 +11,7 @@ import {
     createMaterialCustodyOpeningBalanceSchema,
     createMaterialUsageCampaignSchema,
     openMaterialRecallSchema,
+    processReusableStockSchema,
     reissueReusableMaterialSchema,
     resolveMaterialCustodySchema,
     transferMaterialCustodySchema,
@@ -26,6 +27,17 @@ router.use(authorize(...ROLE_GROUPS.MANAGEMENT));
 router.get('/summary', asyncHandler(materialCustodyService.getSummary));
 router.get('/export', asyncHandler(materialCustodyService.exportMaterialCustodyReport));
 router.get('/reusable-stock', asyncHandler(materialCustodyService.listReusableStock));
+router.post(
+    '/reusable-stock/:id/process',
+    validateObjectIdParams('id'),
+    validator(processReusableStockSchema),
+    asyncHandler(materialCustodyService.processReusableStock)
+);
+router.get(
+    '/reusable-stock/:id/movements',
+    validateObjectIdParams('id'),
+    asyncHandler(materialCustodyService.getReusableStockMovements)
+);
 router.get('/references/production-items', asyncHandler(materialCustodyService.listProductionItemReferences));
 router.get('/references/materials', asyncHandler(materialCustodyService.listTrackedMaterialReferences));
 

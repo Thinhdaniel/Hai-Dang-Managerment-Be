@@ -7,6 +7,9 @@ const ReusableMaterialStockSchema = new mongoose.Schema(
         availableQuantity: { type: Number, min: 0, default: 0 },
         repairQuantity: { type: Number, min: 0, default: 0 },
         damagedQuantity: { type: Number, min: 0, default: 0 },
+        availableReferenceValue: { type: Number, min: 0 },
+        repairReferenceValue: { type: Number, min: 0 },
+        damagedReferenceValue: { type: Number, min: 0 },
         lastMovementAt: { type: Date },
     },
     { timestamps: true, versionKey: false }

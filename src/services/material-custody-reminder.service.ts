@@ -12,7 +12,7 @@ import {
     getMaterialCustodyReminderDateKey,
 } from '@/services/material-custody-reminder.helpers';
 
-const EPSILON = 0.000001;
+const EPSILON = 0.000000001;
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
 const UPCOMING_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 let scheduleStarted = false;
@@ -48,6 +48,28 @@ const getRecipients = async (plantId: mongoose.Types.ObjectId | string) => {
     return rows.map((row) => String(row._id));
 };
 
+export const notifyMaterialRecallOpened = async (campaign: any, excludeUserId?: string) => {
+    for (const userId of await getRecipients(campaign.plantId)) {
+        if (userId === excludeUserId) continue;
+        await notifyUserUpserted(
+            userId,
+            {
+                type: 'warning',
+                actionType: 'material_custody',
+                actionId: String(campaign._id),
+                actionData: { plantId: String(campaign.plantId), campaignId: String(campaign._id) },
+                title: `Thu hồi CCDC mã hàng ${campaign.itemCode}`,
+                message: `Đợt ${campaign.campaignCode} đã mở thu hồi. Hạn ${new Date(campaign.dueAt).toLocaleDateString('vi-VN', { timeZone: TIME_ZONE })}.`,
+            },
+            {
+                dedupeKey: `material-custody-open:${campaign._id}`,
+                deliveryTag: `material-custody-open:${campaign._id}`,
+                telegramMode: 'fallback',
+            }
+        );
+    }
+};
+
 export const evaluateMaterialCustodyReminders = async (
     trigger: 'schedule' | 'startup' | 'internal' = 'schedule',
     now = new Date()
@@ -56,25 +78,31 @@ export const evaluateMaterialCustodyReminders = async (
     evaluationRunning = true;
     try {
         const campaigns: any[] = await MaterialUsageCampaign.find({
-            status: MATERIAL_CUSTODY_CAMPAIGN_STATUS.RECALLING,
-            dueAt: { $ne: null, $lte: new Date(now.getTime() + UPCOMING_WINDOW_MS) },
+            status: { $in: [MATERIAL_CUSTODY_CAMPAIGN_STATUS.RECALLING, MATERIAL_CUSTODY_CAMPAIGN_STATUS.ACTIVE] },
             isDeleted: { $ne: true },
         }).lean();
         if (!campaigns.length) return { skipped: false, trigger, campaigns: 0, notifications: 0 };
 
         const campaignIds = campaigns.map((campaign) => campaign._id);
         const stats = await MaterialCustodyAssignment.aggregate([
-            { $match: { campaignId: { $in: campaignIds }, isDeleted: { $ne: true } } },
+            {
+                $match: {
+                    campaignId: { $in: campaignIds },
+                    isDeleted: { $ne: true },
+                    dueAt: { $ne: null, $lte: new Date(now.getTime() + UPCOMING_WINDOW_MS) },
+                },
+            },
             { $addFields: { outstanding: outstandingExpression } },
             { $match: { outstanding: { $gt: EPSILON } } },
             {
                 $group: {
                     _id: '$campaignId',
                     outstandingQuantity: { $sum: '$outstanding' },
+                    dueAt: { $min: '$dueAt' },
                     holders: { $addToSet: { $ifNull: ['$recipientId', '$holderName'] } },
                 },
             },
-            { $project: { outstandingQuantity: 1, holderCount: { $size: '$holders' } } },
+            { $project: { outstandingQuantity: 1, dueAt: 1, holderCount: { $size: '$holders' } } },
         ]);
         const statsByCampaign = new Map(stats.map((row: any) => [String(row._id), row]));
         const dateKey = getMaterialCustodyReminderDateKey(now);
@@ -89,7 +117,7 @@ export const evaluateMaterialCustodyReminders = async (
             const copy = buildMaterialCustodyReminderCopy({
                 campaignCode: campaign.campaignCode,
                 itemCode: campaign.itemCode,
-                dueAt: new Date(campaign.dueAt),
+                dueAt: new Date(campaignStats.dueAt),
                 outstandingQuantity: Number(campaignStats.outstandingQuantity || 0),
                 holderCount: Number(campaignStats.holderCount || 0),
                 now,
@@ -101,7 +129,7 @@ export const evaluateMaterialCustodyReminders = async (
                     dedupeKey,
                 });
                 if (alreadySent) continue;
-                await notifyUserUpserted(
+                const delivery = await notifyUserUpserted(
                     userId,
                     {
                         ...copy,
@@ -116,7 +144,7 @@ export const evaluateMaterialCustodyReminders = async (
                         telegramMode: 'fallback',
                     }
                 );
-                notifications += 1;
+                notifications += delivery.inAppCreated;
             }
         }
         return { skipped: false, trigger, campaigns: relevantCampaigns, notifications };

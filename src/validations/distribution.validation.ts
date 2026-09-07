@@ -82,4 +82,8 @@ export const appendInternalItemsSchema = z.object({
 
 export const finalizeInternalDraftSchema = z.object({
     note: zOptionalString(),
+    requesterName: zOptionalString(),
+    targetDepartment: zOptionalString(),
+    targetLine: zOptionalString(),
+    ...internalCustodyFields,
 });

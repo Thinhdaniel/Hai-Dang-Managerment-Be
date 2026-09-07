@@ -235,7 +235,7 @@ export const buildMaterialCustodyWorkbook = (input: MaterialCustodyWorkbookInput
         'Trạng thái',
         'Người / tổ',
         'Dòng cấp',
-        'Đã cấp',
+        'Cấp / đầu kỳ',
         'Chưa thu',
         'Hạn thu',
         'Ghi chú',
@@ -253,7 +253,12 @@ export const buildMaterialCustodyWorkbook = (input: MaterialCustodyWorkbookInput
             Number(row.issuedQuantity || 0),
             Number(row.outstandingQuantity || 0),
             formatDate(row.dueAt),
-            row.note || '',
+            [
+                row.note,
+                `Nhận chuyển: ${Number(row.transferredInQuantity || 0)}; cột cấp/đầu kỳ không cộng chuyển người giữ.`,
+            ]
+                .filter(Boolean)
+                .join(' '),
         ])
     );
     styleDataTable(campaignSheet, 4);

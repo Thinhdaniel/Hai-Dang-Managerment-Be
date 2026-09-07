@@ -13,7 +13,11 @@ export const classifyMaterialRecallDue = (dueAt: Date, now: Date) => {
     if (remainingMs < 0) {
         return { state: 'overdue' as const, days: Math.max(1, Math.ceil(Math.abs(remainingMs) / DAY_MS)) };
     }
-    return { state: 'upcoming' as const, days: Math.max(0, Math.ceil(remainingMs / DAY_MS)) };
+    const days = Math.round(
+        (Date.parse(getMaterialCustodyReminderDateKey(dueAt)) - Date.parse(getMaterialCustodyReminderDateKey(now))) /
+            DAY_MS
+    );
+    return { state: 'upcoming' as const, days: Math.max(0, days) };
 };
 
 export const buildMaterialCustodyReminderCopy = ({
