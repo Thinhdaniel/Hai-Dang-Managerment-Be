@@ -7,7 +7,6 @@ import {
     confirmDistributionSchema,
     createCompensationDistributionRecordSchema,
     createDistributionRecordSchema,
-    createInternalDistributionRecordSchema,
     createInternalDraftSchema,
     appendInternalItemsSchema,
     finalizeInternalDraftSchema,
@@ -20,16 +19,54 @@ router.use(authenticate);
 // Static routes first
 router.get('/', distributionController.getAllDistributionRecords);
 router.get('/export-range-xlsx', distributionController.exportRangeDistributionXlsx);
-router.post('/', requireCS1Manager, validator(createDistributionRecordSchema), distributionController.createDistributionRecord);
-router.post('/compensations', requireCS1Manager, validator(createCompensationDistributionRecordSchema), distributionController.createCompensationDistributionRecord);
-router.post('/internal', requirePlantManager, validator(createInternalDraftSchema), distributionController.createInternalDistributionRecord);
-router.post('/:id/internal/items', requirePlantManager, validateObjectId, validator(appendInternalItemsSchema), distributionController.appendInternalItems);
-router.patch('/:id/internal/finalize', requirePlantManager, validateObjectId, validator(finalizeInternalDraftSchema), distributionController.finalizeInternalDraft);
+router.post(
+    '/',
+    requireCS1Manager,
+    validator(createDistributionRecordSchema),
+    distributionController.createDistributionRecord
+);
+router.post(
+    '/compensations',
+    requireCS1Manager,
+    validator(createCompensationDistributionRecordSchema),
+    distributionController.createCompensationDistributionRecord
+);
+router.post(
+    '/internal',
+    requirePlantManager,
+    validator(createInternalDraftSchema),
+    distributionController.createInternalDistributionRecord
+);
+router.post(
+    '/:id/internal/items',
+    requirePlantManager,
+    validateObjectId,
+    validator(appendInternalItemsSchema),
+    distributionController.appendInternalItems
+);
+router.patch(
+    '/:id/internal/finalize',
+    requirePlantManager,
+    validateObjectId,
+    validator(finalizeInternalDraftSchema),
+    distributionController.finalizeInternalDraft
+);
 
 // Sub-resource routes before /:id
 router.get('/:id/export-xlsx', validateObjectId, distributionController.exportDistributionXlsx);
-router.patch('/:id/distribute', requireCS1Manager, validateObjectId, distributionController.distributeDistributionRecord);
-router.patch('/:id/confirm', requirePlantManager, validateObjectId, validator(confirmDistributionSchema), distributionController.confirmDistributionRecord);
+router.patch(
+    '/:id/distribute',
+    requireCS1Manager,
+    validateObjectId,
+    distributionController.distributeDistributionRecord
+);
+router.patch(
+    '/:id/confirm',
+    requirePlantManager,
+    validateObjectId,
+    validator(confirmDistributionSchema),
+    distributionController.confirmDistributionRecord
+);
 
 // Dynamic /:id routes last
 router.get('/:id', validateObjectId, distributionController.getDistributionRecordById);
