@@ -251,6 +251,8 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcR
                 unit: run.unit || 'SP',
                 unitPriceSnapshot: Number(run.unitPriceSnapshot || 0),
                 hourlyQuota: Number(run.hourlyQuota || 0),
+                quotaQuantity: run.quotaQuantity === undefined ? undefined : Number(run.quotaQuantity),
+                quotaMinutes: run.quotaMinutes === undefined ? undefined : Number(run.quotaMinutes),
                 startedSlotKey: run.startedSlotKey,
                 endedSlotKey: run.endedSlotKey,
                 plannedEndSlotKey: run.plannedEndSlotKey,

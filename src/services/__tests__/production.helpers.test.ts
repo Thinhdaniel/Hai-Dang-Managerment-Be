@@ -36,6 +36,63 @@ test('phân khoán lẻ thành sản phẩm nguyên và bảo toàn tổng theo 
     assert.equal((targets.get('run-b:1') || 0) + (targets.get('run-b:2') || 0), 17);
 });
 
+test('khoán ngày 205 SP được chia 20/21 SP theo giờ và giữ đúng tổng', () => {
+    const dailySlots = Array.from({ length: 10 }, (_, index) => ({
+        key: `${String(index + 7).padStart(2, '0')}:00`,
+        label: `${index + 7}-${index + 8}h`,
+        startMinute: (index + 7) * 60,
+        endMinute: (index + 8) * 60,
+        kind: 'regular',
+        isActive: true,
+    }));
+    const detail = buildProductionDayDetail(
+        {
+            _id: 'day-quota-205',
+            plantId: 'plant-1',
+            productionDate: '2026-09-11',
+            timeSlots: dailySlots,
+        },
+        [
+            {
+                _id: 'record-quota-205',
+                dayId: 'day-quota-205',
+                plantId: 'plant-1',
+                productionDate: '2026-09-11',
+                lineId: 'line-1',
+                lineCode: 'CM1',
+                workerCount: 20,
+                runs: [
+                    {
+                        _id: 'run-quota-205',
+                        itemId: 'item-a',
+                        itemCode: 'A-01',
+                        unit: 'SP',
+                        unitPriceSnapshot: 1_000,
+                        quotaQuantity: 205,
+                        quotaMinutes: 600,
+                        hourlyQuota: 20.5,
+                        startedSlotKey: '07:00',
+                        status: 'active',
+                    },
+                ],
+                entries: [],
+                operationTracks: [],
+                operationEntries: [],
+            },
+        ]
+    );
+
+    const targets = detail.lines[0].slotValues.map((value: any) => value.target);
+    assert.deepEqual(targets, [20, 21, 20, 21, 20, 21, 20, 21, 20, 21]);
+    assert.ok(targets.every(Number.isInteger));
+    assert.equal(
+        targets.reduce((sum: number, target: number) => sum + target, 0),
+        205
+    );
+    assert.equal(detail.lines[0].totalTarget, 205);
+    assert.equal(detail.lines[0].runs[0].quotaQuantity, 205);
+});
+
 test('khung 30 phút dùng khoán nguyên cho cả chuyền và công đoạn', () => {
     const halfHourSlots = [
         { key: '14:00', label: '14h-14h30', startMinute: 840, endMinute: 870, kind: 'regular', isActive: true },

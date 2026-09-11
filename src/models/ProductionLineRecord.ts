@@ -8,6 +8,10 @@ const ProductionRunSchema = new mongoose.Schema(
         unit: { type: String, trim: true, default: 'SP' },
         unitPriceSnapshot: { type: Number, required: true, min: 0 },
         hourlyQuota: { type: Number, required: true, min: 0 },
+        // Tổng khoán người dùng nhập cho khoảng chạy ban đầu. hourlyQuota vẫn
+        // được lưu để giữ ổn định chỉ tiêu nếu đợt mã hàng kết thúc sớm.
+        quotaQuantity: { type: Number, min: 0 },
+        quotaMinutes: { type: Number, min: 1, max: 1440 },
         startedSlotKey: { type: String, required: true, trim: true },
         endedSlotKey: { type: String, trim: true },
         status: { type: String, enum: ['planned', 'active', 'closed'], default: 'active' },
@@ -103,6 +107,8 @@ const ProductionSetupCorrectionSchema = new mongoose.Schema(
         nextItemCode: { type: String, required: true, trim: true },
         nextUnitPrice: { type: Number, required: true, min: 0 },
         nextHourlyQuota: { type: Number, required: true, min: 0 },
+        nextQuotaQuantity: { type: Number, min: 0 },
+        nextQuotaMinutes: { type: Number, min: 1, max: 1440 },
         correctedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         correctedAt: { type: Date, default: Date.now },
     },

@@ -197,6 +197,57 @@ const normalizeTimeSlots = (input: any[]) => {
     return slots;
 };
 
+type ProductionQuotaConfiguration = {
+    hourlyQuota: number;
+    quotaQuantity?: number;
+    quotaMinutes?: number;
+};
+
+const productionQuotaMinutes = (slots: any[], startSlotKey: string, endSlotKey?: string) => {
+    const orderedSlots = [...slots].sort(
+        (left: any, right: any) => Number(left.startMinute || 0) - Number(right.startMinute || 0)
+    );
+    const startIndex = orderedSlots.findIndex((slot: any) => String(slot.key) === String(startSlotKey));
+    if (startIndex < 0) throw new BadRequestError('Khung giờ bắt đầu không thuộc ngày sản xuất');
+    const endIndex = endSlotKey
+        ? orderedSlots.findIndex((slot: any) => String(slot.key) === String(endSlotKey))
+        : orderedSlots.length - 1;
+    if (endIndex < startIndex) throw new BadRequestError('Khoảng thời gian áp dụng khoán không hợp lệ');
+
+    return orderedSlots.slice(startIndex, endIndex + 1).reduce((total: number, slot: any) => {
+        if (slot.isActive === false || slot.kind === 'overtime') return total;
+        return total + Math.max(0, Number(slot.endMinute || 0) - Number(slot.startMinute || 0));
+    }, 0);
+};
+
+const resolveProductionQuota = (
+    input: { hourlyQuota?: unknown; quotaQuantity?: unknown },
+    slots: any[],
+    startSlotKey: string,
+    endSlotKey?: string
+): ProductionQuotaConfiguration => {
+    if (input.quotaQuantity !== undefined) {
+        const quotaQuantity = Number(input.quotaQuantity);
+        const quotaMinutes = productionQuotaMinutes(slots, startSlotKey, endSlotKey);
+        if (quotaMinutes <= 0) {
+            throw new BadRequestError('Khoảng áp dụng cần có ít nhất một khung giờ sản xuất thường');
+        }
+        return {
+            quotaQuantity,
+            quotaMinutes,
+            hourlyQuota: (quotaQuantity * 60) / quotaMinutes,
+        };
+    }
+
+    return { hourlyQuota: Number(input.hourlyQuota || 0) };
+};
+
+const applyProductionQuota = (run: any, quota: ProductionQuotaConfiguration) => {
+    run.hourlyQuota = quota.hourlyQuota;
+    run.quotaQuantity = quota.quotaQuantity;
+    run.quotaMinutes = quota.quotaMinutes;
+};
+
 const assertPlantExists = async (plantId: string) => {
     const plant = await Plant.findOne({ _id: plantId, isDeleted: { $ne: true } })
         .select('name code')
@@ -1151,6 +1202,7 @@ export const configureProductionLine = async (req: Request, res: Response) => {
         if (!day.timeSlots.some((slot: any) => slot.key === startSlotKey)) {
             throw new BadRequestError('Khung giờ bắt đầu không thuộc ngày sản xuất');
         }
+        const quota = resolveProductionQuota(req.body, day.timeSlots, startSlotKey);
 
         if (!record.runs.length) {
             record.runs.push({
@@ -1159,7 +1211,7 @@ export const configureProductionLine = async (req: Request, res: Response) => {
                 itemName: item.name,
                 unit: item.unit || 'SP',
                 unitPriceSnapshot: item.unitPrice || 0,
-                hourlyQuota: req.body.hourlyQuota,
+                ...quota,
                 startedSlotKey: startSlotKey,
                 status: 'active',
                 createdBy: req.userId,
@@ -1171,7 +1223,7 @@ export const configureProductionLine = async (req: Request, res: Response) => {
             run.itemName = item.name;
             run.unit = item.unit || 'SP';
             run.unitPriceSnapshot = item.unitPrice || 0;
-            run.hourlyQuota = req.body.hourlyQuota;
+            applyProductionQuota(run, quota);
             run.startedSlotKey = startSlotKey;
             run.status = 'active';
             run.endedSlotKey = undefined;
@@ -1181,7 +1233,7 @@ export const configureProductionLine = async (req: Request, res: Response) => {
             if (!activeRun || String(activeRun.itemId) !== String(item._id)) {
                 throw new BadRequestError('Chuyền đã có sản lượng; hãy dùng chức năng đổi mã hàng');
             }
-            activeRun.hourlyQuota = req.body.hourlyQuota;
+            applyProductionQuota(activeRun, quota);
         }
     }
 
@@ -1221,6 +1273,7 @@ export const createProductionRun = async (req: Request, res: Response) => {
         isActive: true,
     });
     if (!item) throw new NotFoundError('Không tìm thấy mã hàng đang hoạt động');
+    const quota = resolveProductionQuota(req.body, day.timeSlots, req.body.startedSlotKey);
 
     const conflictingSlotKeys = findProductionRunStartConflicts(record.entries, req.body.startedSlotKey, day.timeSlots);
     if (conflictingSlotKeys.length) {
@@ -1247,7 +1300,7 @@ export const createProductionRun = async (req: Request, res: Response) => {
         itemName: item.name,
         unit: item.unit || 'SP',
         unitPriceSnapshot: item.unitPrice || 0,
-        hourlyQuota: req.body.hourlyQuota,
+        ...quota,
         startedSlotKey: req.body.startedSlotKey,
         status: 'active',
         createdBy: req.userId,
@@ -1313,6 +1366,7 @@ export const correctProductionLineSetup = async (req: Request, res: Response) =>
     const activeSlots = day.timeSlots.filter((slot: any) => slot.isActive !== false);
     const firstSlotKey = activeSlots[0]?.key;
     if (!firstSlotKey) throw new BadRequestError('Ngày sản xuất chưa có khung giờ hoạt động');
+    const quota = resolveProductionQuota(req.body, day.timeSlots, firstSlotKey);
 
     const slotIndexByKey = new Map(day.timeSlots.map((slot: any, index: number) => [String(slot.key), index]));
     const canonicalRun = [...record.runs].sort((left: any, right: any) => {
@@ -1353,7 +1407,7 @@ export const correctProductionLineSetup = async (req: Request, res: Response) =>
     canonicalRun.itemName = item.name;
     canonicalRun.unit = item.unit || 'SP';
     canonicalRun.unitPriceSnapshot = item.unitPrice || 0;
-    canonicalRun.hourlyQuota = req.body.hourlyQuota;
+    applyProductionQuota(canonicalRun, quota);
     canonicalRun.startedSlotKey = firstSlotKey;
     canonicalRun.endedSlotKey = undefined;
     canonicalRun.status = 'active';
@@ -1369,7 +1423,9 @@ export const correctProductionLineSetup = async (req: Request, res: Response) =>
         previousUnitPrices,
         nextItemCode: item.code,
         nextUnitPrice: item.unitPrice || 0,
-        nextHourlyQuota: req.body.hourlyQuota,
+        nextHourlyQuota: quota.hourlyQuota,
+        nextQuotaQuantity: quota.quotaQuantity,
+        nextQuotaMinutes: quota.quotaMinutes,
         correctedBy: req.userId,
         correctedAt: new Date(),
     });

@@ -214,23 +214,31 @@ export const configureProductionLineSchema = z
         workerCountConfirmed: z.boolean().default(true),
         itemId: zObjectId('Mã hàng').optional(),
         hourlyQuota: z.number().min(0).max(10000000).optional(),
+        quotaQuantity: z.number().int().min(0).max(100000000).optional(),
         startSlotKey: zOptionalString(),
         operationTrackingEnabled: z.boolean().optional(),
     })
     .superRefine((value, ctx) => {
-        if (value.itemId && value.hourlyQuota === undefined) {
-            ctx.addIssue({ code: 'custom', message: 'Cần nhập khoán giờ', path: ['hourlyQuota'] });
+        if (value.itemId && value.hourlyQuota === undefined && value.quotaQuantity === undefined) {
+            ctx.addIssue({ code: 'custom', message: 'Cần nhập tổng khoán áp dụng', path: ['quotaQuantity'] });
         }
-        if (!value.itemId && value.hourlyQuota !== undefined) {
+        if (!value.itemId && (value.hourlyQuota !== undefined || value.quotaQuantity !== undefined)) {
             ctx.addIssue({ code: 'custom', message: 'Cần chọn mã hàng', path: ['itemId'] });
         }
     });
 
-export const createProductionRunSchema = z.object({
-    itemId: zObjectId('Mã hàng'),
-    hourlyQuota: z.number().min(0).max(10000000),
-    startedSlotKey: z.string().trim().min(1).max(24),
-});
+export const createProductionRunSchema = z
+    .object({
+        itemId: zObjectId('Mã hàng'),
+        hourlyQuota: z.number().min(0).max(10000000).optional(),
+        quotaQuantity: z.number().int().min(0).max(100000000).optional(),
+        startedSlotKey: z.string().trim().min(1).max(24),
+    })
+    .superRefine((value, ctx) => {
+        if (value.hourlyQuota === undefined && value.quotaQuantity === undefined) {
+            ctx.addIssue({ code: 'custom', message: 'Cần nhập tổng khoán áp dụng', path: ['quotaQuantity'] });
+        }
+    });
 
 export const configureProductionOperationTracksSchema = z
     .object({
@@ -245,12 +253,19 @@ export const configureProductionOperationTracksSchema = z
         uniqueOperationConfigs(value.operations, ctx);
     });
 
-export const correctProductionLineSetupSchema = z.object({
-    itemId: zObjectId('Mã hàng'),
-    hourlyQuota: z.number().min(0).max(10000000),
-    reason: z.string().trim().min(5, 'Cần ghi rõ lý do sửa mã').max(500),
-    confirmed: z.literal(true, { error: 'Cần xác nhận tính lại toàn bộ dữ liệu trong ngày' }),
-});
+export const correctProductionLineSetupSchema = z
+    .object({
+        itemId: zObjectId('Mã hàng'),
+        hourlyQuota: z.number().min(0).max(10000000).optional(),
+        quotaQuantity: z.number().int().min(0).max(100000000).optional(),
+        reason: z.string().trim().min(5, 'Cần ghi rõ lý do sửa mã').max(500),
+        confirmed: z.literal(true, { error: 'Cần xác nhận tính lại toàn bộ dữ liệu trong ngày' }),
+    })
+    .superRefine((value, ctx) => {
+        if (value.hourlyQuota === undefined && value.quotaQuantity === undefined) {
+            ctx.addIssue({ code: 'custom', message: 'Cần nhập tổng khoán đúng', path: ['quotaQuantity'] });
+        }
+    });
 
 export const upsertHourlyProductionEntrySchema = z.object({
     runId: zObjectId('Đợt mã hàng'),
