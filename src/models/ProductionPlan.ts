@@ -60,6 +60,13 @@ const ProductionPlanSchema = new mongoose.Schema(
         plantCode: { type: String, trim: true },
         productionDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
         timeSlots: { type: [ProductionPlanTimeSlotSchema], required: true, default: [] },
+        scheduleSource: {
+            type: String,
+            enum: ['legacy', 'system_default', 'weekly_template', 'day_snapshot'],
+            default: 'legacy',
+        },
+        scheduleWeekday: { type: Number, min: 0, max: 6 },
+        scheduleRevision: { type: Number, min: 0, default: 0 },
         status: { type: String, enum: ['draft', 'published'], default: 'draft' },
         revision: { type: Number, min: 0, default: 0 },
         allocations: { type: [ProductionPlanAllocationSchema], default: [] },

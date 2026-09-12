@@ -165,6 +165,12 @@ export const updateProductionTimeSlotsSchema = z.object({
     timeSlots: timeSlotsSchema,
 });
 
+export const updateProductionScheduleTemplateSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    isWorkingDay: z.boolean(),
+    timeSlots: timeSlotsSchema,
+});
+
 export const transitionProductionDaySchema = z.object({
     note: z.string().trim().max(500).optional(),
 });

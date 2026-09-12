@@ -18,7 +18,6 @@ import {
     buildProductionDayDetail,
     buildTimeSlotLabel,
     decideProductionEntrySync,
-    DEFAULT_PRODUCTION_TIME_SLOTS,
     findProductionRunStartConflicts,
     redactProductionFinancials,
     serializeProductionItem,
@@ -32,6 +31,8 @@ import { buildProductionForecast } from './production-forecast.helpers';
 import { buildProductionMonitor } from './production-monitor.helpers';
 import { serializeProductionPlan } from './production-plan.service';
 import { shouldProcessProductionPriceUpdate, summarizeProductionPriceCorrection } from './production-price.helpers';
+import { productionWeekdayFromDate } from './production-schedule.helpers';
+import { resolveProductionScheduleForDate } from './production-schedule.service';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const PRODUCTION_STATUSES = new Set(['draft', 'submitted', 'locked']);
@@ -1002,23 +1003,38 @@ export const createProductionDay = async (req: Request, res: Response) => {
     }
 
     const plant = await assertPlantExists(plantId);
-    const previousDay = req.body.timeSlots
+    const sameDayPlan: any = req.body.timeSlots
         ? null
-        : await ProductionDay.findOne({ plantId, productionDate: { $lt: productionDate } })
-              .sort({ productionDate: -1 })
-              .select('timeSlots')
+        : await ProductionPlan.findOne({ plantId, productionDate })
+              .select('timeSlots scheduleWeekday scheduleRevision')
               .lean();
-    const inheritedSlots = previousDay?.timeSlots?.length
-        ? previousDay.timeSlots.map((slot: any) => ({ ...slot }))
-        : DEFAULT_PRODUCTION_TIME_SLOTS.map((slot) => ({ ...slot }));
-    const timeSlots = normalizeTimeSlots(req.body.timeSlots || inheritedSlots);
+    const schedule = req.body.timeSlots
+        ? {
+              timeSlots: normalizeTimeSlots(req.body.timeSlots),
+              source: 'manual_override' as const,
+              weekday: productionWeekdayFromDate(productionDate),
+              revision: 0,
+          }
+        : sameDayPlan?.timeSlots?.length
+          ? {
+                timeSlots: normalizeTimeSlots(sameDayPlan.timeSlots),
+                source: 'plan_snapshot' as const,
+                weekday: Number.isInteger(sameDayPlan.scheduleWeekday)
+                    ? Number(sameDayPlan.scheduleWeekday)
+                    : productionWeekdayFromDate(productionDate),
+                revision: Number(sameDayPlan.scheduleRevision || 0),
+            }
+          : await resolveProductionScheduleForDate(plantId, productionDate);
     try {
         const day = await ProductionDay.create({
             plantId,
             plantName: plant.name,
             plantCode: plant.code,
             productionDate,
-            timeSlots,
+            timeSlots: schedule.timeSlots,
+            scheduleSource: schedule.source,
+            scheduleWeekday: schedule.weekday,
+            scheduleRevision: schedule.revision,
             createdBy: req.userId,
             updatedBy: req.userId,
         });
@@ -1034,13 +1050,17 @@ export const createProductionDay = async (req: Request, res: Response) => {
     }
 };
 
-export const updateProductionTimeSlots = async (req: Request, res: Response) => {
-    const day = await loadDayForWrite(req, String(req.params.id));
-    const timeSlots = normalizeTimeSlots(req.body.timeSlots);
+const assertTimeSlotUpdateAllowed = async (day: any, timeSlots: any[]) => {
     const nextKeys = new Set(timeSlots.map((slot) => slot.key));
-    const records = await ProductionLineRecord.find({ dayId: day._id })
-        .select('runs entries qcEntries operationTracks operationEntries')
-        .lean();
+    const [records, qcRecords, plan]: [any[], any[], any] = await Promise.all([
+        ProductionLineRecord.find({ dayId: day._id })
+            .select('runs entries qcEntries operationTracks operationEntries')
+            .lean(),
+        ProductionQcRecord.find({ dayId: day._id }).select('slotKey').lean(),
+        ProductionPlan.findOne({ plantId: day.plantId, productionDate: day.productionDate })
+            .select('allocations.startSlotKey allocations.endSlotKey')
+            .lean(),
+    ]);
     const usedKeys = new Set<string>();
     records.forEach((record: any) => {
         record.entries?.forEach((entry: any) => usedKeys.add(String(entry.slotKey)));
@@ -1053,7 +1073,15 @@ export const updateProductionTimeSlots = async (req: Request, res: Response) => 
         record.runs?.forEach((run: any) => {
             if (run.startedSlotKey) usedKeys.add(String(run.startedSlotKey));
             if (run.endedSlotKey) usedKeys.add(String(run.endedSlotKey));
+            if (run.plannedEndSlotKey) usedKeys.add(String(run.plannedEndSlotKey));
         });
+    });
+    qcRecords.forEach((record: any) => {
+        if (record.slotKey) usedKeys.add(String(record.slotKey));
+    });
+    plan?.allocations?.forEach((allocation: any) => {
+        if (allocation.startSlotKey) usedKeys.add(String(allocation.startSlotKey));
+        if (allocation.endSlotKey) usedKeys.add(String(allocation.endSlotKey));
     });
     const removedUsedKey = [...usedKeys].find((key) => !nextKeys.has(key));
     if (removedUsedKey) {
@@ -1068,20 +1096,45 @@ export const updateProductionTimeSlots = async (req: Request, res: Response) => 
             next &&
             (Number(current.startMinute) !== Number(next.startMinute) ||
                 Number(current.endMinute) !== Number(next.endMinute) ||
+                String(current.kind || 'regular') !== String(next.kind || 'regular') ||
                 next.isActive === false)
         );
     });
     if (changedUsedKey) {
         throw new BadRequestError(
-            `Không thể đổi thời lượng hoặc tắt khung giờ ${changedUsedKey} vì đã phát sinh dữ liệu`
+            `Không thể đổi thời gian, loại giờ hoặc tắt khung ${changedUsedKey} vì đã phát sinh dữ liệu`
         );
     }
+};
+
+export const updateProductionTimeSlots = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.id));
+    const timeSlots = normalizeTimeSlots(req.body.timeSlots);
+    await assertTimeSlotUpdateAllowed(day, timeSlots);
 
     day.timeSlots = timeSlots as any;
+    day.scheduleSource = 'manual_override';
+    day.scheduleWeekday = productionWeekdayFromDate(day.productionDate);
+    day.scheduleRevision = 0;
     day.updatedBy = req.userId as any;
     await day.save();
     emitProductionChange(day, { changeType: 'time-slots-updated' });
     return sendSuccess(res, await loadDayDetail(day, req.role), 'Đã cập nhật khung giờ');
+};
+
+export const applyProductionScheduleTemplate = async (req: Request, res: Response) => {
+    const day = await loadDayForWrite(req, String(req.params.id));
+    const schedule = await resolveProductionScheduleForDate(String(day.plantId), day.productionDate);
+    const timeSlots = normalizeTimeSlots(schedule.timeSlots);
+    await assertTimeSlotUpdateAllowed(day, timeSlots);
+    day.timeSlots = timeSlots as any;
+    day.scheduleSource = schedule.source;
+    day.scheduleWeekday = schedule.weekday;
+    day.scheduleRevision = schedule.revision;
+    day.updatedBy = req.userId as any;
+    await day.save();
+    emitProductionChange(day, { changeType: 'schedule-template-applied' });
+    return sendSuccess(res, await loadDayDetail(day, req.role), 'Đã áp dụng lịch tuần cho ngày sản xuất');
 };
 
 export const addProductionDayLine = async (req: Request, res: Response) => {

@@ -9,7 +9,7 @@ import ProductionLineRecord from '@/models/ProductionLineRecord';
 import ProductionPlan from '@/models/ProductionPlan';
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
-import { DEFAULT_PRODUCTION_TIME_SLOTS } from './production.helpers';
+import { resolveProductionScheduleForDate } from './production-schedule.service';
 import { sendSuccess } from './service.helpers';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -100,6 +100,9 @@ export const serializeProductionPlan = (input: any) => {
         productionDate: plan.productionDate,
         status: plan.status || 'draft',
         revision: Number(plan.revision || 0),
+        scheduleSource: plan.scheduleSource || 'legacy',
+        scheduleWeekday: Number.isInteger(plan.scheduleWeekday) ? Number(plan.scheduleWeekday) : undefined,
+        scheduleRevision: Number(plan.scheduleRevision || 0),
         timeSlots: [...(plan.timeSlots || [])]
             .sort((left: any, right: any) => Number(left.startMinute) - Number(right.startMinute))
             .map((slot: any) => ({
@@ -190,23 +193,21 @@ const emitPlanUpdated = (plan: any, changeType: string) => {
     });
 };
 
-const inheritedTimeSlots = async (plantId: string, productionDate: string) => {
-    const sameDay = await ProductionDay.findOne({ plantId, productionDate }).select('timeSlots').lean();
-    if (sameDay?.timeSlots?.length) return sameDay.timeSlots.map((slot: any) => ({ ...slot }));
-    const [previousPlan, previousDay] = await Promise.all([
-        ProductionPlan.findOne({ plantId, productionDate: { $lt: productionDate } })
-            .sort({ productionDate: -1 })
-            .select('timeSlots')
-            .lean(),
-        ProductionDay.findOne({ plantId, productionDate: { $lt: productionDate } })
-            .sort({ productionDate: -1 })
-            .select('timeSlots')
-            .lean(),
-    ]);
-    const source = previousPlan?.timeSlots?.length ? previousPlan.timeSlots : previousDay?.timeSlots;
-    return source?.length
-        ? source.map((slot: any) => ({ ...slot }))
-        : DEFAULT_PRODUCTION_TIME_SLOTS.map((slot) => ({ ...slot }));
+const resolvedTimeSlots = async (plantId: string, productionDate: string) => {
+    const sameDay: any = await ProductionDay.findOne({ plantId, productionDate })
+        .select('timeSlots scheduleWeekday scheduleRevision')
+        .lean();
+    if (sameDay?.timeSlots?.length) {
+        return {
+            timeSlots: sameDay.timeSlots.map((slot: any) => ({ ...slot })),
+            source: 'day_snapshot' as const,
+            weekday: Number.isInteger(sameDay.scheduleWeekday)
+                ? Number(sameDay.scheduleWeekday)
+                : new Date(`${productionDate}T00:00:00.000Z`).getUTCDay(),
+            revision: Number(sameDay.scheduleRevision || 0),
+        };
+    }
+    return resolveProductionScheduleForDate(plantId, productionDate);
 };
 
 const normalizeAllocations = async (plan: any, inputs: any[], session?: mongoose.ClientSession) => {
@@ -355,6 +356,9 @@ const ensureProductionDay = async (plan: any, actorId: string, session?: mongoos
                         plantCode: plan.plantCode,
                         productionDate: plan.productionDate,
                         timeSlots: plan.timeSlots.map((slot: any) => ({ ...(slot.toObject?.() ?? slot) })),
+                        scheduleSource: 'plan_snapshot',
+                        scheduleWeekday: plan.scheduleWeekday,
+                        scheduleRevision: plan.scheduleRevision,
                         createdBy: actorId,
                         updatedBy: actorId,
                     },
@@ -517,14 +521,17 @@ export const createProductionPlan = async (req: Request, res: Response) => {
         .select('name code')
         .lean();
     if (!plant) throw new NotFoundError('Không tìm thấy cơ sở');
-    const timeSlots = await inheritedTimeSlots(plantId, productionDate);
+    const schedule = await resolvedTimeSlots(plantId, productionDate);
     try {
         const plan: any = await ProductionPlan.create({
             plantId,
             plantName: plant.name,
             plantCode: plant.code,
             productionDate,
-            timeSlots,
+            timeSlots: schedule.timeSlots,
+            scheduleSource: schedule.source,
+            scheduleWeekday: schedule.weekday,
+            scheduleRevision: schedule.revision,
             createdBy: req.userId,
             updatedBy: req.userId,
             history: [{ type: 'created', revision: 0, actor: req.userId, at: new Date() }],
@@ -718,13 +725,13 @@ export const carryOverProductionPlan = async (req: Request, res: Response) => {
         note: allocation.note,
     }));
     const targetSlots = [...plan.timeSlots]
-        .filter((slot: any) => slot.isActive !== false)
+        .filter((slot: any) => slot.isActive !== false && slot.kind !== 'overtime')
         .sort((left: any, right: any) => Number(left.startMinute) - Number(right.startMinute));
     const targetSlotIndex = new Map<string, number>(
         targetSlots.map((slot: any, index: number) => [String(slot.key), index])
     );
     const sourceSlots = [...sourcePlan.timeSlots]
-        .filter((slot: any) => slot.isActive !== false)
+        .filter((slot: any) => slot.isActive !== false && slot.kind !== 'overtime')
         .sort((left: any, right: any) => Number(left.startMinute) - Number(right.startMinute));
     const sourceSlotIndex = new Map<string, number>(
         sourceSlots.map((slot: any, index: number) => [String(slot.key), index])

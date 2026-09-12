@@ -809,6 +809,9 @@ export const buildProductionDayDetail = (dayInput: any, recordInputs: any[], qcR
             actor: serializeActor(event.actor),
             at: toIso(event.at),
         })),
+        scheduleSource: day.scheduleSource || 'legacy',
+        scheduleWeekday: Number.isInteger(day.scheduleWeekday) ? Number(day.scheduleWeekday) : undefined,
+        scheduleRevision: Number(day.scheduleRevision || 0),
         timeSlots: slots.map((slot: any) => ({
             key: slot.key,
             label: slot.label,

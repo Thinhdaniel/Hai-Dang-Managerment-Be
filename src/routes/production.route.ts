@@ -12,6 +12,7 @@ import * as productionQcOpeningBalanceService from '@/services/production-qc-ope
 import * as productionQcReportService from '@/services/production-qc-report.service';
 import * as productionReminderService from '@/services/production-reminder.service';
 import * as productionReportService from '@/services/production-report.service';
+import * as productionScheduleService from '@/services/production-schedule.service';
 import * as productionService from '@/services/production.service';
 import asyncHandler from '@/utils/asyncHandler';
 import {
@@ -37,6 +38,7 @@ import {
     updateProductionOperationSchema,
     updateProductionItemOperationsSchema,
     updateProductionPlanSchema,
+    updateProductionScheduleTemplateSchema,
     updateProductionTimeSlotsSchema,
     upsertHourlyProductionEntrySchema,
     upsertHourlyOperationEntriesSchema,
@@ -211,6 +213,23 @@ router.get(
 );
 
 router.get(
+    '/schedule-templates',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionScheduleService.listProductionScheduleTemplates)
+);
+router.put(
+    '/schedule-templates/:weekday',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(updateProductionScheduleTemplateSchema),
+    asyncHandler(productionScheduleService.updateProductionScheduleTemplate)
+);
+router.delete(
+    '/schedule-templates/:weekday',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionScheduleService.resetProductionScheduleTemplate)
+);
+
+router.get(
     '/plans/lookup',
     authorize(...ROLE_GROUPS.MANAGEMENT),
     asyncHandler(productionPlanService.lookupProductionPlan)
@@ -311,6 +330,12 @@ router.patch(
     validateObjectIdParams('id'),
     validator(updateProductionTimeSlotsSchema),
     asyncHandler(productionService.updateProductionTimeSlots)
+);
+router.post(
+    '/days/:id/apply-schedule-template',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    asyncHandler(productionService.applyProductionScheduleTemplate)
 );
 router.post(
     '/days/:dayId/lines',

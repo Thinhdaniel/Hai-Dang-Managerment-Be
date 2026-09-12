@@ -42,6 +42,13 @@ const ProductionDaySchema = new mongoose.Schema(
             required: true,
             default: [],
         },
+        scheduleSource: {
+            type: String,
+            enum: ['legacy', 'system_default', 'weekly_template', 'manual_override', 'plan_snapshot'],
+            default: 'legacy',
+        },
+        scheduleWeekday: { type: Number, min: 0, max: 6 },
+        scheduleRevision: { type: Number, min: 0, default: 0 },
         status: {
             type: String,
             enum: ['draft', 'submitted', 'locked'],
