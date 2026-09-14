@@ -49,8 +49,12 @@ const ProductionBomSchema = new mongoose.Schema(
 ProductionBomSchema.index({ plantId: 1, itemId: 1, version: 1 }, { unique: true });
 ProductionBomSchema.index({ plantId: 1, itemId: 1, status: 1 });
 ProductionBomSchema.index(
-    { plantId: 1, itemId: 1, status: 1 },
-    { unique: true, partialFilterExpression: { status: 'approved' } }
+    { plantId: 1, itemId: 1 },
+    {
+        name: 'production_bom_unique_approved_item',
+        unique: true,
+        partialFilterExpression: { status: 'approved' },
+    }
 );
 
 export default mongoose.model('ProductionBom', ProductionBomSchema);
