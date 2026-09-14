@@ -4,6 +4,7 @@ import Plant from '@/models/Plant';
 import { sendSuccess } from '@/services/service.helpers';
 import type { NextFunction, Request, Response } from 'express';
 import mongoose from 'mongoose';
+import { normalizeProductionRolloutStage } from './production-rollout.helpers';
 
 const GLOBAL_PRODUCTION_ROLES = new Set<string>([USER_ROLE.ADMIN, USER_ROLE.DIRECTOR]);
 
@@ -11,7 +12,11 @@ const toId = (value: any): string => String(value?._id ?? value ?? '');
 
 export const hasGlobalProductionAccess = (role?: string) => Boolean(role && GLOBAL_PRODUCTION_ROLES.has(role));
 
-export const isProductionEnabled = (plant: any) => plant?.productionAccess?.enabled === true;
+export const isProductionEnabled = (plant: any) => {
+    const access = plant?.productionAccess;
+    const stage = normalizeProductionRolloutStage(access);
+    return access?.enabled === true && (stage === 'pilot' || stage === 'live');
+};
 
 export const evaluateProductionAccess = ({
     role,
@@ -101,9 +106,31 @@ export const ensureProductionAccessDefaults = async () => {
         { $set: { 'productionAccess.enabled': false } }
     );
 
-    if (enabledMainPlant || disabledResult.modifiedCount) {
+    const liveStageResult = await Plant.updateMany(
+        {
+            isDeleted: { $ne: true },
+            'productionAccess.enabled': true,
+            'productionAccess.stage': { $exists: false },
+        },
+        { $set: { 'productionAccess.stage': 'live', 'productionAccess.revision': 0 } }
+    );
+    const disabledStageResult = await Plant.updateMany(
+        {
+            isDeleted: { $ne: true },
+            'productionAccess.enabled': { $ne: true },
+            'productionAccess.stage': { $exists: false },
+        },
+        { $set: { 'productionAccess.stage': 'disabled', 'productionAccess.revision': 0 } }
+    );
+
+    if (
+        enabledMainPlant ||
+        disabledResult.modifiedCount ||
+        liveStageResult.modifiedCount ||
+        disabledStageResult.modifiedCount
+    ) {
         console.log(
-            `[ProductionAccess] Backfilled CS1=${enabledMainPlant}, disabled=${disabledResult.modifiedCount} legacy plant(s).`
+            `[ProductionAccess] Backfilled CS1=${enabledMainPlant}, disabled=${disabledResult.modifiedCount}, rollout=${liveStageResult.modifiedCount + disabledStageResult.modifiedCount} legacy plant(s).`
         );
     }
 };
@@ -135,6 +162,7 @@ export const getProductionAccess = async (req: Request, res: Response) => {
     const plantId = resolveRequestedPlantId(req, req.query.plantId);
     const plant = await loadProductionPlant(plantId);
     const enabled = isProductionEnabled(plant);
+    const stage = normalizeProductionRolloutStage(plant.productionAccess);
     const decision = evaluateProductionAccess({
         role: req.role,
         userPlantId: getUserPlantId(req),
@@ -149,6 +177,8 @@ export const getProductionAccess = async (req: Request, res: Response) => {
             plantName: String(plant.name || ''),
             plantCode: String(plant.code || ''),
             enabled,
+            stage,
+            revision: Number(plant.productionAccess?.revision || 0),
             globalAccess: decision.globalAccess,
             canAccess: decision.canAccess,
             reason: decision.reason,

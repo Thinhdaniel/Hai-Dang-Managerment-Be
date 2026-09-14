@@ -74,6 +74,7 @@ export const serializeProductionItem = (input: any) => {
         name: item.name,
         unit: item.unit || 'SP',
         unitPrice: Number(item.unitPrice || 0),
+        planningHourlyQuota: Number(item.planningHourlyQuota || 0),
         operationTemplates: (item.operationTemplates || [])
             .map((template: any) => ({
                 operationId: toId(template.operationId),

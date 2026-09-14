@@ -37,25 +37,6 @@ const sanitizePlantPayload = (payload: Record<string, any>) => {
     };
 };
 
-const buildProductionAccessUpdate = (enabled: boolean, actorId?: string) => {
-    const now = new Date();
-    if (enabled) {
-        return {
-            'productionAccess.enabled': true,
-            'productionAccess.enabledAt': now,
-            'productionAccess.enabledBy': actorId,
-            'productionAccess.disabledAt': null,
-            'productionAccess.disabledBy': null,
-        };
-    }
-
-    return {
-        'productionAccess.enabled': false,
-        'productionAccess.disabledAt': now,
-        'productionAccess.disabledBy': actorId,
-    };
-};
-
 const ensurePlantNameAvailable = async (name: string, excludeId?: string) => {
     const existingPlant = await plantRepository.findNameConflict({
         normalizedName: normalizePlantName(name),
@@ -127,13 +108,15 @@ export const createPlant = async (req: Request, res: Response, next: NextFunctio
     const payload = sanitizePlantPayload(req.body);
     const productionEnabled = req.body.productionAccess?.enabled === true;
 
+    if (productionEnabled) {
+        throw new BadRequestError('Cơ sở mới phải được mở qua Trung tâm triển khai Sản xuất');
+    }
+
     await ensurePlantNameAvailable(payload.name);
 
     const plant = await plantRepository.create({
         ...payload,
-        productionAccess: productionEnabled
-            ? { enabled: true, enabledAt: new Date(), enabledBy: req.userId }
-            : { enabled: false },
+        productionAccess: { enabled: false, stage: 'disabled', revision: 0 },
         createdBy: req.userId,
         updatedBy: req.userId,
     });
@@ -218,15 +201,15 @@ export const updatePlant = async (req: Request, res: Response, next: NextFunctio
     if (!currentPlant) throw new NotFoundError('Khong tim thay co so');
 
     const requestedProductionEnabled = req.body.productionAccess?.enabled;
-    const productionAccessUpdate =
+    if (
         typeof requestedProductionEnabled === 'boolean' &&
-        requestedProductionEnabled !== (currentPlant as any).productionAccess?.enabled
-            ? buildProductionAccessUpdate(requestedProductionEnabled, req.userId)
-            : {};
+        requestedProductionEnabled !== ((currentPlant as any).productionAccess?.enabled === true)
+    ) {
+        throw new BadRequestError('Hãy thay đổi quyền Sản xuất tại Trung tâm triển khai để bảo đảm đủ điều kiện');
+    }
 
     const plant = await plantRepository.updateById(plantId, {
         ...payload,
-        ...productionAccessUpdate,
         updatedBy: req.userId,
     });
 

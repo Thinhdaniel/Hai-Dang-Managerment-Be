@@ -28,6 +28,7 @@ import {
 import { buildProductionWorkbook } from './production-export.service';
 import { buildProductionBoard } from './production-board.helpers';
 import { buildProductionForecast } from './production-forecast.helpers';
+import { synchronizeProductionOrderLifecycle } from './production-order.service';
 import { buildProductionMonitor } from './production-monitor.helpers';
 import { serializeProductionPlan } from './production-plan.service';
 import { shouldProcessProductionPriceUpdate, summarizeProductionPriceCorrection } from './production-price.helpers';
@@ -1576,6 +1577,16 @@ export const upsertHourlyProductionEntry = async (req: Request, res: Response) =
     }
 
     if (syncDecision.action === 'idempotent') {
+        try {
+            await synchronizeProductionOrderLifecycle({
+                plantId: String(day.plantId),
+                actorId: String(req.userId),
+                orderIds: run.orderId ? [String(run.orderId)] : [],
+                orderCodes: run.orderCode ? [String(run.orderCode)] : [],
+            });
+        } catch (error) {
+            console.error('[Production] Không thể đồng bộ vòng đời đơn sau retry idempotent', error);
+        }
         const detail: any = await loadDayDetail(day, req.role);
         return sendSuccess(
             res,
@@ -1633,6 +1644,16 @@ export const upsertHourlyProductionEntry = async (req: Request, res: Response) =
         actorId: req.userId,
         clientMutationId: req.body.clientMutationId,
     });
+    try {
+        await synchronizeProductionOrderLifecycle({
+            plantId: String(day.plantId),
+            actorId: String(req.userId),
+            orderIds: run.orderId ? [String(run.orderId)] : [],
+            orderCodes: run.orderCode ? [String(run.orderCode)] : [],
+        });
+    } catch (error) {
+        console.error('[Production] Đã lưu sản lượng nhưng chưa đồng bộ được vòng đời đơn', error);
+    }
     const detail: any = await loadDayDetail(day, req.role);
     return sendSuccess(
         res,
@@ -1650,10 +1671,21 @@ export const deleteHourlyProductionEntry = async (req: Request, res: Response) =
     const entry = record.entries.id(entryId);
     if (!entry) throw new NotFoundError('Không tìm thấy số liệu sản lượng');
     const slotKey = entry.slotKey;
+    const linkedRun: any = record.runs.id(entry.runId);
     entry.deleteOne();
     record.updatedBy = req.userId;
     await saveRecord(record);
     emitProductionChange(day, { changeType: 'entry-deleted', lineId, slotKey });
+    try {
+        await synchronizeProductionOrderLifecycle({
+            plantId: String(day.plantId),
+            actorId: String(req.userId),
+            orderIds: linkedRun?.orderId ? [String(linkedRun.orderId)] : [],
+            orderCodes: linkedRun?.orderCode ? [String(linkedRun.orderCode)] : [],
+        });
+    } catch (error) {
+        console.error('[Production] Đã xóa sản lượng nhưng chưa đồng bộ được vòng đời đơn', error);
+    }
     const detail: any = await loadDayDetail(day, req.role);
     return sendSuccess(
         res,

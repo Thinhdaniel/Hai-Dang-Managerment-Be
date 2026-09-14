@@ -6,9 +6,20 @@ import ProductionDay from '@/models/ProductionDay';
 import ProductionItem from '@/models/ProductionItem';
 import ProductionLine from '@/models/ProductionLine';
 import ProductionLineRecord from '@/models/ProductionLineRecord';
+import ProductionOrder from '@/models/ProductionOrder';
 import ProductionPlan from '@/models/ProductionPlan';
+import { vietnamIsoDate } from '@/utils/vietnamDate';
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
+import { createHash } from 'node:crypto';
+import {
+    capacityMinutesForAllocation,
+    reserveRegularCapacityWindow,
+    type CapacitySlot,
+} from './production-capacity.helpers';
+import { buildProductionOrderProgress, synchronizeProductionOrderLifecycle } from './production-order.service';
+import { loadReadinessRows } from './production-material.service';
+import { normalizeProductionTimeSlots } from './production-schedule.helpers';
 import { resolveProductionScheduleForDate } from './production-schedule.service';
 import { sendSuccess } from './service.helpers';
 
@@ -79,6 +90,7 @@ export const serializeProductionPlan = (input: any) => {
         itemName: allocation.itemName,
         unit: allocation.unit || 'SP',
         unitPriceSnapshot: Number(allocation.unitPriceSnapshot || 0),
+        orderId: toId(allocation.orderId),
         orderCode: allocation.orderCode,
         plannedQuantity: Number(allocation.plannedQuantity || 0),
         hourlyQuota: Number(allocation.hourlyQuota || 0),
@@ -215,13 +227,37 @@ const normalizeAllocations = async (plan: any, inputs: any[], session?: mongoose
     const itemIds = [...new Set(inputs.map((input) => String(input.itemId)))];
     const lineQuery = ProductionLine.find({ _id: { $in: lineIds }, plantId: plan.plantId, isActive: true }).lean();
     const itemQuery = ProductionItem.find({ _id: { $in: itemIds }, plantId: plan.plantId, isActive: true }).lean();
+    const orderIds = [...new Set(inputs.map((input) => String(input.orderId || '')).filter(Boolean))];
+    const orderCodes = [
+        ...new Set(
+            inputs
+                .map((input) =>
+                    String(input.orderCode || '')
+                        .trim()
+                        .toUpperCase()
+                )
+                .filter(Boolean)
+        ),
+    ];
+    const orderReferences = [
+        ...(orderIds.length ? [{ _id: { $in: orderIds } }] : []),
+        ...(orderCodes.length ? [{ code: { $in: orderCodes } }] : []),
+    ];
+    const orderQuery = ProductionOrder.find(
+        orderReferences.length ? { plantId: plan.plantId, $or: orderReferences } : { _id: { $in: [] } }
+    ).lean();
     if (session) {
         lineQuery.session(session);
         itemQuery.session(session);
+        orderQuery.session(session);
     }
-    const [lines, items] = await Promise.all([lineQuery, itemQuery]);
+    const [lines, items, orders] = session
+        ? [await lineQuery, await itemQuery, await orderQuery]
+        : await Promise.all([lineQuery, itemQuery, orderQuery]);
     const lineById = new Map<string, any>(lines.map((line: any) => [String(line._id), line]));
     const itemById = new Map<string, any>(items.map((item: any) => [String(item._id), item]));
+    const orderById = new Map<string, any>(orders.map((order: any) => [String(order._id), order]));
+    const orderByCode = new Map<string, any>(orders.map((order: any) => [String(order.code).toUpperCase(), order]));
     const activeSlots = [...plan.timeSlots]
         .filter((slot: any) => slot.isActive !== false)
         .sort((left: any, right: any) => Number(left.startMinute) - Number(right.startMinute));
@@ -236,6 +272,20 @@ const normalizeAllocations = async (plan: any, inputs: any[], session?: mongoose
         const item: any = itemById.get(String(input.itemId));
         if (!line) throw new NotFoundError('Chuyền trong kế hoạch không còn hoạt động');
         if (!item) throw new NotFoundError('Mã hàng trong kế hoạch không còn hoạt động');
+        const requestedOrder = input.orderId
+            ? orderById.get(String(input.orderId))
+            : orderByCode.get(
+                  String(input.orderCode || '')
+                      .trim()
+                      .toUpperCase()
+              );
+        if (input.orderId && !requestedOrder) throw new NotFoundError('Đơn hàng trong kế hoạch không tồn tại');
+        if (requestedOrder && ['completed', 'cancelled'].includes(requestedOrder.status)) {
+            throw new BadRequestError(`Đơn hàng ${requestedOrder.code} đã kết thúc, không thể tiếp tục phân bổ`);
+        }
+        if (requestedOrder && String(requestedOrder.itemId) !== String(item._id)) {
+            throw new BadRequestError(`Đơn hàng ${requestedOrder.code} không thuộc mã hàng ${item.code}`);
+        }
         const startIndex = slotIndex.get(String(input.startSlotKey));
         const endIndex = slotIndex.get(String(input.endSlotKey));
         if (startIndex === undefined || endIndex === undefined || endIndex < startIndex) {
@@ -256,7 +306,8 @@ const normalizeAllocations = async (plan: any, inputs: any[], session?: mongoose
             itemName: item.name,
             unit: item.unit || 'SP',
             unitPriceSnapshot: Number(item.unitPrice || 0),
-            orderCode: input.orderCode || undefined,
+            orderId: requestedOrder?._id,
+            orderCode: requestedOrder?.code || input.orderCode || undefined,
             plannedQuantity: Number(input.plannedQuantity),
             hourlyQuota: Number(input.hourlyQuota),
             startSlotKey: input.startSlotKey,
@@ -292,6 +343,29 @@ const normalizeAllocations = async (plan: any, inputs: any[], session?: mongoose
             }
         }
     });
+
+    const referencedOrders = orders.filter((order: any) =>
+        normalized.some((allocation) => String(allocation.orderId || '') === String(order._id))
+    );
+    if (referencedOrders.length) {
+        const progressByOrder = await buildProductionOrderProgress(String(plan.plantId), referencedOrders);
+        const plannedByOrder = new Map<string, number>();
+        normalized.forEach((allocation) => {
+            if (!allocation.orderId) return;
+            const key = String(allocation.orderId);
+            plannedByOrder.set(key, (plannedByOrder.get(key) || 0) + Number(allocation.plannedQuantity || 0));
+        });
+        referencedOrders.forEach((order: any) => {
+            const orderId = String(order._id);
+            const requested = plannedByOrder.get(orderId) || 0;
+            const available = Number(progressByOrder.get(orderId)?.unplannedQuantity || 0);
+            if (requested > available) {
+                throw new BadRequestError(
+                    `Đơn hàng ${order.code} chỉ còn ${available} SP chưa xếp kế hoạch, không thể phân bổ ${requested} SP`
+                );
+            }
+        });
+    }
     return normalized;
 };
 
@@ -412,6 +486,7 @@ const runFromAllocation = (allocation: any, actorId: string) => ({
     source: 'plan',
     planAllocationId: allocation._id,
     plannedQuantity: allocation.plannedQuantity,
+    orderId: allocation.orderId,
     orderCode: allocation.orderCode,
     priority: allocation.priority,
     dueDate: allocation.dueDate,
@@ -477,6 +552,7 @@ const applyPlanToDay = async (plan: any, actorId: string, session?: mongoose.Cli
                 );
                 if (existing) {
                     existing.plannedQuantity = allocation.plannedQuantity;
+                    existing.orderId = allocation.orderId;
                     existing.orderCode = allocation.orderCode;
                     existing.priority = allocation.priority;
                     existing.dueDate = allocation.dueDate;
@@ -500,6 +576,480 @@ const applyPlanToDay = async (plan: any, actorId: string, session?: mongoose.Cli
     day.updatedBy = actorId;
     await day.save(session ? { session } : undefined);
     return { dayId: String(day._id), synchronizedLines, preservedLines };
+};
+
+type MasterPlanSuggestionInput = {
+    orderId: string;
+    date: string;
+    lineId: string;
+    quantity: number;
+    hourlyQuota: number;
+};
+
+type MasterPlanPreviewRow = MasterPlanSuggestionInput & {
+    key: string;
+    orderCode?: string;
+    itemId?: string;
+    itemCode?: string;
+    lineCode?: string;
+    status: 'ready' | 'blocked';
+    reasonCode?:
+        | 'past_date'
+        | 'order_missing'
+        | 'order_closed'
+        | 'line_missing'
+        | 'item_missing'
+        | 'published_plan'
+        | 'invalid_existing_plan'
+        | 'order_capacity'
+        | 'material_shortage'
+        | 'material_not_reserved'
+        | 'plan_limit'
+        | 'no_contiguous_slot';
+    message: string;
+    startSlotKey?: string;
+    endSlotKey?: string;
+    requiredMinutes?: number;
+    reservedMinutes?: number;
+    planStatus?: 'draft' | 'published';
+    planRevision: number;
+    orderRevision: number;
+    willCreatePlan: boolean;
+};
+
+type MasterPlanState = {
+    document?: any;
+    timeSlots: CapacitySlot[];
+    scheduleSource: string;
+    scheduleWeekday: number;
+    scheduleRevision: number;
+};
+
+const masterSuggestionKey = (suggestion: MasterPlanSuggestionInput) =>
+    `${suggestion.orderId}|${suggestion.date}|${suggestion.lineId}`;
+
+const masterPreviewFingerprint = (plantId: string, rows: MasterPlanPreviewRow[]) =>
+    createHash('sha256')
+        .update(
+            JSON.stringify({
+                plantId,
+                rows: rows.map((row) => ({
+                    key: row.key,
+                    quantity: row.quantity,
+                    hourlyQuota: row.hourlyQuota,
+                    status: row.status,
+                    reasonCode: row.reasonCode,
+                    startSlotKey: row.startSlotKey,
+                    endSlotKey: row.endSlotKey,
+                    planRevision: row.planRevision,
+                    orderRevision: row.orderRevision,
+                })),
+            })
+        )
+        .digest('hex');
+
+const buildMasterPlanPreview = async (
+    req: Request,
+    inputs: MasterPlanSuggestionInput[],
+    session?: mongoose.ClientSession
+) => {
+    const plantId = resolvePlantId(req, req.body.plantId);
+    const today = vietnamIsoDate();
+    const suggestions = [...inputs].sort(
+        (left, right) =>
+            left.date.localeCompare(right.date) ||
+            left.lineId.localeCompare(right.lineId) ||
+            left.orderId.localeCompare(right.orderId)
+    );
+    const orderIds = [...new Set(suggestions.map((row) => row.orderId))];
+    const lineIds = [...new Set(suggestions.map((row) => row.lineId))];
+    const dates = [...new Set(suggestions.map((row) => row.date))];
+
+    const plantQuery: any = Plant.findOne({ _id: plantId, isDeleted: { $ne: true } }).select('name code');
+    const orderQuery: any = ProductionOrder.find({ _id: { $in: orderIds }, plantId });
+    const lineQuery: any = ProductionLine.find({ _id: { $in: lineIds }, plantId, isActive: true });
+    const planQuery: any = ProductionPlan.find({ plantId, productionDate: { $in: dates } });
+    if (session) {
+        [plantQuery, orderQuery, lineQuery, planQuery].forEach((query) => query.session(session));
+    }
+    const [plant, orders, lines, plans]: [any, any[], any[], any[]] = session
+        ? [await plantQuery, await orderQuery, await lineQuery, await planQuery]
+        : await Promise.all([plantQuery, orderQuery, lineQuery, planQuery]);
+    if (!plant) throw new NotFoundError('Không tìm thấy cơ sở');
+
+    const itemIds = [...new Set(orders.map((order) => String(order.itemId)))];
+    const orderCodes = [...new Set(orders.map((order) => String(order.code).trim().toUpperCase()))];
+    const itemQuery: any = ProductionItem.find({ _id: { $in: itemIds }, plantId, isActive: true });
+    const draftPlanQuery: any = ProductionPlan.find({
+        plantId,
+        status: 'draft',
+        $or: [{ 'allocations.orderId': { $in: orderIds } }, { 'allocations.orderCode': { $in: orderCodes } }],
+    }).select('productionDate allocations');
+    if (session) {
+        itemQuery.session(session);
+        draftPlanQuery.session(session);
+    }
+    const [items, draftPlans]: [any[], any[]] = session
+        ? [await itemQuery, await draftPlanQuery]
+        : await Promise.all([itemQuery, draftPlanQuery]);
+
+    const orderById = new Map(orders.map((order) => [String(order._id), order]));
+    const orderByCode = new Map(orders.map((order) => [String(order.code).trim().toUpperCase(), order]));
+    const lineById = new Map(lines.map((line) => [String(line._id), line]));
+    const itemById = new Map(items.map((item) => [String(item._id), item]));
+    const progressByOrder = await buildProductionOrderProgress(plantId, orders);
+    const materialReadiness = await loadReadinessRows(plantId, orderIds, { session });
+    const materialByOrder = new Map(materialReadiness.map((row) => [row.order.id, row]));
+    const draftQuantityByOrder = new Map<string, number>();
+    draftPlans.forEach((plan) => {
+        (plan.allocations || []).forEach((allocation: any) => {
+            const orderId = allocation.orderId
+                ? String(allocation.orderId)
+                : String(
+                      orderByCode.get(
+                          String(allocation.orderCode || '')
+                              .trim()
+                              .toUpperCase()
+                      )?._id || ''
+                  );
+            if (!orderById.has(orderId)) return;
+            draftQuantityByOrder.set(
+                orderId,
+                (draftQuantityByOrder.get(orderId) || 0) + Number(allocation.plannedQuantity || 0)
+            );
+        });
+    });
+    const availableByOrder = new Map(
+        orders.map((order) => {
+            const orderId = String(order._id);
+            return [
+                orderId,
+                Math.max(
+                    0,
+                    Number(progressByOrder.get(orderId)?.unplannedQuantity || 0) -
+                        Number(draftQuantityByOrder.get(orderId) || 0)
+                ),
+            ];
+        })
+    );
+
+    const planByDate = new Map(plans.map((plan) => [String(plan.productionDate), plan]));
+    const planStateByDate = new Map<string, MasterPlanState>();
+    for (const date of dates) {
+        const plan: any = planByDate.get(date);
+        if (plan) {
+            planStateByDate.set(date, {
+                document: plan,
+                timeSlots: normalizeProductionTimeSlots(plan.timeSlots) as CapacitySlot[],
+                scheduleSource: plan.scheduleSource || 'legacy',
+                scheduleWeekday: Number(plan.scheduleWeekday || 0),
+                scheduleRevision: Number(plan.scheduleRevision || 0),
+            });
+            continue;
+        }
+        const schedule = await resolvedTimeSlots(plantId, date);
+        planStateByDate.set(date, {
+            timeSlots: normalizeProductionTimeSlots(schedule.timeSlots) as CapacitySlot[],
+            scheduleSource: schedule.source,
+            scheduleWeekday: schedule.weekday,
+            scheduleRevision: schedule.revision,
+        });
+    }
+
+    const occupiedByCell = new Map<string, Array<{ startSlotKey: string; endSlotKey: string }>>();
+    const invalidPlanDates = new Set<string>();
+    planStateByDate.forEach((state, date) => {
+        (state.document?.allocations || []).forEach((allocation: any) => {
+            const minutes = capacityMinutesForAllocation(
+                state.timeSlots,
+                String(allocation.startSlotKey),
+                String(allocation.endSlotKey)
+            );
+            if (!minutes.valid) invalidPlanDates.add(date);
+            const cellKey = `${date}|${allocation.lineId}`;
+            const windows = occupiedByCell.get(cellKey) || [];
+            windows.push({
+                startSlotKey: String(allocation.startSlotKey),
+                endSlotKey: String(allocation.endSlotKey),
+            });
+            occupiedByCell.set(cellKey, windows);
+        });
+    });
+    const addedCountByDate = new Map<string, number>();
+
+    const rows: MasterPlanPreviewRow[] = suggestions.map((suggestion) => {
+        const key = masterSuggestionKey(suggestion);
+        const order: any = orderById.get(suggestion.orderId);
+        const line: any = lineById.get(suggestion.lineId);
+        const item: any = order ? itemById.get(String(order.itemId)) : undefined;
+        const state = planStateByDate.get(suggestion.date)!;
+        const base: Omit<MasterPlanPreviewRow, 'status' | 'message'> = {
+            ...suggestion,
+            key,
+            orderCode: order?.code,
+            itemId: item ? String(item._id) : undefined,
+            itemCode: item?.code,
+            lineCode: line?.code,
+            planStatus: state.document?.status,
+            planRevision: Number(state.document?.revision || 0),
+            orderRevision: Number(order?.revision || 0),
+            willCreatePlan: !state.document,
+        };
+        const blocked = (reasonCode: MasterPlanPreviewRow['reasonCode'], message: string): MasterPlanPreviewRow => ({
+            ...base,
+            status: 'blocked',
+            reasonCode,
+            message,
+        });
+        if (suggestion.date < today) return blocked('past_date', 'Ngày đề xuất đã qua');
+        if (!order) return blocked('order_missing', 'Đơn hàng không còn tồn tại tại cơ sở');
+        if (['completed', 'cancelled'].includes(order.status)) {
+            return blocked('order_closed', `Đơn ${order.code} đã kết thúc`);
+        }
+        if (!line) return blocked('line_missing', 'Chuyền không còn hoạt động tại cơ sở');
+        if (!item) return blocked('item_missing', `Mã hàng của đơn ${order.code} không còn hoạt động`);
+        const materials = materialByOrder.get(suggestion.orderId);
+        if (materials?.bom && ['shortage', 'partial'].includes(materials.status)) {
+            return blocked(
+                'material_shortage',
+                `Đơn ${order.code} còn thiếu ${materials.summary.shortageLineCount} vật tư bắt buộc`
+            );
+        }
+        if (materials?.bom && materials.reservationStatus !== 'reserved') {
+            return blocked(
+                'material_not_reserved',
+                `Đơn ${order.code} chưa giữ đủ tồn; cần xác nhận tại màn Nguyên phụ liệu`
+            );
+        }
+        if (state.document?.status === 'published') {
+            return blocked('published_plan', 'Kế hoạch ngày đã ban hành, cần mở lại trước khi điều chỉnh');
+        }
+        if (invalidPlanDates.has(suggestion.date)) {
+            return blocked('invalid_existing_plan', 'Kế hoạch ngày có phân bổ dùng khung giờ không còn hợp lệ');
+        }
+        const currentCount =
+            Number(state.document?.allocations?.length || 0) + Number(addedCountByDate.get(suggestion.date) || 0);
+        if (currentCount >= 200) return blocked('plan_limit', 'Kế hoạch ngày đã đạt giới hạn 200 phân bổ');
+        const availableQuantity = Number(availableByOrder.get(suggestion.orderId) || 0);
+        if (suggestion.quantity > availableQuantity) {
+            return blocked(
+                'order_capacity',
+                `Đơn ${order.code} chỉ còn ${Math.floor(availableQuantity)} SP chưa được xếp`
+            );
+        }
+        const configuredRate = Number(item.planningHourlyQuota || 0);
+        const hourlyQuota = configuredRate > 0 ? configuredRate : Number(suggestion.hourlyQuota || 0);
+        const requiredMinutes = (suggestion.quantity * 60) / hourlyQuota;
+        const cellKey = `${suggestion.date}|${suggestion.lineId}`;
+        const occupiedWindows = occupiedByCell.get(cellKey) || [];
+        const reserved = reserveRegularCapacityWindow({
+            slots: state.timeSlots,
+            occupiedWindows,
+            requiredMinutes,
+        });
+        if (!reserved) {
+            return blocked(
+                'no_contiguous_slot',
+                'Không còn dải giờ thường liền mạch đủ dài; cần xếp thủ công hoặc xem xét tăng ca'
+            );
+        }
+        occupiedWindows.push({ startSlotKey: reserved.startSlotKey, endSlotKey: reserved.endSlotKey });
+        occupiedByCell.set(cellKey, occupiedWindows);
+        availableByOrder.set(suggestion.orderId, Math.max(0, availableQuantity - suggestion.quantity));
+        addedCountByDate.set(suggestion.date, Number(addedCountByDate.get(suggestion.date) || 0) + 1);
+        return {
+            ...base,
+            hourlyQuota,
+            status: 'ready',
+            message: state.document ? 'Sẵn sàng bổ sung vào kế hoạch nháp' : 'Sẵn sàng tạo kế hoạch nháp mới',
+            startSlotKey: reserved.startSlotKey,
+            endSlotKey: reserved.endSlotKey,
+            requiredMinutes: Number(requiredMinutes.toFixed(2)),
+            reservedMinutes: reserved.reservedMinutes,
+        };
+    });
+    const fingerprint = masterPreviewFingerprint(plantId, rows);
+    const readyRows = rows.filter((row) => row.status === 'ready');
+    const blockedRows = rows.filter((row) => row.status === 'blocked');
+    return {
+        response: {
+            fingerprint,
+            generatedAt: new Date().toISOString(),
+            summary: {
+                selectedCount: rows.length,
+                readyCount: readyRows.length,
+                blockedCount: blockedRows.length,
+                readyQuantity: readyRows.reduce((sum, row) => sum + row.quantity, 0),
+                affectedDayCount: new Set(readyRows.map((row) => row.date)).size,
+            },
+            rows,
+        },
+        context: { plantId, plant, orderById, planStateByDate },
+    };
+};
+
+const allocationPayload = (allocation: any) => ({
+    id: String(allocation._id),
+    lineId: String(allocation.lineId),
+    itemId: String(allocation.itemId),
+    orderId: allocation.orderId ? String(allocation.orderId) : undefined,
+    orderCode: allocation.orderCode,
+    plannedQuantity: Number(allocation.plannedQuantity),
+    hourlyQuota: Number(allocation.hourlyQuota),
+    startSlotKey: allocation.startSlotKey,
+    endSlotKey: allocation.endSlotKey,
+    priority: allocation.priority,
+    dueDate: allocation.dueDate,
+    note: allocation.note,
+});
+
+export const applyProductionMasterPlan = async (req: Request, res: Response) => {
+    const suggestions = req.body.suggestions as MasterPlanSuggestionInput[];
+    if (!req.body.confirm) {
+        const preview = await buildMasterPlanPreview(req, suggestions);
+        return sendSuccess(res, preview.response, 'Đã kiểm tra phương án với dữ liệu kế hoạch hiện tại');
+    }
+
+    const session = await mongoose.startSession();
+    let applied:
+        | { plantId: string; planIds: string[]; orderIds: string[]; quantity: number; allocationCount: number }
+        | undefined;
+    try {
+        await session.withTransaction(async () => {
+            const preview = await buildMasterPlanPreview(req, suggestions, session);
+            if (preview.response.fingerprint !== req.body.expectedFingerprint) {
+                throw new DuplicateError('Phương án đã thay đổi do dữ liệu vừa được cập nhật, vui lòng kiểm tra lại');
+            }
+            if (preview.response.summary.blockedCount) {
+                throw new BadRequestError('Phương án còn dòng bị chặn, vui lòng chỉ áp dụng các dòng sẵn sàng');
+            }
+            const rows = preview.response.rows;
+            const rowsByDate = new Map<string, MasterPlanPreviewRow[]>();
+            rows.forEach((row) => {
+                const current = rowsByDate.get(row.date) || [];
+                current.push(row);
+                rowsByDate.set(row.date, current);
+            });
+            const planIds: string[] = [];
+            for (const [date, dateRows] of rowsByDate) {
+                const state = preview.context.planStateByDate.get(date)!;
+                const isNew = !state.document;
+                const plan: any =
+                    state.document ||
+                    new ProductionPlan({
+                        plantId: preview.context.plantId,
+                        plantName: preview.context.plant.name,
+                        plantCode: preview.context.plant.code,
+                        productionDate: date,
+                        timeSlots: state.timeSlots,
+                        scheduleSource: state.scheduleSource,
+                        scheduleWeekday: state.scheduleWeekday,
+                        scheduleRevision: state.scheduleRevision,
+                        createdBy: req.userId,
+                        updatedBy: req.userId,
+                        history: [{ type: 'created', revision: 0, actor: req.userId, at: new Date() }],
+                    });
+                assertDraft(plan);
+                const existingInputs = (plan.allocations || []).map(allocationPayload);
+                const newInputs = dateRows.map((row) => {
+                    const order: any = preview.context.orderById.get(row.orderId);
+                    return {
+                        lineId: row.lineId,
+                        itemId: String(order.itemId),
+                        orderId: row.orderId,
+                        orderCode: order.code,
+                        plannedQuantity: row.quantity,
+                        hourlyQuota: row.hourlyQuota,
+                        startSlotKey: row.startSlotKey,
+                        endSlotKey: row.endSlotKey,
+                        priority: order.priority,
+                        dueDate: order.dueDate,
+                        note: 'Xếp từ kế hoạch tổng thể',
+                    };
+                });
+                plan.allocations = (await normalizeAllocations(
+                    plan,
+                    [...existingInputs, ...newInputs],
+                    session
+                )) as any;
+                plan.revision = Number(plan.revision || 0) + 1;
+                plan.lastChangeReason = `Xếp ${dateRows.length} phân bổ từ kế hoạch tổng thể`;
+                plan.updatedBy = req.userId;
+                plan.history.push({
+                    type: 'updated',
+                    note: plan.lastChangeReason,
+                    revision: plan.revision,
+                    actor: req.userId,
+                    at: new Date(),
+                });
+                await savePlan(plan, session);
+                planIds.push(String(plan._id));
+                if (isNew) state.document = plan;
+            }
+
+            const orderRows = new Map<string, MasterPlanPreviewRow[]>();
+            rows.forEach((row) => {
+                const current = orderRows.get(row.orderId) || [];
+                current.push(row);
+                orderRows.set(row.orderId, current);
+            });
+            for (const [orderId, orderAllocations] of orderRows) {
+                const order: any = preview.context.orderById.get(orderId);
+                const quantity = orderAllocations.reduce((sum, row) => sum + row.quantity, 0);
+                const result = await ProductionOrder.updateOne(
+                    { _id: orderId, revision: Number(order.revision || 0) },
+                    {
+                        $inc: { revision: 1 },
+                        $set: { updatedBy: req.userId },
+                        $push: {
+                            history: {
+                                type: 'updated',
+                                note: `Xếp ${quantity} SP vào ${orderAllocations.length} phân bổ kế hoạch nháp`,
+                                actor: req.userId,
+                                at: new Date(),
+                            },
+                        },
+                    },
+                    { session }
+                );
+                if (!result.modifiedCount) {
+                    throw new DuplicateError(`Đơn ${order.code} vừa được cập nhật ở thiết bị khác`);
+                }
+            }
+            applied = {
+                plantId: preview.context.plantId,
+                planIds,
+                orderIds: [...orderRows.keys()],
+                quantity: rows.reduce((sum, row) => sum + row.quantity, 0),
+                allocationCount: rows.length,
+            };
+        });
+    } catch (error: any) {
+        if (
+            error?.code === 11000 ||
+            error?.name === 'VersionError' ||
+            error?.errorLabels?.includes?.('TransientTransactionError')
+        ) {
+            throw new DuplicateError('Kế hoạch vừa thay đổi, vui lòng tải lại và kiểm tra phương án');
+        }
+        throw error;
+    } finally {
+        await session.endSession();
+    }
+    if (!applied) throw new BadRequestError('Không thể áp dụng phương án kế hoạch');
+    for (const planId of applied.planIds) {
+        const plan: any = await ProductionPlan.findById(planId);
+        if (plan) emitPlanUpdated(plan, 'master-plan-applied');
+    }
+    applied.orderIds.forEach((orderId) => {
+        emitToPlant(applied!.plantId, 'production:order-updated', {
+            orderId,
+            plantId: applied!.plantId,
+            changeType: 'plan-allocated',
+            at: new Date().toISOString(),
+        });
+    });
+    return sendSuccess(res, applied, 'Đã đưa phương án vào kế hoạch nháp; cần kiểm tra và ban hành từng ngày');
 };
 
 export const lookupProductionPlan = async (req: Request, res: Response) => {
@@ -586,6 +1136,7 @@ export const publishProductionPlan = async (req: Request, res: Response) => {
                     id: String(allocation._id),
                     lineId: String(allocation.lineId),
                     itemId: String(allocation.itemId),
+                    orderId: allocation.orderId ? String(allocation.orderId) : undefined,
                     orderCode: allocation.orderCode,
                     plannedQuantity: allocation.plannedQuantity,
                     hourlyQuota: allocation.hourlyQuota,
@@ -625,6 +1176,20 @@ export const publishProductionPlan = async (req: Request, res: Response) => {
             at: new Date().toISOString(),
         });
         emitPlanUpdated(publishedPlan, 'published');
+        try {
+            await synchronizeProductionOrderLifecycle({
+                plantId: String(publishedPlan.plantId),
+                actorId: String(req.userId),
+                orderIds: (publishedPlan.allocations || [])
+                    .map((allocation: any) => (allocation.orderId ? String(allocation.orderId) : ''))
+                    .filter(Boolean),
+                orderCodes: (publishedPlan.allocations || [])
+                    .map((allocation: any) => String(allocation.orderCode || ''))
+                    .filter(Boolean),
+            });
+        } catch (error) {
+            console.error('[Production] Đã ban hành kế hoạch nhưng chưa đồng bộ được trạng thái đơn', error);
+        }
         return sendSuccess(
             res,
             { plan: serializeProductionPlan(await populatePlan(publishedPlan)), sync },
@@ -715,6 +1280,7 @@ export const carryOverProductionPlan = async (req: Request, res: Response) => {
         id: String(allocation._id),
         lineId: String(allocation.lineId),
         itemId: String(allocation.itemId),
+        orderId: allocation.orderId ? String(allocation.orderId) : undefined,
         orderCode: allocation.orderCode,
         plannedQuantity: allocation.plannedQuantity,
         hourlyQuota: allocation.hourlyQuota,
@@ -786,6 +1352,7 @@ export const carryOverProductionPlan = async (req: Request, res: Response) => {
     const importedPayload = scheduledCandidates.map(({ allocation, remaining, startSlotKey, endSlotKey }: any) => ({
         lineId: String(allocation.lineId),
         itemId: String(allocation.itemId),
+        orderId: allocation.orderId ? String(allocation.orderId) : undefined,
         orderCode: allocation.orderCode,
         plannedQuantity: remaining,
         hourlyQuota: allocation.hourlyQuota,

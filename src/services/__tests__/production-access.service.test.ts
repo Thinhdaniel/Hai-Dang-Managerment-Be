@@ -1,7 +1,7 @@
 import { USER_ROLE } from '@/constant/allowedRoles';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { evaluateProductionAccess } from '../production-access.service';
+import { evaluateProductionAccess, isProductionEnabled } from '../production-access.service';
 
 describe('production access policy', () => {
     it('allows admin and director across plants even when rollout is disabled', () => {
@@ -49,5 +49,14 @@ describe('production access policy', () => {
         assert.equal(decision.inPlantScope, false);
         assert.equal(decision.canAccess, false);
         assert.equal(decision.reason, 'PLANT_SCOPE_DENIED');
+    });
+
+    it('opens local access only in pilot or live and keeps legacy enabled plants compatible', () => {
+        assert.equal(isProductionEnabled({ productionAccess: { enabled: true } }), true);
+        assert.equal(isProductionEnabled({ productionAccess: { enabled: true, stage: 'pilot' } }), true);
+        assert.equal(isProductionEnabled({ productionAccess: { enabled: true, stage: 'live' } }), true);
+        assert.equal(isProductionEnabled({ productionAccess: { enabled: true, stage: 'preparing' } }), false);
+        assert.equal(isProductionEnabled({ productionAccess: { enabled: false, stage: 'live' } }), false);
+        assert.equal(isProductionEnabled({ productionAccess: { enabled: false, stage: 'paused' } }), false);
     });
 });

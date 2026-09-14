@@ -19,6 +19,7 @@ const ProductionRunSchema = new mongoose.Schema(
         planAllocationId: { type: mongoose.Schema.Types.ObjectId },
         plannedQuantity: { type: Number, min: 0 },
         plannedEndSlotKey: { type: String, trim: true },
+        orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionOrder' },
         orderCode: { type: String, trim: true, maxlength: 80 },
         priority: { type: String, enum: ['low', 'normal', 'high', 'urgent'], default: 'normal' },
         dueDate: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },

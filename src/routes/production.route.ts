@@ -4,7 +4,13 @@ import { authorize } from '@/middlewares/authorizationMiddleware';
 import { excelUpload } from '@/middlewares/multerMiddleware';
 import { validateObjectIdParams } from '@/middlewares/objectIdValidation';
 import validator from '@/middlewares/validator';
+import * as productionCapacityService from '@/services/production-capacity.service';
+import * as productionControlTowerService from '@/services/production-control-tower.service';
+import * as productionPilotService from '@/services/production-pilot.service';
+import * as productionRolloutService from '@/services/production-rollout.service';
+import * as productionMaterialService from '@/services/production-material.service';
 import * as productionOpeningBalanceService from '@/services/production-opening-balance.service';
+import * as productionOrderService from '@/services/production-order.service';
 import * as productionAccessService from '@/services/production-access.service';
 import * as productionPlanService from '@/services/production-plan.service';
 import * as productionQcRecordService from '@/services/production-qc-record.service';
@@ -17,6 +23,8 @@ import * as productionService from '@/services/production.service';
 import asyncHandler from '@/utils/asyncHandler';
 import {
     addProductionDayLineSchema,
+    applyProductionMasterPlanSchema,
+    approveProductionBomSchema,
     carryOverProductionPlanSchema,
     configureProductionLineSchema,
     configureProductionOperationTracksSchema,
@@ -26,16 +34,20 @@ import {
     createProductionLineSchema,
     createProductionOperationSchema,
     createProductionOpeningBalanceSchema,
+    createProductionOrderSchema,
     createProductionQcOpeningBalanceSchema,
     createProductionPlanSchema,
     createProductionRunSchema,
     importProductionOpeningBalanceSchema,
+    importProductionOrderSchema,
     importProductionQcOpeningBalanceSchema,
     publishProductionPlanSchema,
+    releaseProductionMaterialReservationSchema,
     reopenProductionPlanSchema,
     updateProductionItemSchema,
     updateProductionLineSchema,
     updateProductionOperationSchema,
+    updateProductionOrderSchema,
     updateProductionItemOperationsSchema,
     updateProductionPlanSchema,
     updateProductionScheduleTemplateSchema,
@@ -49,6 +61,18 @@ import {
     updateProductionReminderSettingsSchema,
     voidProductionOpeningBalanceSchema,
     voidProductionQcOpeningBalanceSchema,
+    saveProductionBomSchema,
+    syncProductionControlTowerSchema,
+    acceptProductionPilotVarianceSchema,
+    addProductionPilotLimitationSchema,
+    captureProductionPilotDaySchema,
+    createProductionPilotRunSchema,
+    saveProductionPilotReferenceSchema,
+    signoffProductionPilotSchema,
+    updateProductionPilotChecklistSchema,
+    updateProductionPilotLimitationSchema,
+    updateProductionPilotStatusSchema,
+    transitionProductionRolloutSchema,
 } from '@/validations/production.validation';
 import { Router } from 'express';
 
@@ -61,6 +85,18 @@ router.use(authorize(...ROLE_GROUPS.PRODUCTION_FIELD));
 
 // Endpoint trạng thái phải đứng trước middleware chặn để FE có thể giải thích đúng lý do.
 router.get('/access', asyncHandler(productionAccessService.getProductionAccess));
+router.get(
+    '/rollout/portfolio',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    asyncHandler(productionRolloutService.getProductionRolloutPortfolio)
+);
+router.post(
+    '/rollout/plants/:plantId/transition',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    validateObjectIdParams('plantId'),
+    validator(transitionProductionRolloutSchema),
+    asyncHandler(productionRolloutService.transitionProductionRollout)
+);
 router.use(productionAccessService.requireProductionEnabled);
 
 router.get('/lines', asyncHandler(productionService.listProductionLines));
@@ -210,6 +246,180 @@ router.get(
     '/reports/export',
     authorize(...ROLE_GROUPS.MANAGEMENT),
     asyncHandler(productionReportService.exportProductionReport)
+);
+
+router.get(
+    '/orders/import/template',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionOrderService.downloadProductionOrderTemplate)
+);
+router.get(
+    '/capacity',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionCapacityService.getProductionCapacity)
+);
+router.get(
+    '/control-tower',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionControlTowerService.getProductionControlTower)
+);
+router.post(
+    '/control-tower/sync-statuses',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(syncProductionControlTowerSchema),
+    asyncHandler(productionControlTowerService.syncProductionControlTowerStatuses)
+);
+router.get(
+    '/pilot-runs',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionPilotService.listProductionPilotRuns)
+);
+router.post(
+    '/pilot-runs',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(createProductionPilotRunSchema),
+    asyncHandler(productionPilotService.createProductionPilotRun)
+);
+router.get(
+    '/pilot-runs/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    asyncHandler(productionPilotService.getProductionPilotRun)
+);
+router.patch(
+    '/pilot-runs/:id/status',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(updateProductionPilotStatusSchema),
+    asyncHandler(productionPilotService.updateProductionPilotRunStatus)
+);
+router.post(
+    '/pilot-runs/:id/days/capture',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(captureProductionPilotDaySchema),
+    asyncHandler(productionPilotService.captureProductionPilotDay)
+);
+router.put(
+    '/pilot-runs/:id/days/:date/reference',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(saveProductionPilotReferenceSchema),
+    asyncHandler(productionPilotService.saveProductionPilotReference)
+);
+router.post(
+    '/pilot-runs/:id/days/:date/accept-variance',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(acceptProductionPilotVarianceSchema),
+    asyncHandler(productionPilotService.acceptProductionPilotVariance)
+);
+router.patch(
+    '/pilot-runs/:id/checklist/:code',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(updateProductionPilotChecklistSchema),
+    asyncHandler(productionPilotService.updateProductionPilotChecklist)
+);
+router.post(
+    '/pilot-runs/:id/limitations',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(addProductionPilotLimitationSchema),
+    asyncHandler(productionPilotService.addProductionPilotLimitation)
+);
+router.patch(
+    '/pilot-runs/:id/limitations/:limitationId',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(updateProductionPilotLimitationSchema),
+    asyncHandler(productionPilotService.updateProductionPilotLimitation)
+);
+router.post(
+    '/pilot-runs/:id/sign-off',
+    authorize(...ROLE_GROUPS.DIRECTOR_UP),
+    validateObjectIdParams('id'),
+    validator(signoffProductionPilotSchema),
+    asyncHandler(productionPilotService.signoffProductionPilotRun)
+);
+router.post(
+    '/capacity/apply-suggestions',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(applyProductionMasterPlanSchema),
+    asyncHandler(productionPlanService.applyProductionMasterPlan)
+);
+router.get('/boms', authorize(...ROLE_GROUPS.MANAGEMENT), asyncHandler(productionMaterialService.listProductionBoms));
+router.put(
+    '/items/:id/bom',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(saveProductionBomSchema),
+    asyncHandler(productionMaterialService.saveProductionBomDraft)
+);
+router.post(
+    '/boms/:id/approve',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(approveProductionBomSchema),
+    asyncHandler(productionMaterialService.approveProductionBom)
+);
+router.get(
+    '/material-readiness',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    asyncHandler(productionMaterialService.getProductionMaterialReadiness)
+);
+router.post(
+    '/orders/:id/materials/reserve',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    asyncHandler(productionMaterialService.reserveProductionOrderMaterials)
+);
+router.post(
+    '/orders/:id/materials/release',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(releaseProductionMaterialReservationSchema),
+    asyncHandler(productionMaterialService.releaseProductionOrderMaterials)
+);
+router.post(
+    '/orders/:id/materials/snapshot',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    asyncHandler(productionMaterialService.snapshotProductionOrderReadiness)
+);
+router.post(
+    '/orders/import/preview',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    excelUpload.single('file'),
+    validator(importProductionOrderSchema),
+    asyncHandler(productionOrderService.previewProductionOrderImport)
+);
+router.post(
+    '/orders/import/confirm',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    excelUpload.single('file'),
+    validator(importProductionOrderSchema),
+    asyncHandler(productionOrderService.confirmProductionOrderImport)
+);
+router.get('/orders', authorize(...ROLE_GROUPS.MANAGEMENT), asyncHandler(productionOrderService.listProductionOrders));
+router.post(
+    '/orders',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validator(createProductionOrderSchema),
+    asyncHandler(productionOrderService.createProductionOrder)
+);
+router.get(
+    '/orders/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    asyncHandler(productionOrderService.getProductionOrder)
+);
+router.patch(
+    '/orders/:id',
+    authorize(...ROLE_GROUPS.MANAGEMENT),
+    validateObjectIdParams('id'),
+    validator(updateProductionOrderSchema),
+    asyncHandler(productionOrderService.updateProductionOrder)
 );
 
 router.get(

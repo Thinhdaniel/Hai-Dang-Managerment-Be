@@ -65,6 +65,7 @@ export const createProductionItemSchema = z.object({
     name: zOptionalString(),
     unit: z.string().trim().min(1).max(30).default('SP'),
     unitPrice: z.number().min(0).max(1000000000).default(0),
+    planningHourlyQuota: z.number().min(0).max(10_000_000).default(0),
     isActive: z.boolean().default(true),
 });
 
@@ -169,6 +170,46 @@ export const updateProductionScheduleTemplateSchema = z.object({
     plantId: zObjectId('Cơ sở'),
     isWorkingDay: z.boolean(),
     timeSlots: timeSlotsSchema,
+});
+
+const productionOrderFields = {
+    code: z.string().trim().min(1, 'Cần nhập mã đơn hàng').max(80),
+    customerName: z.string().trim().max(160).optional(),
+    itemId: zObjectId('Mã hàng'),
+    totalQuantity: z.number().int().min(1).max(1_000_000_000),
+    plannedStartDate: productionDateSchema.optional().nullable(),
+    dueDate: productionDateSchema,
+    priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
+    status: z.enum(['draft', 'ready', 'in_production', 'paused', 'completed', 'cancelled']).default('draft'),
+    note: z.string().trim().max(500).optional(),
+};
+
+export const createProductionOrderSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    ...productionOrderFields,
+});
+
+export const updateProductionOrderSchema = z
+    .object({
+        revision: z.number().int().min(0),
+        changeReason: z.string().trim().min(3, 'Cần nêu lý do cập nhật').max(500),
+        code: productionOrderFields.code.optional(),
+        customerName: productionOrderFields.customerName,
+        itemId: productionOrderFields.itemId.optional(),
+        totalQuantity: productionOrderFields.totalQuantity.optional(),
+        plannedStartDate: productionOrderFields.plannedStartDate,
+        dueDate: productionOrderFields.dueDate.optional(),
+        priority: productionOrderFields.priority.optional(),
+        status: productionOrderFields.status.optional(),
+        note: productionOrderFields.note,
+    })
+    .refine(
+        (value) => Object.keys(value).some((key) => !['revision', 'changeReason'].includes(key)),
+        'Cần có ít nhất một nội dung cần cập nhật'
+    );
+
+export const importProductionOrderSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
 });
 
 export const transitionProductionDaySchema = z.object({
@@ -493,6 +534,7 @@ const productionPlanAllocationSchema = z.object({
     id: zObjectId('Phân bổ').optional(),
     lineId: zObjectId('Chuyền'),
     itemId: zObjectId('Mã hàng'),
+    orderId: zObjectId('Đơn hàng').optional(),
     orderCode: z.string().trim().max(80).optional(),
     plannedQuantity: z.number().int().min(1).max(100000000),
     hourlyQuota: z.number().positive().max(10000000),
@@ -506,6 +548,189 @@ const productionPlanAllocationSchema = z.object({
 export const createProductionPlanSchema = z.object({
     plantId: zObjectId('Cơ sở'),
     productionDate: productionDateSchema,
+});
+
+const productionMasterPlanSuggestionSchema = z.object({
+    orderId: zObjectId('Don hang'),
+    date: productionDateSchema,
+    lineId: zObjectId('Chuyen'),
+    quantity: z.number().int().min(1).max(100000000),
+    hourlyQuota: z.number().positive().max(10000000),
+});
+
+export const applyProductionMasterPlanSchema = z
+    .object({
+        plantId: zObjectId('Co so'),
+        suggestions: z.array(productionMasterPlanSuggestionSchema).min(1).max(200),
+        confirm: z.boolean().default(false),
+        expectedFingerprint: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
+    })
+    .superRefine((value, ctx) => {
+        const seen = new Set<string>();
+        value.suggestions.forEach((suggestion, index) => {
+            const key = `${suggestion.orderId}|${suggestion.date}|${suggestion.lineId}`;
+            if (seen.has(key)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['suggestions', index],
+                    message: 'Phan bo bi trung',
+                });
+            }
+            seen.add(key);
+        });
+        if (value.confirm && !value.expectedFingerprint) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['expectedFingerprint'],
+                message: 'Can kiem tra lai phuong an truoc khi ap dung',
+            });
+        }
+    });
+
+const productionBomLineSchema = z.object({
+    materialId: zObjectId('Vật tư'),
+    quantityPerUnit: z.number().positive('Định mức phải lớn hơn 0').max(1_000_000),
+    wastagePercent: z.number().min(0).max(100).default(0),
+    isRequired: z.boolean().default(true),
+    operationName: z.string().trim().max(160).optional(),
+    note: z.string().trim().max(300).optional(),
+});
+
+export const saveProductionBomSchema = z
+    .object({
+        plantId: zObjectId('Cơ sở'),
+        revision: z.number().int().min(0).default(0),
+        effectiveFrom: productionDateSchema.optional(),
+        note: z.string().trim().max(500).optional(),
+        changeReason: z.string().trim().min(3, 'Cần nêu lý do cập nhật BOM').max(500),
+        lines: z.array(productionBomLineSchema).min(1, 'BOM cần ít nhất một vật tư').max(100),
+    })
+    .superRefine((value, ctx) => {
+        const seen = new Set<string>();
+        value.lines.forEach((line, index) => {
+            if (seen.has(line.materialId)) {
+                ctx.addIssue({
+                    code: 'custom',
+                    path: ['lines', index, 'materialId'],
+                    message: 'Vật tư bị lặp trong BOM',
+                });
+            }
+            seen.add(line.materialId);
+        });
+    });
+
+export const approveProductionBomSchema = z.object({
+    revision: z.number().int().min(0),
+    note: z.string().trim().min(3, 'Cần ghi chú khi duyệt BOM').max(500),
+});
+
+export const releaseProductionMaterialReservationSchema = z.object({
+    reason: z.string().trim().min(3, 'Cần nêu lý do giải phóng tồn').max(500),
+});
+
+export const syncProductionControlTowerSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    orderIds: z.array(zObjectId('Đơn hàng')).max(100).optional(),
+});
+
+const productionPilotThresholdsSchema = z.object({
+    minimumShadowDays: z.number().int().min(1).max(60).default(10),
+    quantityVariancePercent: z.number().min(0).max(100).default(2),
+    capacityVariancePoints: z.number().min(0).max(100).default(3),
+    countVariance: z.number().int().min(0).max(1000).default(0),
+});
+
+const productionPilotMetricsSchema = z.object({
+    actualOutput: z.number().min(0).max(1_000_000_000),
+    plannedOutput: z.number().min(0).max(1_000_000_000),
+    openOrders: z.number().int().min(0).max(1_000_000),
+    capacityUtilizationPercent: z.number().min(0).max(1000),
+    materialBlockedOrders: z.number().int().min(0).max(1_000_000),
+    forecastLateOrders: z.number().int().min(0).max(1_000_000),
+});
+
+export const createProductionPilotRunSchema = z.object({
+    plantId: zObjectId('Cơ sở'),
+    name: z.string().trim().min(3, 'Tên đợt pilot quá ngắn').max(240),
+    sourceFileName: z.string().trim().max(255).optional(),
+    sourceDescription: z.string().trim().max(500).optional(),
+    startDate: productionDateSchema,
+    targetEndDate: productionDateSchema,
+    thresholds: productionPilotThresholdsSchema.default({
+        minimumShadowDays: 10,
+        quantityVariancePercent: 2,
+        capacityVariancePoints: 3,
+        countVariance: 0,
+    }),
+});
+
+export const updateProductionPilotStatusSchema = z.object({
+    revision: z.number().int().min(0),
+    status: z.enum(['active', 'paused', 'cancelled']),
+    note: z.string().trim().min(3).max(500).optional(),
+});
+
+export const captureProductionPilotDaySchema = z.object({
+    revision: z.number().int().min(0),
+    date: productionDateSchema.optional(),
+});
+
+export const saveProductionPilotReferenceSchema = z.object({
+    revision: z.number().int().min(0),
+    reference: productionPilotMetricsSchema.extend({
+        sourceSheet: z.string().trim().max(160).optional(),
+        note: z.string().trim().max(500).optional(),
+    }),
+});
+
+export const acceptProductionPilotVarianceSchema = z.object({
+    revision: z.number().int().min(0),
+    note: z.string().trim().min(10, 'Cần giải trình sai lệch tối thiểu 10 ký tự').max(500),
+});
+
+export const updateProductionPilotChecklistSchema = z.object({
+    revision: z.number().int().min(0),
+    status: z.enum(['pending', 'passed', 'failed', 'blocked', 'not_applicable']),
+    evidence: z.string().trim().min(5, 'Cần ghi bằng chứng hoặc lý do').max(1000),
+});
+
+const productionPilotLimitationSchema = z.object({
+    title: z.string().trim().min(3).max(240),
+    impact: z.string().trim().min(5).max(1000),
+    mitigation: z.string().trim().max(1000).optional(),
+    owner: z.string().trim().max(160).optional(),
+    dueDate: productionDateSchema.optional(),
+    severity: z.enum(['critical', 'high', 'medium', 'low']),
+    status: z.enum(['open', 'mitigated', 'accepted', 'resolved']).default('open'),
+});
+
+export const addProductionPilotLimitationSchema = z.object({
+    revision: z.number().int().min(0),
+    limitation: productionPilotLimitationSchema,
+});
+
+export const updateProductionPilotLimitationSchema = z.object({
+    revision: z.number().int().min(0),
+    limitation: productionPilotLimitationSchema.partial().refine((value) => Object.keys(value).length > 0, {
+        message: 'Cần ít nhất một nội dung cập nhật',
+    }),
+});
+
+export const signoffProductionPilotSchema = z.object({
+    revision: z.number().int().min(0),
+    note: z.string().trim().min(10, 'Cần ghi kết luận nghiệm thu').max(1000),
+});
+
+export const transitionProductionRolloutSchema = z.object({
+    revision: z.number().int().min(0),
+    toStage: z.enum(['disabled', 'preparing', 'pilot', 'live', 'paused']),
+    reason: z.string().trim().min(10, 'Cần nêu lý do chuyển giai đoạn tối thiểu 10 ký tự').max(500),
+    wave: z.number().int().min(1).max(100).optional(),
+    plannedGoLiveDate: productionDateSchema.nullable().optional(),
+    ownerName: z.string().trim().max(160).nullable().optional(),
 });
 
 export const updateProductionPlanSchema = z.object({

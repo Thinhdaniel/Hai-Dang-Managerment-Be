@@ -61,6 +61,12 @@ const ProductionItemSchema = new mongoose.Schema(
             min: 0,
             default: 0,
         },
+        planningHourlyQuota: {
+            type: Number,
+            min: 0,
+            max: 10_000_000,
+            default: 0,
+        },
         priceHistory: {
             type: [ProductionItemPriceSchema],
             default: [],

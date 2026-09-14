@@ -22,6 +22,7 @@ const ProductionPlanAllocationSchema = new mongoose.Schema(
         itemName: { type: String, trim: true },
         unit: { type: String, trim: true, default: 'SP' },
         unitPriceSnapshot: { type: Number, required: true, min: 0 },
+        orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionOrder' },
         orderCode: { type: String, trim: true, maxlength: 80 },
         plannedQuantity: { type: Number, required: true, min: 1 },
         hourlyQuota: { type: Number, required: true, min: 0.01 },

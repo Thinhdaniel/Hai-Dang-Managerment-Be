@@ -36,3 +36,8 @@ export const vietnamDateLabel = (date = new Date()) => {
     const { year, month, day } = vietnamCalendarParts(date);
     return `${String(day).padStart(2, '0')}/${String(month + 1).padStart(2, '0')}/${year}`;
 };
+
+export const vietnamIsoDate = (date = new Date()) => {
+    const { year, month, day } = vietnamCalendarParts(date);
+    return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+};
