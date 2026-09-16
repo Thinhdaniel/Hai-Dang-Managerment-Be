@@ -149,7 +149,8 @@ export const createAsset = async (req: Request, res: Response, next: NextFunctio
     if (!machineCode) {
         const brand = await Brand.findOne({ _id: assetBody.brandId, isDeleted: { $ne: true } })
             .select('name')
-            .lean();
+
+            .lean<{ name: string }>();
         const generated = await generateMachineCode({
             type: assetBody.type,
             brandName: brand?.name,
