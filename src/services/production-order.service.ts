@@ -7,6 +7,8 @@ import ProductionLineRecord from '@/models/ProductionLineRecord';
 import ProductionOpeningBalanceBatch from '@/models/ProductionOpeningBalanceBatch';
 import ProductionMaterialReservation from '@/models/ProductionMaterialReservation';
 import ProductionOrder from '@/models/ProductionOrder';
+import ProductionLine from '@/models/ProductionLine';
+import { validateLineAssignments } from './production-line-assignment.helpers';
 import ProductionPlan from '@/models/ProductionPlan';
 import { vietnamIsoDate } from '@/utils/vietnamDate';
 import ExcelJS from 'exceljs';
@@ -325,6 +327,14 @@ const serializeOrder = (input: any, progress?: OrderProgress) => {
         itemName: order.itemName,
         unit: order.unit || 'SP',
         totalQuantity: Number(order.totalQuantity || 0),
+        lineAssignments: (order.lineAssignments || []).map((row: any) => ({
+            lineId: toId(row.lineId),
+            lineCode: row.lineCode,
+            lineName: row.lineName,
+            quantity: Number(row.quantity),
+            startDate: row.startDate,
+            dueDate: row.dueDate,
+        })),
         plannedStartDate: order.plannedStartDate,
         dueDate: order.dueDate,
         priority: order.priority || 'normal',
@@ -342,6 +352,8 @@ const serializeOrder = (input: any, progress?: OrderProgress) => {
             note: event.note,
             actor: serializeActor(event.actor),
             at: toIso(event.at),
+            previousAssignments: event.previousAssignments,
+            nextAssignments: event.nextAssignments,
         })),
         createdBy: serializeActor(order.createdBy),
         updatedBy: serializeActor(order.updatedBy),
@@ -372,6 +384,33 @@ const loadItem = async (plantId: string, itemId: string) => {
     const item: any = await ProductionItem.findOne({ _id: itemId, plantId, isActive: true }).lean();
     if (!item) throw new NotFoundError('Mã hàng không tồn tại hoặc đã ngừng sử dụng');
     return item;
+};
+
+const resolveAssignments = async (
+    plantId: string,
+    rows: any[],
+    total: number,
+    start: string | undefined,
+    due: string
+) => {
+    try {
+        validateLineAssignments(rows, total, start, due);
+    } catch (error) {
+        throw new BadRequestError((error as Error).message);
+    }
+    const lines = await ProductionLine.find({ plantId, _id: { $in: rows.map((row) => row.lineId) } }).lean();
+    return rows.map((row) => {
+        const line = lines.find((line) => String(line._id) === String(row.lineId));
+        if (!line) throw new BadRequestError('Tổ phân giao không thuộc cơ sở của đơn hàng');
+        return {
+            lineId: line._id,
+            lineCode: line.code,
+            lineName: line.name,
+            quantity: row.quantity,
+            startDate: row.startDate,
+            dueDate: row.dueDate,
+        };
+    });
 };
 
 const loadOrder = async (req: Request, id: string) => {
@@ -441,6 +480,13 @@ export const createProductionOrder = async (req: Request, res: Response) => {
     const code = orderKey(req.body.code);
     const item = await loadItem(plant.id, String(req.body.itemId));
     assertDates(req.body.plannedStartDate, req.body.dueDate);
+    const lineAssignments = await resolveAssignments(
+        plant.id,
+        req.body.lineAssignments || [],
+        req.body.totalQuantity,
+        req.body.plannedStartDate,
+        req.body.dueDate
+    );
     try {
         const order: any = await ProductionOrder.create({
             plantId: plant.id,
@@ -453,6 +499,7 @@ export const createProductionOrder = async (req: Request, res: Response) => {
             itemName: item.name,
             unit: item.unit || 'SP',
             totalQuantity: req.body.totalQuantity,
+            lineAssignments,
             plannedStartDate: req.body.plannedStartDate || undefined,
             dueDate: req.body.dueDate,
             priority: req.body.priority || 'normal',
@@ -461,7 +508,16 @@ export const createProductionOrder = async (req: Request, res: Response) => {
             sourceType: 'manual',
             createdBy: req.userId,
             updatedBy: req.userId,
-            history: [{ type: 'created', toStatus: req.body.status || 'draft', actor: req.userId, at: new Date() }],
+            history: [
+                {
+                    type: 'created',
+                    toStatus: req.body.status || 'draft',
+                    actor: req.userId,
+                    at: new Date(),
+                    previousAssignments: [],
+                    nextAssignments: lineAssignments,
+                },
+            ],
         });
         emitOrderUpdated(order, 'created');
         return sendSuccess(
@@ -509,6 +565,14 @@ export const updateProductionOrder = async (req: Request, res: Response) => {
         req.body.plannedStartDate === undefined ? order.plannedStartDate : req.body.plannedStartDate || undefined;
     const nextDue = req.body.dueDate || order.dueDate;
     assertDates(nextStart, nextDue);
+    const previousAssignments = (order.lineAssignments || []).map((row: any) => (row.toObject ? row.toObject() : row));
+    const nextAssignments = await resolveAssignments(
+        String(order.plantId),
+        req.body.lineAssignments ?? previousAssignments,
+        nextTotal,
+        nextStart,
+        nextDue
+    );
     const item = nextItemId === String(order.itemId) ? null : await loadItem(String(order.plantId), nextItemId);
     const previousStatus = order.status;
     const previousTotalQuantity = Number(order.totalQuantity || 0);
@@ -524,6 +588,7 @@ export const updateProductionOrder = async (req: Request, res: Response) => {
         if (req.body[field] !== undefined) order[field] = req.body[field] || undefined;
     });
     order.totalQuantity = nextTotal;
+    order.lineAssignments = nextAssignments;
     order.plannedStartDate = nextStart;
     order.dueDate = nextDue;
     order.priority = req.body.priority || order.priority;
@@ -535,6 +600,8 @@ export const updateProductionOrder = async (req: Request, res: Response) => {
         fromStatus: previousStatus === nextStatus ? undefined : previousStatus,
         toStatus: previousStatus === nextStatus ? undefined : nextStatus,
         note: req.body.changeReason,
+        previousAssignments,
+        nextAssignments,
         actor: req.userId,
         at: new Date(),
     });
@@ -687,6 +754,13 @@ const parseImportWorkbook = async (
         if (!Number.isInteger(totalQuantity) || totalQuantity <= 0)
             errors.push('Tổng số lượng phải là số nguyên dương');
         if (!dueDate) errors.push('Ngày giao không hợp lệ');
+        if (existing && dueDate) {
+            try {
+                validateLineAssignments(existing.lineAssignments || [], totalQuantity, plannedStartDate, dueDate);
+            } catch (error) {
+                errors.push((error as Error).message);
+            }
+        }
         if (raw.plannedStartDate && !plannedStartDate) errors.push('Ngày vào chuyền không hợp lệ');
         if (plannedStartDate && dueDate && plannedStartDate > dueDate) {
             errors.push('Ngày vào chuyền phải trước hoặc bằng ngày giao');
@@ -772,6 +846,16 @@ export const confirmProductionOrderImport = async (req: Request, res: Response) 
         }
         const existing = row.existingId ? existingById.get(row.existingId) : undefined;
         if (!existing) continue;
+        try {
+            validateLineAssignments(
+                existing.lineAssignments || [],
+                row.totalQuantity,
+                row.plannedStartDate,
+                row.dueDate
+            );
+        } catch (error) {
+            throw new BadRequestError(`Dòng ${row.rowNumber}: ${(error as Error).message}`);
+        }
         const produced = Number(existingProgress.get(String(existing._id))?.producedQuantity || 0);
         if (row.totalQuantity < produced) {
             throw new BadRequestError(`Dòng ${row.rowNumber}: số lượng nhỏ hơn ${produced} SP đã sản xuất`);

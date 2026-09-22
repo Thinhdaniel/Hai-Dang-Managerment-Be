@@ -1,3 +1,5 @@
+import { buildItemLineReport } from './production-item-line-report.helpers';
+
 type ProductionReportScope = 'all' | 'locked';
 
 type BuildProductionReportOptions = {
@@ -15,6 +17,8 @@ type BuildProductionReportOptions = {
     previousPlans?: any[];
     prePeriodDetails?: any[];
     cumulativeDetails?: any[];
+    allPlans?: any[];
+    productionOrders?: any[];
     openingBalance?: {
         coverage?: any;
         entries?: any[];
@@ -827,6 +831,18 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
     const lines = enrichLines(current.lines, openingSnapshot, cumulativeSnapshot, options.financialsVisible);
     const items = enrichItems(current.items, openingSnapshot, cumulativeSnapshot, options.financialsVisible);
     const orders = enrichOrders(current.orders, openingSnapshot, cumulativeSnapshot, options.financialsVisible);
+    const itemLines = buildItemLineReport({
+        details,
+        cumulativeDetails: options.cumulativeDetails || details,
+        prePeriodDetails: options.prePeriodDetails || [],
+        plans: options.allPlans || plans,
+        orders: options.productionOrders || [],
+        openingEntries,
+        from: options.from,
+        to: options.to,
+        generatedAt: options.generatedAt || new Date().toISOString(),
+        scope: options.scope,
+    });
     let runningQuantity = Number(openingSnapshot.summary.quantity || 0);
     let runningAmount = Number(openingSnapshot.summary.amount || 0);
     const trend = current.trend.map((point: any) => {
@@ -961,6 +977,7 @@ export const buildProductionReport = (details: any[], plans: any[], options: Bui
         trend,
         lines,
         items,
+        itemLines,
         orders,
         operations: current.operations,
         exceptionSummary: {

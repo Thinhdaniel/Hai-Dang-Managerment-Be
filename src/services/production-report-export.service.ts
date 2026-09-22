@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { itemLineStatusLabels } from './production-item-line-report.helpers';
 
 const COLORS = {
     ink: 'FF17211B',
@@ -739,6 +740,110 @@ const addExceptionSheet = (workbook: ExcelJS.Workbook, report: any) => {
     ];
 };
 
+const addItemLineSheets = (workbook: ExcelJS.Workbook, report: any) => {
+    const headers = [
+        'Mã hàng',
+        'Tổ',
+        'Đơn hàng',
+        'Trước kỳ',
+        'Trong kỳ',
+        'Lũy kế đã báo',
+        'Tổng giao',
+        'Còn phải làm',
+        'KH đến hạn',
+        'Sản khớp KH',
+        'Chênh tiến độ',
+        '% phần giao',
+        'Trạng thái',
+        'Thiếu báo',
+        'Sản chưa khớp KH',
+        'Hạn hoàn thành',
+    ];
+    const sheet = workbook.addWorksheet('Mã hàng theo tổ');
+    setupSheet(sheet);
+    addTitle(
+        sheet,
+        'SẢN LƯỢNG MÃ HÀNG THEO TỔ',
+        report.meta.plantName + ' | ' + formatDate(report.meta.from) + ' - ' + formatDate(report.meta.to),
+        headers.length
+    );
+    sheet.getRow(5).values = headers;
+    styleHeader(sheet.getRow(5));
+    const daily = workbook.addWorksheet('Chi tiết mã tổ ngày giờ');
+    setupSheet(daily);
+    const dayHeaders = [
+        'Mã hàng',
+        'Tổ',
+        'Đơn hàng',
+        'Ngày',
+        'Khung giờ',
+        'Sản đã báo',
+        'Khoán',
+        'Ghi chú',
+        'Trạng thái',
+    ];
+    addTitle(daily, 'CHI TIẾT SẢN LƯỢNG THEO NGÀY GIỜ', report.meta.plantName, dayHeaders.length);
+    daily.getRow(5).values = dayHeaders;
+    styleHeader(daily.getRow(5));
+    for (const group of report.itemLines || [])
+        for (const row of group.orders) {
+            sheet.addRow([
+                group.itemCode,
+                group.lineCode,
+                row.orderCode || 'Chưa gắn đơn',
+                row.openingQuantity,
+                row.periodQuantity,
+                row.cumulativeQuantity,
+                row.assignedQuantity ?? '',
+                row.remainingQuantity ?? '',
+                row.plannedToDateQuantity,
+                row.planActualQuantity,
+                row.deltaQuantity ?? '',
+                row.completionPercent === null ? '' : row.completionPercent / 100,
+                itemLineStatusLabels[row.status],
+                row.missingReports,
+                row.unlinkedQuantity,
+                row.dueDate ? formatDate(row.dueDate) : '',
+            ]);
+            for (const day of row.days) {
+                if (!day.slots.length)
+                    daily.addRow([
+                        group.itemCode,
+                        group.lineCode,
+                        row.orderCode || 'Chưa gắn đơn',
+                        day.productionDate,
+                        '',
+                        day.quantity,
+                        day.targetQuantity,
+                        '',
+                        'Chưa có khung nhập',
+                    ]);
+                for (const slot of day.slots)
+                    daily.addRow([
+                        group.itemCode,
+                        group.lineCode,
+                        row.orderCode || 'Chưa gắn đơn',
+                        day.productionDate,
+                        slot.label,
+                        slot.reported ? slot.quantity : '',
+                        slot.target,
+                        slot.note,
+                        slot.reported ? 'Đã báo' : slot.due ? 'Thiếu báo' : 'Chưa đến giờ',
+                    ]);
+            }
+        }
+    for (const [target, count] of [
+        [sheet, headers.length],
+        [daily, dayHeaders.length],
+    ] as const) {
+        styleRows(target, 6, Math.max(6, target.rowCount), count);
+        target.columns = Array.from({ length: count }, (_, index) => ({ width: index < 3 ? 20 : 18 }));
+        target.views = [{ state: 'frozen', ySplit: 5, xSplit: 3, showGridLines: false }];
+        target.autoFilter = { from: { row: 5, column: 1 }, to: { row: Math.max(5, target.rowCount), column: count } };
+    }
+    sheet.getColumn(12).numFmt = '0.0%';
+};
+
 export const buildProductionReportWorkbook = async (report: any) => {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Hải Đăng Production';
@@ -748,6 +853,7 @@ export const buildProductionReportWorkbook = async (report: any) => {
     addOverviewSheet(workbook, report);
     addLineSheet(workbook, report);
     addItemSheet(workbook, report);
+    if (report.itemLines) addItemLineSheets(workbook, report);
     addOrderSheet(workbook, report);
     addOperationSheet(workbook, report);
     addDailySheet(workbook, report);

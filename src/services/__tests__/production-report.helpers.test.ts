@@ -122,6 +122,56 @@ test('tổng hợp nhất quán sản lượng, kế hoạch, báo đủ và nă
     assert.equal(report.summary.cumulativeQuantity, 90);
 });
 
+test('tổng các tổ của một mã khớp báo cáo mã hàng với đầu kỳ và sản trước kỳ lọc', () => {
+    const today = makeDetail({ date: '2026-07-20', quantities: [90, 100], secondReported: true });
+    const second = structuredClone(
+        makeDetail({ date: '2026-07-20', quantities: [50, 60], secondReported: true }).lines[0]
+    );
+    second.lineId = 'line-2';
+    second.lineCode = 'C2';
+    today.lines.push(second);
+    today.summary.totalActual = 300;
+    const earlier = makeDetail({ date: '2026-07-19', quantities: [40] });
+    const report = buildProductionReport([today], [], {
+        ...options,
+        prePeriodDetails: [earlier],
+        cumulativeDetails: [earlier, today],
+        openingBalance: {
+            coverage: { cutoffDate: '2026-07-18' },
+            entries: [
+                {
+                    lineId: 'line-1',
+                    lineCode: 'C1',
+                    itemId: 'item-1',
+                    itemCode: 'HD-01',
+                    orderCode: 'PO-01',
+                    quantity: 100,
+                    allocationState: 'allocated',
+                },
+                {
+                    lineId: 'line-2',
+                    lineCode: 'C2',
+                    itemId: 'item-1',
+                    itemCode: 'HD-01',
+                    orderCode: 'PO-01',
+                    quantity: 200,
+                    allocationState: 'allocated',
+                },
+            ],
+        } as any,
+    });
+    const rows = report.itemLines.filter((row) => row.itemId === 'item-1');
+    assert.equal(rows.length, 2);
+    for (const field of ['openingQuantity', 'periodQuantity', 'cumulativeQuantity'] as const) {
+        assert.equal(
+            rows.reduce((sum, row) => sum + row[field], 0),
+            report.items[0][field]
+        );
+    }
+    assert.equal(rows.find((row) => row.lineId === 'line-1').cumulativeQuantity, 330);
+    assert.equal(rows.find((row) => row.lineId === 'line-2').cumulativeQuantity, 310);
+});
+
 test('phân loại ngoại lệ và không coi ngày khóa sổ là ngày mở', () => {
     const report = buildProductionReport([makeDetail({ date: '2026-07-20' })], [makePlan('2026-07-20')], options);
 

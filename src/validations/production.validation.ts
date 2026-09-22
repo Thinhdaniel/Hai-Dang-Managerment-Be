@@ -172,11 +172,19 @@ export const updateProductionScheduleTemplateSchema = z.object({
     timeSlots: timeSlotsSchema,
 });
 
+const lineAssignmentSchema = z.object({
+    lineId: zObjectId('Tổ'),
+    quantity: z.number().int().min(1).max(1_000_000_000),
+    startDate: productionDateSchema,
+    dueDate: productionDateSchema,
+});
+
 const productionOrderFields = {
     code: z.string().trim().min(1, 'Cần nhập mã đơn hàng').max(80),
     customerName: z.string().trim().max(160).optional(),
     itemId: zObjectId('Mã hàng'),
     totalQuantity: z.number().int().min(1).max(1_000_000_000),
+    lineAssignments: z.array(lineAssignmentSchema).max(100).optional(),
     plannedStartDate: productionDateSchema.optional().nullable(),
     dueDate: productionDateSchema,
     priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
@@ -197,6 +205,7 @@ export const updateProductionOrderSchema = z
         customerName: productionOrderFields.customerName,
         itemId: productionOrderFields.itemId.optional(),
         totalQuantity: productionOrderFields.totalQuantity.optional(),
+        lineAssignments: productionOrderFields.lineAssignments,
         plannedStartDate: productionOrderFields.plannedStartDate,
         dueDate: productionOrderFields.dueDate.optional(),
         priority: productionOrderFields.priority.optional(),

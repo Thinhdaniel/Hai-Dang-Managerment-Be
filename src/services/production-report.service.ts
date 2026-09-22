@@ -4,6 +4,7 @@ import Plant from '@/models/Plant';
 import ProductionDay from '@/models/ProductionDay';
 import ProductionLineRecord from '@/models/ProductionLineRecord';
 import ProductionPlan from '@/models/ProductionPlan';
+import ProductionOrder from '@/models/ProductionOrder';
 import ProductionQcRecord from '@/models/ProductionQcRecord';
 import type { Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
@@ -95,7 +96,7 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
     const openingBalance = await loadConfirmedProductionOpeningBalances(plant.id);
     const cumulativeFloor = openingBalance.coverage.cutoffDate
         ? addDays(String(openingBalance.coverage.cutoffDate), 1)
-        : previousFrom;
+        : '1970-01-01';
     const dateFloor = cumulativeFloor < previousFrom ? cumulativeFloor : previousFrom;
     const dayFilter: Record<string, any> = {
         plantId: plant.id,
@@ -103,7 +104,7 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
     };
     if (scope === 'locked') dayFilter.status = 'locked';
 
-    const [days, plans, firstTrackedDay] = await Promise.all([
+    const [days, plans, firstTrackedDay, orders] = await Promise.all([
         ProductionDay.find(dayFilter).sort({ productionDate: 1 }).lean(),
         ProductionPlan.find({
             plantId: plant.id,
@@ -119,23 +120,26 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
             .sort({ productionDate: 1 })
             .select('productionDate')
             .lean(),
+        ProductionOrder.find({ plantId: plant.id }).lean(),
     ]);
     const details = await loadDetails(days);
     const currentDetails = details.filter((day) => day.productionDate >= from && day.productionDate <= to);
     const previousDetails = details.filter(
         (day) => day.productionDate >= previousFrom && day.productionDate <= previousTo
     );
-    const currentPlans = plans.filter((plan) => plan.productionDate >= from && plan.productionDate <= to);
-    const previousPlans = plans.filter(
+    const eligibleDates = new Set(days.map((day) => day.productionDate));
+    const eligiblePlans = scope === 'locked' ? plans.filter((plan) => eligibleDates.has(plan.productionDate)) : plans;
+    const currentPlans = eligiblePlans.filter((plan) => plan.productionDate >= from && plan.productionDate <= to);
+    const previousPlans = eligiblePlans.filter(
         (plan) => plan.productionDate >= previousFrom && plan.productionDate <= previousTo
     );
     const cutoffDate = openingBalance.coverage.cutoffDate ? String(openingBalance.coverage.cutoffDate) : undefined;
     const prePeriodDetails = cutoffDate
         ? details.filter((day) => day.productionDate > cutoffDate && day.productionDate < from)
-        : [];
+        : details.filter((day) => day.productionDate < from);
     const cumulativeDetails = cutoffDate
         ? details.filter((day) => day.productionDate > cutoffDate && day.productionDate <= to)
-        : currentDetails;
+        : details;
     const financialsVisible = [USER_ROLE.ADMIN, USER_ROLE.DIRECTOR, USER_ROLE.MANAGER].includes(req.role as USER_ROLE);
 
     return buildProductionReport(currentDetails, currentPlans, {
@@ -153,6 +157,8 @@ const loadReport = async (req: Request, exceptionLimit = 200) => {
         prePeriodDetails,
         cumulativeDetails,
         openingBalance,
+        allPlans: eligiblePlans.filter((plan) => !cutoffDate || plan.productionDate > cutoffDate),
+        productionOrders: orders,
         trackingStartDate: (firstTrackedDay as any)?.productionDate,
         exceptionLimit,
     });

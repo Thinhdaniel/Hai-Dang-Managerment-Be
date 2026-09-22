@@ -182,3 +182,66 @@ test('xuất báo cáo quản trị đủ sheet và cấu hình A4 một trang n
     assert.equal(workbook.getWorksheet('Theo công đoạn')?.getCell(6, 5).value, 'TRA-CO');
     assert.equal(workbook.getWorksheet('Đối soát đầu kỳ')?.getCell(13, 6).formula, 'C13+D13');
 });
+
+test('xuất mã hàng theo tổ giữ số lũy kế, phần giao và khung chưa báo', async () => {
+    const workbook = await buildProductionReportWorkbook({
+        ...report,
+        itemLines: [
+            {
+                itemCode: '416',
+                lineCode: 'CM2+3',
+                orders: [
+                    {
+                        orderCode: 'PO416',
+                        openingQuantity: 800,
+                        periodQuantity: 900,
+                        cumulativeQuantity: 1700,
+                        assignedQuantity: 3000,
+                        remainingQuantity: 1300,
+                        plannedToDateQuantity: 1000,
+                        planActualQuantity: 900,
+                        deltaQuantity: -100,
+                        completionPercent: 56.7,
+                        status: 'missing_reports',
+                        missingReports: 1,
+                        unlinkedQuantity: 0,
+                        dueDate: '2026-09-30',
+                        days: [
+                            {
+                                productionDate: '2026-09-22',
+                                quantity: 900,
+                                targetQuantity: 1000,
+                                slots: [
+                                    {
+                                        label: '08h-09h',
+                                        reported: true,
+                                        quantity: 900,
+                                        target: 500,
+                                        note: 'Đã kiểm tra',
+                                        due: true,
+                                    },
+                                    {
+                                        label: '09h-10h',
+                                        reported: false,
+                                        quantity: 0,
+                                        target: 500,
+                                        note: '',
+                                        due: true,
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    });
+    const sheet = workbook.getWorksheet('Mã hàng theo tổ')!;
+    assert.equal(sheet.getCell('F6').value, 1700);
+    assert.equal(sheet.getCell('G6').value, 3000);
+    assert.equal(sheet.getCell('K6').value, -100);
+    assert.equal(sheet.getCell('L6').numFmt, '0.0%');
+    const daily = workbook.getWorksheet('Chi tiết mã tổ ngày giờ')!;
+    assert.equal(daily.getCell('F7').value, '');
+    assert.equal(daily.getCell('I7').value, 'Thiếu báo');
+});
