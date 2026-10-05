@@ -70,6 +70,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
             const allowed =
                 /^\/api\/worker-notebook(?:\/|$)/.test(path) ||
                 (path === '/api/users/me' && req.method === 'GET') ||
+                (path === '/api/users/me/avatar' && ['PUT', 'DELETE'].includes(req.method)) ||
                 (path === '/api/auth/change-password' && req.method === 'POST');
             if (!allowed) return next(new UnAuthorizedError('Tai khoan cong nhan chi duoc truy cap so ca nhan'));
         }

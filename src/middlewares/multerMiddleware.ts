@@ -18,6 +18,33 @@ const createMemoryUpload = (pattern: RegExp, invalidFileMessage: string) =>
 
 export const imageUpload = createMemoryUpload(/\.(jpg|jpeg|png|webp|avif)$/i, UPLOAD_MESSAGES.INVALID_FILE_TYPE);
 
+const avatarParser = multer({
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0 },
+    fileFilter: (_req, file, callback) => {
+        if (
+            !/\.(jpg|jpeg|png|webp)$/i.test(file.originalname) ||
+            !['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)
+        )
+            return callback(new BadRequestError('Chi chap nhan anh JPG, PNG hoac WEBP'));
+        callback(null, true);
+    },
+}).single('avatar');
+
+export const avatarUpload: import('express').RequestHandler = (req, res, next) => {
+    avatarParser(req, res, (error) => {
+        if (error instanceof multer.MulterError)
+            return next(
+                new BadRequestError(
+                    error.code === 'LIMIT_FILE_SIZE'
+                        ? 'Anh dai dien khong duoc vuot qua 5 MB'
+                        : 'Chi gui mot anh dai dien, khong kem truong du lieu khac'
+                )
+            );
+        next(error);
+    });
+};
+
 const CHAT_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const CHAT_AUDIO_MIME_TYPES = [
     'audio/webm',
@@ -54,7 +81,9 @@ export const chatAttachmentUpload = multer({
     fileFilter: (req, file, cb) => {
         if (file.fieldname === 'images') {
             const validExtension = /\.(jpg|jpeg|png|webp)$/i.test(file.originalname);
-            const normalizedMime = String(file.mimetype || '').split(';')[0].toLowerCase();
+            const normalizedMime = String(file.mimetype || '')
+                .split(';')[0]
+                .toLowerCase();
             const validMime = CHAT_IMAGE_MIME_TYPES.includes(normalizedMime);
 
             if (!validExtension || !validMime) {
@@ -66,7 +95,9 @@ export const chatAttachmentUpload = multer({
 
         if (file.fieldname === 'audio') {
             const validExtension = /\.(webm|mp4|m4a|mp3|mpeg|wav|ogg|aac)$/i.test(file.originalname);
-            const normalizedMime = String(file.mimetype || '').split(';')[0].toLowerCase();
+            const normalizedMime = String(file.mimetype || '')
+                .split(';')[0]
+                .toLowerCase();
             const validMime = CHAT_AUDIO_MIME_TYPES.includes(normalizedMime);
 
             if (!validExtension || !validMime) {
