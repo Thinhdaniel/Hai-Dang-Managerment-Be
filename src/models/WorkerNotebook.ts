@@ -16,6 +16,8 @@ const WorkerNotebookSchema = new mongoose.Schema(
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         date: { type: String, required: true },
         attended: { type: Boolean, default: false },
+        attendanceType: { type: String, enum: ['full', 'half', 'off'] },
+        overtimeHours: { type: Number, min: 0, max: 24, default: 0 },
         attendedAt: { type: Date },
         entries: { type: [EntrySchema], default: [] },
     },

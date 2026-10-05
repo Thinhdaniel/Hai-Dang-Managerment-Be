@@ -3,6 +3,7 @@ import { BadRequestError, NotFoundError } from '@/errors/customError';
 import { authenticate } from '@/middlewares/authenticationMiddleware';
 import { authorize } from '@/middlewares/authorizationMiddleware';
 import WorkerNotebook from '@/models/WorkerNotebook';
+import { notebookAttendance, notebookMonthSummary } from '@/services/worker-notebook.service';
 import asyncHandler from '@/utils/asyncHandler';
 import customResponse from '@/utils/response';
 import { Router } from 'express';
@@ -61,7 +62,7 @@ router.get(
             new Map(
                 recent.flatMap((day) =>
                     day.entries.map((entry) => [
-                        `${entry.itemCode}|${entry.operation}`,
+                        JSON.stringify([entry.itemCode, entry.operation, entry.unit]),
                         {
                             itemCode: entry.itemCode,
                             operation: entry.operation,
@@ -71,35 +72,10 @@ router.get(
                 )
             ).values()
         ).slice(0, 30);
-        const breakdown = Array.from(
-            days
-                .flatMap((day) => day.entries)
-                .reduce((groups, entry) => {
-                    const key = `${entry.itemCode}|${entry.operation}|${entry.unit}`;
-                    const current = groups.get(key) ?? {
-                        itemCode: entry.itemCode,
-                        operation: entry.operation,
-                        unit: entry.unit,
-                        quantity: 0,
-                    };
-                    current.quantity += entry.quantity;
-                    groups.set(key, current);
-                    return groups;
-                }, new Map<string, { itemCode: string; operation: string; unit: string; quantity: number }>())
-                .values()
-        );
         return respond(res, {
             month,
-            attendedDays: days.filter((day) => day.attended).length,
-            entryCount: days.reduce((total, day) => total + day.entries.length, 0),
-            days: days.map((day) => ({
-                date: day.date,
-                attended: day.attended,
-                entryCount: day.entries.length,
-                totalQuantity: day.entries.reduce((total, entry) => total + entry.quantity, 0),
-            })),
+            ...notebookMonthSummary(days),
             suggestions,
-            breakdown,
         });
     })
 );
@@ -109,7 +85,8 @@ router.get(
     asyncHandler(async (req, res) => {
         const date = parseDate(String(req.params.date));
         const day = await WorkerNotebook.findOne({ userId: req.userId, date }).lean();
-        return respond(res, day ?? { date, attended: false, entries: [] });
+        const record = day ?? { date, attended: false, entries: [] };
+        return respond(res, { ...record, ...notebookAttendance(record) });
     })
 );
 
@@ -117,12 +94,36 @@ router.put(
     '/day/:date/attendance',
     asyncHandler(async (req, res) => {
         const date = parseDate(String(req.params.date));
-        const parsed = z.object({ attended: z.boolean() }).safeParse(req.body);
+        const parsed = z
+            .union([
+                z.object({
+                    attendanceType: z.enum(['full', 'half', 'off']),
+                    overtimeHours: z.number().min(0).max(24).multipleOf(0.01),
+                }),
+                z.object({ attended: z.boolean() }).strict(),
+            ])
+            .safeParse(req.body);
         if (!parsed.success) throw new BadRequestError('Trang thai diem danh khong hop le');
+        const current = await WorkerNotebook.findOne({ userId: req.userId, date }).lean();
+        const previous = notebookAttendance(current ?? {});
+        const attendanceType =
+            'attendanceType' in parsed.data
+                ? parsed.data.attendanceType
+                : parsed.data.attended
+                  ? previous.attended
+                      ? previous.attendanceType
+                      : 'full'
+                  : 'off';
+        const overtimeHours = 'overtimeHours' in parsed.data ? parsed.data.overtimeHours : previous.overtimeHours;
         const day = await WorkerNotebook.findOneAndUpdate(
             { userId: req.userId, date },
             {
-                $set: { attended: parsed.data.attended, attendedAt: parsed.data.attended ? new Date() : null },
+                $set: {
+                    attendanceType,
+                    overtimeHours,
+                    attended: attendanceType !== 'off',
+                    attendedAt: attendanceType !== 'off' ? (current?.attendedAt ?? new Date()) : null,
+                },
                 $setOnInsert: { userId: req.userId, date },
             },
             { upsert: true, returnDocument: 'after', runValidators: true }
