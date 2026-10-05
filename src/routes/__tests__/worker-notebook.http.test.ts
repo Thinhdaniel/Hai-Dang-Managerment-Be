@@ -134,6 +134,7 @@ test('worker can mark attendance and write a personal operation entry', async ()
     assert.equal(month.body.breakdown[0].quantity, 22);
     const otherDay = await request(`/worker-notebook/day/${date}`, { token: secondToken });
     assert.equal(otherDay.body.entries.length, 0);
+    assert.equal(otherDay.body.attendanceRecorded, false);
     const otherEdit = await request(`/worker-notebook/day/${date}/entries/${id}`, {
         method: 'PATCH',
         token: secondToken,
@@ -168,6 +169,7 @@ test('monthly report includes legacy attendance, half days, overtime and unit-se
     await WorkerNotebook.create({ userId: worker._id, date: '2026-10-01', attended: true });
     const legacy = await request('/worker-notebook/day/2026-10-01', { token: firstToken });
     assert.equal(legacy.body.attendanceType, 'full');
+    assert.equal(legacy.body.attendanceRecorded, true);
     assert.equal(legacy.body.workDays, 1);
     assert.equal(legacy.body.overtimeHours, 0);
     for (const [date, attendanceType, overtimeHours] of [
@@ -210,6 +212,7 @@ test('monthly report includes legacy attendance, half days, overtime and unit-se
     assert.equal(month.breakdown.find((entry: { unit: string }) => entry.unit === 'SP').recordedDays, 2);
     assert.equal(month.totalsByUnit.find((entry: { unit: string }) => entry.unit === 'Bo').quantity, 2);
     assert.equal(month.days.find((day: { date: string }) => day.date === '2026-10-03').workDays, 0);
+    assert.equal(month.days.find((day: { date: string }) => day.date === '2026-10-03').attendanceRecorded, true);
     const isolated = (await request('/worker-notebook/month?month=2026-10', { token: secondToken })).body;
     assert.equal(isolated.workDays, 0);
     assert.equal(isolated.overtimeHours, 0);

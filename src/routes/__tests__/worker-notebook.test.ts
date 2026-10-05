@@ -7,6 +7,7 @@ import User from '@/models/User';
 import WorkerNotebook from '@/models/WorkerNotebook';
 import { loginSchema } from '@/validations/auth.validation';
 import { createUserSchema } from '@/validations/user.validation';
+import { notebookAttendance } from '@/services/worker-notebook.service';
 
 let db: MongoMemoryServer;
 const plantId = new mongoose.Types.ObjectId();
@@ -35,6 +36,15 @@ const createWorker = (username: string) =>
         role: USER_ROLE.WORKER,
         plantId,
     });
+
+test('attendance distinguishes explicit off from unmarked and supports legacy records', () => {
+    assert.equal(notebookAttendance({}).attendanceRecorded, false);
+    assert.equal(notebookAttendance({ attended: false, overtimeHours: 0 }).attendanceRecorded, false);
+    assert.equal(notebookAttendance({ attended: true }).attendanceRecorded, true);
+    assert.equal(notebookAttendance({ attendanceType: 'off', overtimeHours: 0 }).attendanceRecorded, true);
+    assert.equal(notebookAttendance({ overtimeHours: 2 }).attendanceRecorded, true);
+    assert.equal(notebookAttendance({ attendanceType: 'half' }).workDays, 0.5);
+});
 
 test('worker accounts can omit email and use distinct usernames', async () => {
     await createWorker('worker001');

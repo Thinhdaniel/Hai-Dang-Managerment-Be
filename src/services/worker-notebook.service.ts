@@ -21,6 +21,7 @@ export const notebookAttendance = (day: AttendanceRecord) => {
               : 'off';
     return {
         attendanceType,
+        attendanceRecorded: Boolean(day.attendanceType || day.attended || day.overtimeHours),
         attended: attendanceType !== 'off',
         workDays: attendanceType === 'full' ? 1 : attendanceType === 'half' ? 0.5 : 0,
         overtimeHours: day.overtimeHours ?? 0,
