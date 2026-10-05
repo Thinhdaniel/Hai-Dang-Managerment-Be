@@ -2,7 +2,7 @@ import { zObjectId, zOptionalString, zPassword, zRequiredEmail, zRequiredString 
 import { z } from 'zod';
 
 export const loginSchema = z.object({
-    email: zRequiredEmail(),
+    email: z.string().trim().min(3).max(120),
     password: zPassword(),
 });
 

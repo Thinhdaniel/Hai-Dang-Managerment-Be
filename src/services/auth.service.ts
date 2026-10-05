@@ -92,9 +92,11 @@ const issueSession = async (res: Response, user: any) => {
 
 export const login = async (req: Request, res: Response, next: NextFunction) => {
     const { password } = req.body;
-    const email = normalizeEmail(req.body.email);
-
-    const foundedUser = await User.findOne({ email, isDeleted: { $ne: true } }).populate('plantId');
+    const identifier = normalizeEmail(req.body.email);
+    const foundedUser = await User.findOne({
+        ...(identifier.includes('@') ? { email: identifier } : { username: identifier }),
+        isDeleted: { $ne: true },
+    }).populate('plantId');
 
     if (!foundedUser) {
         throw new BadRequestError(AUTH_MESSAGES.LOGIN_FAILED);
@@ -222,7 +224,7 @@ export const forgotPassword = async (req: Request, res: Response, next: NextFunc
         isActive: true,
     }).populate('plantId');
 
-    if (user) {
+    if (user?.email) {
         const { token, tokenHash, expiresAt } = createPasswordResetToken();
         const baseResetUrl = config.app.resetPasswordUrl || `${config.app.clientUrl.replace(/\/$/, '')}/reset-password`;
         const resetUrl = `${baseResetUrl}?token=${encodeURIComponent(token)}`;

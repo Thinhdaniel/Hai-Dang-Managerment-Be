@@ -4,7 +4,7 @@ import { Document, Types } from 'mongoose';
 export interface IUserSchema extends Document {
     fullname: string;
     username: string;
-    email: string;
+    email?: string;
     password: string;
     passwordResetToken?: string;
     passwordResetExpiresAt?: Date;

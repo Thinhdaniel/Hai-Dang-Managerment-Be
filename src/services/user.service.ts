@@ -7,6 +7,7 @@ import { serializeUser } from '@/utils/serializers';
 import { buildUniqueUsername } from '@/utils/usernames';
 import { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import bcrypt from 'bcryptjs';
 
 const buildFilter = (query: Request['query']) => {
     const filter: Record<string, any> = { isDeleted: { $ne: true } };
@@ -68,10 +69,13 @@ export const getUserById = async (req: Request, res: Response, next: NextFunctio
 };
 
 export const createUser = async (req: Request, res: Response, next: NextFunction) => {
-    const email = String(req.body.email).toLowerCase();
-    await ensureEmailAvailable(email);
+    const email = req.body.email ? String(req.body.email).toLowerCase() : undefined;
+    if (email) await ensureEmailAvailable(email);
 
-    const username = await buildUniqueUsername(req.body.name ?? email.split('@')[0]);
+    const username = req.body.username || (await buildUniqueUsername(req.body.name ?? email?.split('@')[0]));
+    if (req.body.username && (await User.exists({ username }))) {
+        throw new DuplicateError('Ten dang nhap da ton tai');
+    }
     const user = await User.create({
         fullname: req.body.name,
         username,
@@ -113,6 +117,11 @@ export const updateUser = async (req: Request, res: Response, next: NextFunction
         isActive: req.body.isActive,
     };
 
+    if (req.body.password) {
+        updateData.password = await bcrypt.hash(req.body.password, 10);
+        updateData.passwordChangedAt = new Date();
+    }
+
     if (req.body.name) {
         updateData.fullname = req.body.name;
     }
@@ -126,7 +135,7 @@ export const updateUser = async (req: Request, res: Response, next: NextFunction
 
     if (!user) throw new NotFoundError('Khong tim thay nguoi dung');
 
-    if (updateData.isActive === false) {
+    if (updateData.isActive === false || updateData.password) {
         await revokeUserSessions(userId);
     }
 

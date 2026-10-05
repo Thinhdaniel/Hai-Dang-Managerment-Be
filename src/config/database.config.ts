@@ -1,5 +1,6 @@
 import mongoose, { ConnectOptions, Error } from 'mongoose';
 import config from './env.config';
+import User from '@/models/User';
 
 mongoose.set('strictQuery', true);
 
@@ -13,6 +14,18 @@ const syncRegisteredIndexes = async () => {
     }
 
     console.log(`MongoDB indexes synced for ${modelNames.length} models`);
+};
+
+export const ensureOptionalUserEmailIndex = async () => {
+    await User.createCollection();
+    const indexes = await User.collection.indexes();
+    const oldEmailIndex = indexes.find(
+        (index) => index.unique && index.key?.email === 1 && !index.partialFilterExpression
+    );
+    if (oldEmailIndex?.name) {
+        await User.collection.dropIndex(oldEmailIndex.name);
+    }
+    await User.createIndexes();
 };
 
 // Connecting to MongoDB(Connecting to the Database)
@@ -76,6 +89,7 @@ export const connectDB = async () => {
         });
     });
 
+    await ensureOptionalUserEmailIndex();
     await syncRegisteredIndexes();
 
     return connection;

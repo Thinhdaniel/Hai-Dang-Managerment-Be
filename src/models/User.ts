@@ -18,8 +18,6 @@ const UserSchema = new mongoose.Schema(
         },
         email: {
             type: String,
-            required: true,
-            unique: true,
             trim: true,
             lowercase: true,
         },
@@ -114,9 +112,11 @@ const UserSchema = new mongoose.Schema(
     {
         timestamps: true,
         versionKey: false,
+        autoIndex: false,
     }
 );
 
+UserSchema.index({ email: 1 }, { unique: true, partialFilterExpression: { email: { $type: 'string' } } });
 UserSchema.index({ plantId: 1 });
 UserSchema.index({ telegramChatId: 1 }, { sparse: true });
 

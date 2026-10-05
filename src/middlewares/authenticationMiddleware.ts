@@ -65,9 +65,17 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
             return next(new UnAuthenticatedError(AUTH_MESSAGES.TOKEN_INVALID));
         }
 
+        if (user.role === USER_ROLE.WORKER) {
+            const path = req.originalUrl.split('?')[0].replace(/^\/api\/v1\//, '/api/');
+            const allowed =
+                /^\/api\/worker-notebook(?:\/|$)/.test(path) ||
+                (path === '/api/users/me' && req.method === 'GET') ||
+                (path === '/api/auth/change-password' && req.method === 'POST');
+            if (!allowed) return next(new UnAuthorizedError('Tai khoan cong nhan chi duoc truy cap so ca nhan'));
+        }
+
         if (decoded.iat && user.passwordChangedAt) {
-            const issuedAt = decoded.iat * 1000;
-            if (user.passwordChangedAt.getTime() > issuedAt) {
+            if (Math.floor(user.passwordChangedAt.getTime() / 1000) > decoded.iat) {
                 return next(new UnAuthenticatedError(AUTH_MESSAGES.TOKEN_INVALID));
             }
         }
@@ -88,7 +96,6 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         return next(new UnAuthenticatedError(AUTH_MESSAGES.TOKEN_VALIDATION_FAILED));
     }
 };
-
 
 const MAIN_PLANT_ID = process.env.MAIN_PLANT_ID || '';
 const PROCUREMENT_PLANT_IDS = (process.env.PROCUREMENT_PLANT_IDS || MAIN_PLANT_ID)

@@ -22,6 +22,7 @@ const mapRole = (role?: string) => {
     // nếu rơi vào 'staff' bên dưới thì FE tưởng là kỹ thuật và hiện app máy.
     if (role === 'line_leader') return 'line_leader';
     if (role === 'qc') return 'qc';
+    if (role === 'worker') return 'worker';
     return 'staff';
 };
 
@@ -106,6 +107,7 @@ export const serializeUser = (input: any) => {
     return {
         id: toId(user),
         name: user?.name ?? user?.fullname ?? user?.username,
+        username: user?.username,
         email: user?.email,
         phone: user?.phone,
         role: mapRole(user?.role),
