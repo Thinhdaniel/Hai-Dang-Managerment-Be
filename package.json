@@ -20,6 +20,7 @@
     "ai:quality-gate": "npm run ai:policy-check && npm run ai:borrowing-check && npm run ai:regression -- --max-bad 0 --max-p95-ms 45000",
     "test:briefing": "tsx --test src/services/__tests__/executive-briefing.helpers.test.ts src/services/__tests__/ai-provider-json-retry.test.ts",
     "test:asset-search": "tsx --test src/utils/__tests__/assetSearch.test.ts",
+    "test:worker-password": "tsx --test src/routes/__tests__/worker-password.http.test.ts",
     "test:borrowing": "tsx --test src/validations/__tests__/borrowing-outbound.test.ts src/utils/__tests__/borrowingHandoverXlsx.test.ts src/utils/__tests__/borrowingTimeline.test.ts",
     "test:transfer": "tsx --test src/utils/__tests__/transferEligibility.test.ts",
     "test:material-custody": "tsx --test src/services/__tests__/material-custody-reminder.helpers.test.ts src/services/__tests__/material-custody.rules.test.ts src/utils/__tests__/generateMaterialCustodyXlsx.test.ts",

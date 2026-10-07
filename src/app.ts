@@ -41,7 +41,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Keep both prefixes so the current FE default `/api` works, while existing `/api/v1`
 // integrations keep working.
-app.use(['/api', '/api/v1'], router);
+app.use(['/api/v1', '/api'], router);
 
 app.get('/ping', (req: Request, res: Response) => {
     res.send('Hello World');

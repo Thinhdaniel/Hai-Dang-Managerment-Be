@@ -1,4 +1,5 @@
 import config from '@/config/env.config';
+import { USER_ROLE } from '@/constant/allowedRoles';
 import { AUTH_MESSAGES } from '@/constant/messages';
 import { BadRequestError, NotFoundError, UnAuthenticatedError } from '@/errors/customError';
 import User from '@/models/User';
@@ -295,27 +296,36 @@ export const changePassword = async (req: Request, res: Response, next: NextFunc
 
     const isCurrentPasswordValid = await bcrypt.compare(req.body.currentPassword, user.password);
     if (!isCurrentPasswordValid) {
-        throw new BadRequestError('Mat khau hien tai khong chinh xac');
+        throw new BadRequestError('Mật khẩu hiện tại không chính xác');
     }
 
     const isSamePassword = await bcrypt.compare(req.body.newPassword, user.password);
     if (isSamePassword) {
-        throw new BadRequestError('Mat khau moi phai khac mat khau hien tai');
+        throw new BadRequestError('Mật khẩu mới phải khác mật khẩu hiện tại');
     }
 
-    user.password = req.body.newPassword;
-    user.passwordResetToken = undefined;
-    user.passwordResetExpiresAt = undefined;
-    await user.save();
+    // Compare-and-set prevents two requests using the same old password from both succeeding.
+    // Query updates do not run the model's save hook, so hash explicitly here.
+    const updatedUser = await User.findOneAndUpdate(
+        { _id: user._id, password: user.password, role: USER_ROLE.WORKER, isActive: true, isDeleted: { $ne: true } },
+        {
+            $set: { password: await bcrypt.hash(req.body.newPassword, 10), passwordChangedAt: new Date() },
+            $unset: { passwordResetToken: '', passwordResetExpiresAt: '' },
+        },
+        { returnDocument: 'after', runValidators: true }
+    ).populate('plantId');
+    if (!updatedUser) {
+        throw new BadRequestError('Tài khoản vừa thay đổi. Vui lòng đăng nhập lại và thử lại.');
+    }
 
     await revokeUserSessions(String(user._id));
 
-    const { accessToken } = await issueSession(res, user);
+    const { accessToken } = await issueSession(res, updatedUser);
 
     return res.status(StatusCodes.OK).json(
         customResponse({
-            data: buildAuthResponse(user, accessToken),
-            message: 'Doi mat khau thanh cong',
+            data: buildAuthResponse(updatedUser, accessToken),
+            message: 'Đổi mật khẩu thành công',
             status: StatusCodes.OK,
             success: true,
         })
